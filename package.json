@@ -1,0 +1,16 @@
+{
+  "name": "agents-for-pm-nova",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Markdown-first Slidev talk materials for Nova: From PM to AI Builder.",
+  "scripts": {
+    "dev": "slidev --open",
+    "build": "slidev build",
+    "export": "slidev export --output dist/agents-for-pm-nova.pdf"
+  },
+  "devDependencies": {
+    "@slidev/cli": "51.8.2",
+    "@slidev/theme-default": "^0.25.0",
+    "playwright-chromium": "^1.56.1"
+  }
+}
