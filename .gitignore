@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.slidev/
+.npm-cache/
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example
