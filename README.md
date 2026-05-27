@@ -9,6 +9,8 @@ Markdown-first talk materials for **From PM to AI Builder: Deploy Your First Age
 - [docs/speaker-profile.md](./docs/speaker-profile.md): speaker bio and intro variants.
 - [docs/research.md](./docs/research.md): sourced claims and reference notes.
 - [docs/demo-script.md](./docs/demo-script.md): Claude Managed Agents demo runbook and fallback.
+- [demo](./demo): runnable Hyperliquid testnet investment-agent demo with CLI and browser UI.
+- [docs/demo-rebuild.md](./docs/demo-rebuild.md): step-by-step guide to recreate the demo.
 - [docs/handout.md](./docs/handout.md): attendee checklist and takeaways.
 
 All primary talk artifacts are Markdown. Generated exports such as PDFs should be treated as build outputs, not source of truth.
