@@ -144,6 +144,12 @@ Why it was chosen:
 - Live drawing/annotation.
 - Exportable to static site or PDF.
 
+## Visual Sources
+
+- Nova event image: https://quasar.novatalent.com/public/events/1320
+- Anthropic agent diagrams: https://www.anthropic.com/engineering/building-effective-agents
+- Water-cycle cloud background by Dadee Aissa on Unsplash: https://unsplash.com/photos/cumulus-clouds-Pe1Ol9oLc4o
+
 ## Claims To Avoid
 
 - Do not claim Claude Managed Agents is generally available unless confirmed at rehearsal time.
