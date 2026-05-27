@@ -2,6 +2,7 @@ node_modules/
 dist/
 .slidev/
 .npm-cache/
+tmp/
 *.log
 .DS_Store
 .env

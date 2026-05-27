@@ -9,379 +9,285 @@ class: text-left
 drawings:
   enabled: true
   persist: false
-transition: slide-left
+transition: fade
 mdc: true
+fonts:
+  sans: "Inter"
 ---
 
-# From PM to AI Builder
-
-## Deploy your first agent with Anthropic
-
-Andres Santos Sanz  
-Applied AI Lead at Bit2Me | ex-Revolut
+<div class="hero">
+  <div class="kicker">Nova Knowledge | 15 min setup + live demo</div>
+  <h1>From PM to<br/>AI Builder</h1>
+  <p class="subtitle">Deploy your first agent with Anthropic</p>
+  <p class="byline">Andres Santos Sanz | Applied AI Lead at Bit2Me | ex-Revolut</p>
+</div>
 
 <!--
-Open with the practical promise: this is not a hype talk and not a coding tutorial. It is a product-thinking session about when agents are worth building and how the stack is becoming simple enough for PMs to reason about.
+Set the contract immediately: the talk is short and practical. Theory is only here to make the demo easier to understand.
 -->
 
 ---
-layout: section
+layout: image-right
+image: https://quasar.novatalent.com/files?token=5fa2132ffa935b1e653d07bd83ebfcf5355bf540c69faa121cd8d827c6bda82b1d4272feb517d9998a3baa015e1f28a174ea2c068c9e691ae9bffe46287c144c
 ---
 
-# The uncomfortable starting point
+# What I want to cover before the demo
 
----
+<div class="timeline">
+  <div><span>01</span><strong>Why pilots fail</strong><small>The 95% problem</small></div>
+  <div><span>02</span><strong>How to diagnose</strong><small>Cynefin + water cycle</small></div>
+  <div><span>03</span><strong>Why now</strong><small>Services + managed platforms</small></div>
+  <div><span>04</span><strong>Demo structure</strong><small>Claude Managed Agents</small></div>
+</div>
 
-# 95% of GenAI pilots show no visible return
-
-The 2025 MIT/NANDA report made the industry problem explicit: most enterprise GenAI pilots were not translating into measurable business impact.
-
-That is not only a technology problem.
-
-It is a **problem-shape** problem.
+<p class="note">The goal is to get to the demo quickly. The framework is just the map.</p>
 
 <!--
-Do not over-litigate the statistic. Use it as the hook: many pilots do not become useful systems. The point is to explain why and what changed.
+Keep this under one minute. It tells the audience that this will not be a long theory lecture.
+-->
+
+---
+class: dark
+background: linear-gradient(135deg, #111827 0%, #18332f 58%, #f97316 140%)
+---
+
+<div class="stat-slide">
+  <div class="source-pill">MIT / NANDA, State of AI in Business 2025</div>
+  <h1>95%</h1>
+  <h2>of GenAI pilots showed no visible return</h2>
+  <p>That is not only a model problem. It is a deployment, workflow, and complexity problem.</p>
+</div>
+
+<!--
+Do not spend time defending the exact number. Use it as the starting tension: demos are easy, deployed impact is hard.
 -->
 
 ---
 
-# Why pilots stall
+# My lens on this problem
 
-| Failure mode | What it looks like |
-| --- | --- |
-| Wrong problem shape | Treating complex work like a simple automation |
-| No workflow integration | The demo works, the business process does not change |
-| Weak specialization | One generic assistant for many incompatible jobs |
-| No closed loop | The system cannot observe, correct, and improve |
-| Fragmented stack | Models, tools, memory, evals, and deployment all live separately |
+<div class="profile-grid">
+  <div class="profile-card accent">
+    <strong>Now</strong>
+    <span>Applied AI Lead at Bit2Me</span>
+    <small>Agents, apps, workflows, and internal tools with domain experts.</small>
+  </div>
+  <div class="profile-card">
+    <strong>Before</strong>
+    <span>Revolut, Amazon, industrial operations</span>
+    <small>Growth analytics, CX operations, logistics, process improvement.</small>
+  </div>
+  <div class="profile-card">
+    <strong>Pattern</strong>
+    <span>AI succeeds when it closes a loop</span>
+    <small>Observe, act, inspect, correct, and improve the workflow.</small>
+  </div>
+</div>
 
-<!--
-This slide sets up the rest of the talk. Each later section addresses one failure mode.
--->
+<p class="takeaway">I am not approaching agents as research. I am approaching them as operating systems for teams.</p>
 
 ---
-layout: section
+class: framed
 ---
 
-# Diagnose before you build
-
----
-
-# Cynefin for AI opportunities
+# Diagnose before building
 
 ```mermaid
 flowchart TB
-  center(("Disorder<br/>Which domain are we in?"))
-  chaotic["Chaotic<br/>Act -> Sense -> Respond<br/>Stabilize first"]
-  complex["Complex<br/>Probe -> Sense -> Respond<br/>Run experiments"]
-  complicated["Complicated<br/>Sense -> Analyze -> Respond<br/>Use expertise"]
-  clear["Clear<br/>Sense -> Categorize -> Respond<br/>Automate rules"]
+  center(("Disorder<br/>what kind of problem is this?"))
+  chaotic["Chaotic<br/>act first<br/>stabilize"]
+  complex["Complex<br/>probe<br/>learn by experiment"]
+  complicated["Complicated<br/>analyze<br/>use expertise"]
+  clear["Clear<br/>categorize<br/>automate rules"]
 
   center --- chaotic
   center --- complex
   center --- complicated
   center --- clear
-
-  chaotic --> complex
-  complex --> complicated
-  complicated --> clear
 ```
 
-The mistake is building an agent before knowing which domain the work belongs to.
+<div class="callout">Most failed agent projects start by choosing tools before diagnosing the problem shape.</div>
 
-<!--
-Use "clear" instead of "simple" when referencing modern Cynefin language, but mention that many people know the older "simple" label.
--->
-
+---
+layout: center
+class: water
+background: linear-gradient(180deg, #f8fafc 0%, #e0f2fe 100%)
 ---
 
 # The water-cycle analogy
 
-```mermaid
-flowchart LR
-  A["Chaotic<br/>Rain as mystery<br/>rituals and guesses"] --> B["Complex<br/>Patterns observed<br/>seasons, rivers, clouds"]
-  B --> C["Complicated<br/>Meteorology and hydrology<br/>models, instruments, experts"]
-  C --> D["Clear<br/>Primary-school science<br/>evaporation, condensation, precipitation"]
-```
+<div class="water-steps">
+  <div><b>Chaotic</b><span>Rain as mystery</span></div>
+  <div><b>Complex</b><span>Patterns observed</span></div>
+  <div><b>Complicated</b><span>Hydrology + meteorology</span></div>
+  <div><b>Clear</b><span>Primary-school science</span></div>
+</div>
 
-Knowledge moves domains over time.
-
-What was once mysterious becomes teachable when the system is observed, modeled, and simplified.
+<p class="center-copy">The phenomenon did not change. Our model of it changed.</p>
 
 <!--
-Use the shaman story carefully: not to mock early explanations, but to show how problem domains evolve as knowledge accumulates.
+Use the "chamanes" example carefully: the point is not to mock early explanations, but to show how knowledge moves problems across domains.
 -->
 
 ---
-
-# Agents are going through the same shift
-
-Early agent work often felt chaotic:
-
-- models were weaker;
-- tools were brittle;
-- memory was ad hoc;
-- evals were separate;
-- deployment was custom;
-- the agent was not specialized enough.
-
-Now the ecosystem is moving agent work from **complex** toward **complicated** and sometimes **clear**.
-
----
-layout: section
+layout: image-right
+image: https://www.anthropic.com/_next/image?q=75&url=https%3A%2F%2Fwww-cdn.anthropic.com%2Fimages%2F4zrzovbb%2Fwebsite%2Fd3083d3f40bb2b6f477901cc9a240738d3dd1371-2401x1000.png&w=3840
 ---
 
-# Two responses from the market
+# Agents are moving domains too
 
----
+Early agents were difficult because every layer was separate:
 
-# Response 1: expert deployment services
+- weaker models;
+- brittle tools;
+- ad hoc memory;
+- custom orchestration;
+- fragile evals;
+- unclear deployment path.
 
-OpenAI and Anthropic are both moving closer to implementation and enterprise deployment work.
-
-The signal is clear:
-
-> In large organizations, the hardest part is not prompting. It is translating messy business work into reliable AI systems.
-
-This is consulting-like because the complexity is contextual.
+<p class="source">Image reference: Anthropic, "Building effective agents" - augmented LLM.</p>
 
 <!--
-Reference OpenAI Deployment Company and Anthropic enterprise AI services in the research notes. Keep this slide high-level unless there is time.
+This image comes from the Anthropic reference. Use it to show that an agent is already a system, not a chat box.
 -->
 
 ---
-
-# Response 2: managed agent platforms
-
-The second response is productization: make the stack smaller.
-
-```mermaid
-flowchart LR
-  subgraph Old["Earlier agent stack"]
-    M["Model"]
-    T["Tools"]
-    S["State"]
-    E["Execution"]
-    V["Evals"]
-    D["Deploy"]
-  end
-
-  subgraph New["Managed agent platform"]
-    A["Agent definition"]
-    Env["Environment"]
-    Sess["Session"]
-    Stream["Events"]
-    Out["Structured output"]
-  end
-
-  M --> A
-  T --> Env
-  S --> Sess
-  E --> Stream
-  V --> Out
-  D --> A
-```
-
-The PM question becomes: can we describe the job, the tools, the environment, and the acceptance criteria?
-
+class: split-dark
+background: linear-gradient(135deg, #101014 0%, #1f2937 70%, #0f766e 140%)
 ---
 
-# Today's demo path
+# Two ways the market is reducing complexity
 
-Claude Managed Agents gives us a way to explain the full loop:
-
-- define an agent;
-- give it an environment;
-- start a session;
-- stream events while it works;
-- inspect tool use and output;
-- repeat with better instructions and constraints.
-
-This is not just a model call. It is a managed execution loop.
-
----
-layout: section
----
-
-# Who is building this?
+<div class="two-paths">
+  <div>
+    <span>Path 1</span>
+    <h2>Expert deployment</h2>
+    <p>OpenAI and Anthropic are moving closer to implementation because enterprise AI is contextual.</p>
+    <small>Think: specialists working inside the workflow.</small>
+  </div>
+  <div>
+    <span>Path 2</span>
+    <h2>Managed platforms</h2>
+    <p>Managed agent stacks collapse model, environment, tools, sessions, and events into one surface.</p>
+    <small>Think: fewer moving parts for builders.</small>
+  </div>
+</div>
 
 ---
+layout: image-right
+image: https://www.anthropic.com/_next/image?q=75&url=https%3A%2F%2Fwww-cdn.anthropic.com%2Fimages%2F4zrzovbb%2Fwebsite%2F58d9f10c985c4eb5d53798dea315f7bb5ab6249e-2401x1000.png&w=3840
+---
 
-# My working context
+# What changes with managed agents
 
-I build practical AI systems with operational teams:
+Claude Managed Agents lets us talk about a full execution loop:
 
-- agents;
-- apps;
-- workflows;
-- internal tools.
+<div class="stack-list">
+  <div><b>Agent</b><span>role, instructions, boundaries</span></div>
+  <div><b>Environment</b><span>where work happens</span></div>
+  <div><b>Session</b><span>the running loop</span></div>
+  <div><b>Events</b><span>observable progress</span></div>
+  <div><b>Output</b><span>reviewable artifact</span></div>
+</div>
 
-At Bit2Me, my role is to co-create solutions with domain experts so teams can move faster.
+<p class="source">Image reference: Anthropic, autonomous agent loop.</p>
 
-Before that: Revolut growth analytics and CX operations, Amazon logistics, and industrial operations.
+---
+class: demo-map
+background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 58%, #ccfbf1 130%)
+---
+
+# Demo structure
+
+<div class="demo-flow">
+  <div><span>1</span><b>Create</b><small>agent + instructions</small></div>
+  <div><span>2</span><b>Run</b><small>session + events</small></div>
+  <div><span>3</span><b>Inspect</b><small>tools + memo</small></div>
+  <div><span>4</span><b>Improve</b><small>constraints + output</small></div>
+</div>
+
+<div class="demo-card">
+  <h2>Investment committee simulator</h2>
+  <p>Educational analysis only. No personal financial advice. No buy/sell/hold recommendation.</p>
+</div>
 
 <!--
-Keep it fast. The goal is credibility, not a CV walkthrough.
+This is the last theory slide. After this, switch to terminal/browser demo.
 -->
 
 ---
+layout: image
+image: https://www.anthropic.com/_next/image?q=75&url=https%3A%2F%2Fwww-cdn.anthropic.com%2Fimages%2F4zrzovbb%2Fwebsite%2F4b9a1f4eb63d5962a6e1746ac26bbc857cf3474f-2400x1666.png&w=3840
+---
 
-# The pattern I keep seeing
-
-The best AI projects are not "AI projects."
-
-They are operational improvements where AI closes a loop:
-
-```mermaid
-flowchart LR
-  Observe["Observe work"] --> Decide["Decide next step"]
-  Decide --> Act["Act with tools"]
-  Act --> Check["Check result"]
-  Check --> Learn["Update context"]
-  Learn --> Decide
-```
-
-The tool is new. The operating principle is not.
+<div class="image-caption">
+  <strong>Reference mental model</strong>
+  <span>Coding agents work because they can close the loop against ground truth: edit, run, test, inspect, fix.</span>
+</div>
 
 ---
 layout: section
+class: demo-section
 ---
 
-# Demo: investment committee simulator
+# Live demo
 
----
+## Claude Managed Agents
 
-# Demo framing
-
-We will build an educational analysis agent that simulates an investment committee.
-
-It will:
-
-- collect a company and analysis goal;
-- research or process provided inputs;
-- reason through multiple lenses;
-- produce a structured investment memo;
-- state uncertainty and missing evidence.
-
-It will not provide personalized financial advice or buy/sell recommendations.
-
----
-
-# What we want the agent to do
-
-```mermaid
-sequenceDiagram
-  participant PM as PM / User
-  participant Agent as Managed Agent
-  participant Env as Environment
-  participant Tools as Tools / Files
-  participant Report as Memo
-
-  PM->>Agent: Analyze this company for an investment committee
-  Agent->>Env: Open working environment
-  Agent->>Tools: Gather and inspect evidence
-  Tools-->>Agent: Data, notes, constraints
-  Agent->>Agent: Compare reasoning lenses
-  Agent->>Report: Produce memo with risks and next questions
-  Report-->>PM: Structured, reviewable output
-```
+Create -> Run -> Inspect -> Improve
 
 ---
 
 # What PMs should watch for
 
-Not the syntax.
-
-Watch for:
-
-- how the job is scoped;
-- what the agent is allowed to do;
-- where the evidence comes from;
-- how uncertainty is represented;
-- how the output can be reviewed;
-- how the next iteration becomes obvious.
-
----
-layout: section
----
-
-# The closed-loop advantage
+<div class="watch-grid">
+  <div><b>Scope</b><span>What job does the agent own?</span></div>
+  <div><b>Boundaries</b><span>What is it forbidden to do?</span></div>
+  <div><b>Evidence</b><span>Where does context enter?</span></div>
+  <div><b>Observability</b><span>Can we inspect the loop?</span></div>
+  <div><b>Output</b><span>Can a human review it?</span></div>
+  <div><b>Iteration</b><span>What do we improve next?</span></div>
+</div>
 
 ---
 
-# Coding agents change the build loop
+# Fallback if the live demo fails
 
-```mermaid
-flowchart LR
-  Plan["Plan"] --> Edit["Edit"]
-  Edit --> Run["Run"]
-  Run --> Inspect["Inspect"]
-  Inspect --> Fix["Fix"]
-  Fix --> Run
-  Inspect --> Ship["Ship"]
-```
+1. Show the agent contract.
+2. Show the expected event stream.
+3. Show the generated memo.
+4. Ask the room to critique the output.
+5. Improve the instruction live.
 
-The productivity jump comes when the coding agent can close the loop itself:
-
-plan, modify, execute, inspect, and correct.
+<div class="callout">A demo failure is still a product lesson: robust systems need visible loops and fallback paths.</div>
 
 ---
 
-# The PM version of the same loop
+# Final takeaway
 
-```mermaid
-flowchart LR
-  Need["Business need"] --> Hypothesis["Agent hypothesis"]
-  Hypothesis --> Prototype["Prototype"]
-  Prototype --> Eval["Evaluate output"]
-  Eval --> Workflow["Fit into workflow"]
-  Workflow --> Monitor["Monitor behavior"]
-  Monitor --> Hypothesis
-```
+<div class="closing">
+  <h2>Do not start with "we need an agent."</h2>
+  <p>Start with the loop: what repetitive, judgment-heavy, reviewable workflow can the agent improve?</p>
+</div>
 
-If there is no loop, there is no product.
-
----
-
-# A practical checklist
-
-Before building an agent, answer:
-
-1. What job will this agent own?
-2. What tools and data does it need?
-3. What decisions can it make?
-4. What must a human approve?
-5. What does a good output look like?
-6. How will we know it improved the workflow?
-
----
-layout: section
----
-
-# Closing
+<div class="mini-checklist">
+  <span>Diagnose</span>
+  <span>Constrain</span>
+  <span>Run</span>
+  <span>Inspect</span>
+  <span>Improve</span>
+</div>
 
 ---
 
-# The takeaway
+# References
 
-The path from PM to AI builder is not about becoming a full-time engineer.
-
-It is about learning to:
-
-- diagnose the problem shape;
-- simplify the agent stack;
-- define constraints and outputs;
-- build with closed loops.
-
-When the loop closes, teams move faster.
-
----
-
-# Questions
-
-What part of your current workflow is stuck between a demo and a deployed system?
-
-<!--
-Use this question to prompt audience examples. If time is short, point them to the handout checklist.
--->
+<div class="refs">
+  <a href="https://www.artificialintelligence-news.com/wp-content/uploads/2025/08/ai_report_2025.pdf">MIT/NANDA - The GenAI Divide</a>
+  <a href="https://cynefin.io/index.php/Cynefin">Cynefin framework</a>
+  <a href="https://www.anthropic.com/engineering/building-effective-agents">Anthropic - Building effective agents</a>
+  <a href="https://www.anthropic.com/news/enterprise-ai-services-company">Anthropic - Enterprise AI services company</a>
+  <a href="https://openai.com/index/openai-launches-the-deployment-company/">OpenAI - Deployment Company</a>
+  <a href="https://platform.claude.com/docs/en/agents-and-tools/managed-agents/overview">Claude Managed Agents</a>
+  <a href="https://unsplash.com/photos/cumulus-clouds-Pe1Ol9oLc4o">Water-cycle background - Unsplash</a>
+</div>
