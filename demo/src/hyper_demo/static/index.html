@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Hyperliquid Testnet Agent Demo</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand-mark">HL</span>
+        <div>
+          <strong>Investment Agent</strong>
+          <small>Hyperliquid testnet</small>
+        </div>
+      </div>
+      <nav aria-label="Demo navigation">
+        <a href="/" data-route="/">Dashboard</a>
+        <a href="/profile" data-route="/profile">Risk Profile</a>
+        <a href="/research" data-route="/research">Research</a>
+        <a href="/proposal" data-route="/proposal">Proposal</a>
+        <a href="/execution" data-route="/execution">Execution</a>
+        <a href="/monitor" data-route="/monitor">Monitor</a>
+        <a href="/settings" data-route="/settings">Settings</a>
+      </nav>
+    </aside>
+
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <h1 id="route-title">Dashboard</h1>
+          <p id="route-subtitle">Agent loop, guardrails, and testnet trading state.</p>
+        </div>
+        <div class="status-strip">
+          <span id="anthropic-status">Claude: checking</span>
+          <span id="hyperliquid-status">Hyperliquid: checking</span>
+          <span id="mode-status">Mode: testnet</span>
+        </div>
+      </header>
+
+      <section id="dashboard" class="view">
+        <div class="grid two">
+          <section class="panel">
+            <div class="panel-head">
+              <h2>Live Run</h2>
+              <button data-action="refresh">Refresh</button>
+            </div>
+            <div class="run-map">
+              <div><b>1</b><span>Profile</span><small id="profile-id">Not created</small></div>
+              <div><b>2</b><span>Research</span><small id="research-id">Not created</small></div>
+              <div><b>3</b><span>Plan</span><small id="plan-id">Not created</small></div>
+              <div><b>4</b><span>Order</span><small id="order-id">Not submitted</small></div>
+            </div>
+          </section>
+          <section class="panel market-panel">
+            <div class="panel-head">
+              <h2>Market Pulse</h2>
+              <span class="pill">testnet</span>
+            </div>
+            <canvas id="market-chart" width="640" height="260" aria-label="Market pulse chart"></canvas>
+          </section>
+        </div>
+
+        <div class="grid three">
+          <section class="metric"><span>Alpha</span><strong id="metric-alpha">-</strong></section>
+          <section class="metric"><span>Beta</span><strong id="metric-beta">-</strong></section>
+          <section class="metric"><span>VaR 95</span><strong id="metric-var">-</strong></section>
+        </div>
+      </section>
+
+      <section id="profile" class="view">
+        <form id="profile-form" class="panel form-grid">
+          <label>Horizon days<input name="horizon_days" type="number" min="1" max="365" value="30" /></label>
+          <label>Max drawdown %<input name="max_drawdown_pct" type="number" min="1" max="80" value="8" /></label>
+          <label>Leverage tolerance
+            <select name="leverage_tolerance">
+              <option value="none">None</option>
+              <option value="low" selected>Low</option>
+              <option value="moderate">Moderate</option>
+              <option value="high">High</option>
+            </select>
+          </label>
+          <label>Asset preference<input name="asset_preference" value="BTC" /></label>
+          <label>Capital at risk USDC<input name="capital_at_risk_usdc" type="number" min="10" value="100" /></label>
+          <label>Stop loss %<input name="stop_loss_pct" type="number" min="0.5" value="4" step="0.1" /></label>
+          <button class="primary" type="submit">Create Risk Profile</button>
+        </form>
+        <pre id="profile-output" class="output"></pre>
+      </section>
+
+      <section id="research" class="view">
+        <section class="panel action-panel">
+          <div>
+            <h2>Research</h2>
+            <p>Runs the Claude Managed Agent research step or the local fallback if credentials are missing.</p>
+          </div>
+          <label>Asset<input id="research-asset" value="BTC" /></label>
+          <button class="primary" data-action="research">Run Research</button>
+        </section>
+        <pre id="research-output" class="output"></pre>
+      </section>
+
+      <section id="proposal" class="view">
+        <section class="panel action-panel">
+          <div>
+            <h2>Trade Proposal</h2>
+            <p>Creates a bounded testnet-only plan with entry, stop-loss, take-profit, and invalidation criteria.</p>
+          </div>
+          <label>Asset<input id="proposal-asset" value="BTC" /></label>
+          <button class="primary" data-action="proposal">Create Proposal</button>
+        </section>
+        <pre id="proposal-output" class="output"></pre>
+      </section>
+
+      <section id="execution" class="view">
+        <section class="panel action-panel danger-zone">
+          <div>
+            <h2>Testnet Execution</h2>
+            <p>Requires explicit confirmation and configured Hyperliquid testnet credentials.</p>
+          </div>
+          <label class="check-row"><input id="execute-confirm" type="checkbox" /> Confirm testnet order submission</label>
+          <button class="danger" data-action="execute">Submit Testnet Order</button>
+        </section>
+        <pre id="execution-output" class="output"></pre>
+      </section>
+
+      <section id="monitor" class="view">
+        <div class="grid two">
+          <section class="panel">
+            <div class="panel-head">
+              <h2>Portfolio Metrics</h2>
+              <button data-action="metrics">Update</button>
+            </div>
+            <div id="metrics-list" class="metrics-list"></div>
+          </section>
+          <section class="panel">
+            <div class="panel-head">
+              <h2>Run Events</h2>
+              <span class="pill">latest run</span>
+            </div>
+            <div id="events-list" class="events-list"></div>
+          </section>
+        </div>
+      </section>
+
+      <section id="settings" class="view">
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Environment</h2>
+            <button data-action="setup">Check</button>
+          </div>
+          <pre id="settings-output" class="output compact"></pre>
+          <button data-action="replay">Load Fallback Replay</button>
+        </section>
+      </section>
+    </main>
+
+    <div id="toast" role="status" aria-live="polite"></div>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

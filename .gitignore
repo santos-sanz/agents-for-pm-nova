@@ -3,8 +3,16 @@ dist/
 .slidev/
 .npm-cache/
 tmp/
+.venv/
+__pycache__/
+*.py[cod]
 *.log
 .DS_Store
 .env
 .env.*
 !.env.example
+demo/.demo_state/
+demo/.ruff_cache/
+demo/.pytest_cache/
+demo/.venv/
+demo/.coverage
