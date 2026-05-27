@@ -3,9 +3,13 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlparse
 
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+TESTNET_HTTP_HOSTS = {"api.hyperliquid-testnet.xyz"}
+TESTNET_WS_HOSTS = {"api.hyperliquid-testnet.xyz"}
 
 
 class Settings(BaseSettings):
@@ -45,16 +49,18 @@ class Settings(BaseSettings):
     @field_validator("hyperliquid_base_url")
     @classmethod
     def require_hyperliquid_testnet_http(cls, value: str) -> str:
-        if "hyperliquid-testnet" not in value:
+        parsed = urlparse(value.rstrip("/"))
+        if parsed.scheme != "https" or parsed.hostname not in TESTNET_HTTP_HOSTS:
             raise ValueError("Only Hyperliquid testnet HTTP URLs are allowed in this demo.")
-        return value.rstrip("/")
+        return parsed.geturl().rstrip("/")
 
     @field_validator("hyperliquid_ws_url")
     @classmethod
     def require_hyperliquid_testnet_ws(cls, value: str) -> str:
-        if "hyperliquid-testnet" not in value:
+        parsed = urlparse(value.rstrip("/"))
+        if parsed.scheme != "wss" or parsed.hostname not in TESTNET_WS_HOSTS:
             raise ValueError("Only Hyperliquid testnet websocket URLs are allowed in this demo.")
-        return value.rstrip("/")
+        return parsed.geturl().rstrip("/")
 
     @property
     def has_anthropic_credentials(self) -> bool:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from typing import Any
@@ -35,7 +36,7 @@ class ManagedAgentResearchClient:
                 reason="ANTHROPIC_API_KEY is not configured.",
             )
         try:
-            return self._research_with_managed_agents(asset, profile)
+            return await asyncio.to_thread(self._research_with_managed_agents, asset, profile)
         except Exception as exc:  # pragma: no cover - exercised manually against the beta API.
             return self._fallback_report(
                 asset,

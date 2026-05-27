@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +33,7 @@ from hyper_demo.storage import JsonStore
 
 APP_ROOT = Path(__file__).resolve().parent
 STATIC_ROOT = APP_ROOT / "static"
+FIXTURE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
 app = FastAPI(title="Hyperliquid Testnet Investment Agent Demo", version="0.1.0")
 app.mount("/static", StaticFiles(directory=STATIC_ROOT), name="static")
@@ -216,7 +218,12 @@ async def sample_market_websocket(asset: str):
 
 @app.post("/api/replay/{fixture_name}")
 def replay_fixture(fixture_name: str):
-    fixture_path = Path(__file__).resolve().parents[2] / "fixtures" / f"{fixture_name}.json"
+    if not FIXTURE_NAME_PATTERN.fullmatch(fixture_name):
+        raise HTTPException(status_code=400, detail="Invalid fixture name.")
+    fixture_root = (Path(__file__).resolve().parents[2] / "fixtures").resolve()
+    fixture_path = (fixture_root / f"{fixture_name}.json").resolve()
+    if not fixture_path.is_relative_to(fixture_root):
+        raise HTTPException(status_code=400, detail="Invalid fixture path.")
     if not fixture_path.exists():
         raise HTTPException(status_code=404, detail="Fixture not found.")
     payload = json.loads(fixture_path.read_text(encoding="utf-8"))

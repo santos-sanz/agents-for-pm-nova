@@ -103,7 +103,7 @@ class TradePlan(BaseModel):
     asset: str
     side: TradeSide
     size_usdc: float = Field(gt=0)
-    entry_type: Literal["market", "limit"] = "market"
+    entry_type: Literal["market", "limit"] = "limit"
     entry_price: float = Field(gt=0)
     stop_loss: float = Field(gt=0)
     take_profit: float = Field(gt=0)

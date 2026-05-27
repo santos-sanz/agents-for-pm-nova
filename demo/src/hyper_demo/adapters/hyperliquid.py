@@ -71,22 +71,35 @@ class HyperliquidTestnetAdapter:
             raise ExecutionBlocked(f"Hyperliquid SDK dependency is not installed: {exc}") from exc
 
         private_key = self.settings.hyperliquid_api_wallet_private_key
-        account = Account.from_key(private_key.get_secret_value() if private_key else "")
-        exchange = Exchange(
-            account,
-            base_url=self.settings.hyperliquid_base_url,
-            account_address=self.settings.hyperliquid_account_address,
-        )
+        try:
+            account = Account.from_key(private_key.get_secret_value() if private_key else "")
+            exchange = Exchange(
+                account,
+                base_url=self.settings.hyperliquid_base_url,
+                account_address=self.settings.hyperliquid_account_address,
+            )
+        except (TypeError, ValueError) as exc:
+            raise ExecutionBlocked(
+                "Hyperliquid testnet wallet configuration is invalid. "
+                "Check HYPERLIQUID_ACCOUNT_ADDRESS and HYPERLIQUID_API_WALLET_PRIVATE_KEY."
+            ) from exc
 
-        order_type = {"limit": {"tif": "Ioc"}}
-        entry = exchange.order(
-            prepared.coin,
-            prepared.is_buy,
-            prepared.size,
-            prepared.entry_price,
-            order_type,
-            reduce_only=False,
-        )
+        if plan.entry_type == "market":
+            entry = exchange.market_open(
+                prepared.coin,
+                prepared.is_buy,
+                prepared.size,
+                px=prepared.entry_price,
+            )
+        else:
+            entry = exchange.order(
+                prepared.coin,
+                prepared.is_buy,
+                prepared.size,
+                prepared.entry_price,
+                {"limit": {"tif": "Ioc"}},
+                reduce_only=False,
+            )
         closing_is_buy = not prepared.is_buy
         stop = exchange.order(
             prepared.coin,

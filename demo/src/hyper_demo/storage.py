@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import threading
+from json import JSONDecodeError
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -17,6 +19,7 @@ from hyper_demo.models import (
 )
 
 T = TypeVar("T", bound=BaseModel)
+_STORE_LOCK = threading.Lock()
 
 
 class JsonStore:
@@ -47,11 +50,18 @@ class JsonStore:
         path = self._path(collection)
         if not path.exists():
             return []
-        return json.loads(path.read_text(encoding="utf-8"))
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except JSONDecodeError:
+            return []
+        return data if isinstance(data, list) else []
 
     def _write_raw(self, collection: str, records: list[dict[str, Any]]) -> None:
         path = self._path(collection)
-        path.write_text(json.dumps(records, indent=2, default=str), encoding="utf-8")
+        payload = json.dumps(records, indent=2, default=str)
+        temp_path = path.with_suffix(f"{path.suffix}.tmp")
+        temp_path.write_text(payload, encoding="utf-8")
+        temp_path.replace(path)
 
     def list(self, collection: str) -> list[T]:
         model = self.collections[collection]
@@ -70,11 +80,12 @@ class JsonStore:
         return sorted(items, key=lambda item: item.created_at)[-1]
 
     def save(self, collection: str, item: T) -> T:
-        records = self._read_raw(collection)
-        serialized = item.model_dump(mode="json")
-        records = [record for record in records if record.get("id") != item.id]
-        records.append(serialized)
-        self._write_raw(collection, records)
+        with _STORE_LOCK:
+            records = self._read_raw(collection)
+            serialized = item.model_dump(mode="json")
+            records = [record for record in records if record.get("id") != item.id]
+            records.append(serialized)
+            self._write_raw(collection, records)
         return item
 
     def append_event(self, event: RunEvent) -> RunEvent:

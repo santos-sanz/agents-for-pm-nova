@@ -43,3 +43,10 @@ def test_metrics_endpoint(tmp_path, monkeypatch) -> None:
     response = client.get("/api/portfolio/metrics")
     assert response.status_code == 200
     assert "alpha" in response.json()
+
+
+def test_replay_rejects_path_traversal(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    client = TestClient(app)
+    response = client.post("/api/replay/bad.name")
+    assert response.status_code == 400

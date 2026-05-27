@@ -25,6 +25,7 @@ def test_build_trade_plan_adds_directional_exits() -> None:
     plan = build_trade_plan(ProposalRequest(asset="BTC"), profile, research, StaticMarket())
 
     assert plan.side == "long"
+    assert plan.entry_type == "limit"
     assert plan.stop_loss < plan.entry_price < plan.take_profit
     assert plan.max_loss_usdc <= 100
 
