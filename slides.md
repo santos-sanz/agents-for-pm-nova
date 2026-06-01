@@ -230,6 +230,163 @@ As you watch the demo, focus less on the domain and more on the pattern: define 
 
 ---
 
+# The practical shift
+
+Claude Managed Agents moves the builder job from plumbing to product judgment.
+
+<div class="insight-grid">
+  <div><b>Platform owns</b><span>agent harness, state, sessions, events, sandbox execution, compaction, and tool runtime.</span></div>
+  <div><b>Builder owns</b><span>context, instructions, tools, permissions, outcomes, memory policy, and user trust.</span></div>
+  <div><b>PM question</b><span>What job should this agent own, how do we measure done, and who can override it?</span></div>
+</div>
+
+<p class="source">NotebookLM synthesis from Claude Managed Agents overview, "Ship your first Managed Agent", and production-ready agent workshop sources.</p>
+
+<!--
+Speaker notes:
+The biggest learning from the NotebookLM research is that managed agents change where effort goes.
+Without a managed platform, teams spend a lot of time rebuilding the harness: session state, event streaming, tool execution, persistence, and sandbox behavior. With Claude Managed Agents, more of that becomes product infrastructure.
+That does not remove PM responsibility. It changes it. The work moves toward context engineering, permission design, outcome definition, memory governance, and the user experience around steering and inspection.
+This is the transition from "can I make an agent loop run?" to "what responsibility should the agent carry in the business?"
+-->
+
+---
+
+# Define done, then let the loop work
+
+Outcomes turn agent management into an inspect-and-improve system.
+
+<div class="outcome-loop">
+  <div><span>1</span><b>Rubric</b><small>Define the business result and quality bar.</small></div>
+  <div><span>2</span><b>Agent work</b><small>Run tools, read files, create outputs.</small></div>
+  <div><span>3</span><b>Grader</b><small>Evaluate in a separate context.</small></div>
+  <div><span>4</span><b>Iteration</b><small>Send feedback until pass or limit.</small></div>
+</div>
+
+<p class="note">Example rubrics: Lighthouse score above 90, incident root cause with commit evidence, campaign brief matching brand constraints.</p>
+
+<!--
+Speaker notes:
+One of the most useful concepts from the notebook is Outcomes.
+Instead of only asking whether the agent produced a plausible answer, you define what "done" means. The platform can use a separate grader to inspect the result, give feedback, and push the agent back into the task until the rubric is met or the session hits a limit.
+For PMs, this is a major shift. Quality becomes something you can specify and inspect, not just something you vibe-check after a demo.
+The caution is that rubrics are product design. If the rubric is vague, the grader can pass weak work or keep the agent spinning. Good outcomes need measurable evidence, limits, and examples.
+-->
+
+---
+
+# From chat to teammate
+
+Routines, memory, and Dreaming make agents useful outside a single request.
+
+<div class="teammate-grid">
+  <div><b>Routines</b><span>Scheduled or event-driven triggers let agents wake up for work without waiting for chat.</span></div>
+  <div><b>Memory stores</b><span>Shared, persistent context carries decisions, preferences, and lessons across sessions.</span></div>
+  <div><b>Dreaming</b><span>Past sessions can be distilled into structured learning instead of raw transcript piles.</span></div>
+  <div><b>Steering</b><span>Humans can interrupt, correct, and guide long-running sessions while preserving audit history.</span></div>
+</div>
+
+<!--
+Speaker notes:
+NotebookLM kept coming back to the same pattern: the most interesting agents are not just better chatbots.
+Routines are how the agent becomes proactive: scheduled triggers, event triggers, deployment checks, documentation updates, incident triage, and other work that should start when the world changes.
+Memory is what makes the agent feel less disposable. It can remember decisions, preferences, and previous corrections. Dreaming is the batch process that turns past sessions into better reusable memory.
+The product risk is also clear. Persistent memory can store wrong, stale, or sensitive information. That means memory needs ownership, review, deletion paths, and clear boundaries.
+-->
+
+---
+
+# Enterprise trust is designed
+
+Managed agents reduce infrastructure risk, but they do not remove product governance.
+
+<div class="trust-grid">
+  <div><b>Sandbox</b><span>Cloud or self-hosted execution with isolated files and observable tool runs.</span></div>
+  <div><b>Vaults</b><span>Credentials can be injected into tools without entering the model context.</span></div>
+  <div><b>MCP</b><span>Standardized access to external systems, private data, and internal tools.</span></div>
+  <div><b>Approvals</b><span>High-risk actions can pause for human confirmation and steering.</span></div>
+</div>
+
+<p class="source">NotebookLM caveat: stateful Managed Agents are not the same compliance surface as stateless Messages API usage.</p>
+
+<!--
+Speaker notes:
+The security story is not "the agent is safe because it is managed." The better framing is that managed agents give you primitives for trust.
+You can isolate the execution environment. You can use credential vaults so raw tokens are not put into the model context. You can expose tools through MCP. You can gate dangerous actions with human approval.
+But the PM still has to manage the blast radius. If a tool can delete data, the fact that the credential was vault-backed does not make the action harmless. Permissions, allowlists, approvals, and audit UX are part of the product.
+Also call out compliance honestly: because these agents persist session history, files, and outputs server-side, some Zero Data Retention or HIPAA BAA use cases may need a different architecture.
+-->
+
+---
+
+# Choose the right primitive
+
+Most agent mistakes start by using one abstraction for every job.
+
+<div class="decision-table">
+  <div><b>Skill</b><span>Reusable domain instructions, policies, runbooks, or style rules loaded when relevant.</span><small>Smell test: "Always do X before Y."</small></div>
+  <div><b>MCP tool</b><span>Live access to external systems, internal data, or actions with real permissions.</span><small>Smell test: "Read or write outside the sandbox."</small></div>
+  <div><b>Single agent</b><span>Linear tasks with one owner, one context, and a clear output.</span><small>Smell test: "One expert could do this end to end."</small></div>
+  <div><b>Coordinator</b><span>Parallel research, specialist roles, or work that would overflow one context.</span><small>Smell test: "Several experts should work separately."</small></div>
+</div>
+
+<!--
+Speaker notes:
+NotebookLM surfaced a very useful decision matrix.
+Skills are not tools. They are packaged instructions or domain expertise. MCP is for connecting the agent to real systems. A single agent is best when the work is linear and fits one context. A coordinator with sub-agents is useful only when parallelism or specialization actually matters.
+The anti-pattern is over-engineering: spawning sub-agents for tiny tasks, connecting MCP when a local file or script is enough, or putting every policy into one massive system prompt.
+For a PM, this is roadmap hygiene. The architecture should match the shape of the work.
+-->
+
+---
+
+# The honest caveats
+
+Managed does not mean automatic, compliant, or cheap by default.
+
+<div class="risk-grid">
+  <div><b>Compliance</b><span>Stateful sessions and memory may not fit ZDR, HIPAA BAA, or strict retention needs.</span></div>
+  <div><b>Rubrics</b><span>Weak outcomes can pass bad work or trap the agent in expensive retry loops.</span></div>
+  <div><b>Memory</b><span>Wrong or stale facts persist unless someone owns review, pruning, and correction.</span></div>
+  <div><b>Permissions</b><span>Vaulted credentials protect tokens, but the agent can still use granted powers.</span></div>
+  <div><b>Reliability</b><span>Tools fail, models drift, latency appears, and approvals can make UX feel stuck.</span></div>
+  <div><b>Adoption</b><span>Users need visibility, override paths, and confidence before trusting proactive work.</span></div>
+</div>
+
+<!--
+Speaker notes:
+This slide is important because the rest of the talk can sound very optimistic.
+NotebookLM's caveats were clear. Managed Agents help with infrastructure, but product risk remains. Stateful systems create compliance questions. Memory creates governance questions. Outcomes create evaluation-design questions. Vaults protect raw secrets, but permissions still need least privilege.
+The product lesson is to define the operating contract: what the agent can do, what it cannot do, how success is checked, who owns memory, and how users interrupt or override it.
+This makes the talk more credible because it separates platform capability from production readiness.
+-->
+
+---
+
+# Build the first agent like a product
+
+Start narrow, instrument the loop, and scale only after the workflow earns trust.
+
+<div class="caveat-grid">
+  <div><b>Decompose</b><span>Use skills for domain policy, MCP for external systems, and sub-agents only when work is truly parallel.</span></div>
+  <div><b>Measure</b><span>Turn success into outcome rubrics, evals, and pass/fail evidence before rollout.</span></div>
+  <div><b>Govern</b><span>Name an agent sponsor for memory, permissions, stale context, and escalation paths.</span></div>
+  <div><b>Watch</b><span>Expect tool failures, latency, cost, prompt drift, and change-management friction.</span></div>
+</div>
+
+<p class="takeaway">The PM builder skill is not prompting. It is designing the operating contract.</p>
+
+<!--
+Speaker notes:
+This is the final practical takeaway.
+Do not start by trying to build the biggest possible autonomous system. Start with one workflow where the job is clear, the tools are known, and the outcome can be checked.
+Use skills when you need reusable domain instructions. Use MCP when the agent needs external systems. Use a single agent for linear work. Use a coordinator and sub-agents only when the task has parallel specialists or separate domains that would overload one context.
+Then govern it like a product: who owns memory, who approves risky actions, what counts as success, what happens when the agent gets stuck, and how users can inspect or steer the work.
+That is the move from PM to AI builder.
+-->
+
+---
+
 # References
 
 <div class="ref-groups">
