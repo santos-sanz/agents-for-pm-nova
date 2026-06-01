@@ -74,6 +74,28 @@
   max-width: 900px;
 }
 
+.cover-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(280px, .75fr);
+  align-items: center;
+  gap: 3rem;
+}
+
+.cover-panel {
+  border-left: 1px solid var(--line);
+  padding-left: 2rem;
+}
+
+.cover-panel .subtitle {
+  font-size: 1.35rem;
+  margin-bottom: 2rem;
+}
+
+.cover-panel .byline {
+  line-height: 1.5;
+  font-size: 1.2rem;
+}
+
 .kicker,
 .source-pill {
   display: inline-block;
@@ -123,17 +145,22 @@
   background: var(--surface-card);
 }
 
+.timeline div {
+  display: grid;
+  grid-template-columns: 3rem minmax(220px, max-content) 1fr;
+  align-items: baseline;
+  column-gap: .9rem;
+}
+
 .timeline span,
 .demo-flow span {
   color: var(--primary);
   font-weight: 800;
-  margin-right: .75rem;
 }
 
 .timeline strong,
 .profile-card strong {
   display: inline-block;
-  min-width: 8rem;
 }
 
 .timeline small,
@@ -255,6 +282,37 @@
 
 .water-steps span {
   color: var(--muted);
+}
+
+.domain-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+  margin: 2rem 0 1rem;
+}
+
+.domain-grid div {
+  min-height: 190px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-card);
+  padding: 1.25rem;
+}
+
+.domain-grid b,
+.domain-grid span {
+  display: block;
+}
+
+.domain-grid b {
+  color: var(--primary-active);
+  font-size: 1.15rem;
+  margin-bottom: 1rem;
+}
+
+.domain-grid span {
+  color: var(--muted);
+  line-height: 1.45;
 }
 
 .two-paths {
@@ -430,6 +488,39 @@
   text-decoration: none;
   font-size: .9rem;
   font-weight: 700;
+}
+
+.ref-groups {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+  margin-top: 1.5rem;
+}
+
+.ref-groups > div {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 1rem;
+  background: var(--surface-soft);
+}
+
+.ref-groups h2 {
+  font-size: 1.1rem;
+  margin: 0 0 .85rem;
+}
+
+.ref-groups a {
+  display: block;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: .65rem .75rem;
+  margin-bottom: .55rem;
+  background: var(--surface-card);
+  color: var(--primary-active);
+  text-decoration: none;
+  font-size: .82rem;
+  font-weight: 700;
+  line-height: 1.25;
 }
 
 .slidev-layout.image-right img {
