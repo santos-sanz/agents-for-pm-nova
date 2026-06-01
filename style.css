@@ -1,16 +1,26 @@
 :root {
-  --ink: #111827;
-  --muted: #64748b;
-  --paper: #f8fafc;
-  --teal: #0f766e;
-  --mint: #ccfbf1;
-  --coral: #f97316;
-  --line: #d1d5db;
+  --ink: #141413;
+  --body: #3d3d3a;
+  --body-strong: #252523;
+  --muted: #6c6a64;
+  --muted-soft: #8e8b82;
+  --paper: #faf9f5;
+  --surface-soft: #f5f0e8;
+  --surface-card: #efe9de;
+  --surface-cream-strong: #e8e0d2;
+  --surface-dark: #181715;
+  --surface-dark-elevated: #252320;
+  --primary: #0eb0a4;
+  --primary-active: #087c73;
+  --primary-soft: #d7f7f4;
+  --line: #e6dfd8;
+  --line-soft: #ebe6df;
 }
 
 .slidev-layout {
   background: var(--paper);
   color: var(--ink);
+  font-family: Inter, StyreneB, sans-serif;
 }
 
 #slidev-goto-dialog {
@@ -19,8 +29,14 @@
 
 .slidev-layout h1 {
   letter-spacing: 0;
-  line-height: 1.02;
-  font-weight: 800;
+  line-height: 1.05;
+  font-weight: 400;
+  font-family: Copernicus, "Tiempos Headline", Georgia, serif;
+}
+
+.slidev-layout h2 {
+  font-family: Copernicus, "Tiempos Headline", Georgia, serif;
+  font-weight: 400;
 }
 
 .slidev-layout h2,
@@ -39,10 +55,8 @@
   flex-direction: column;
   justify-content: center;
   padding: 0 4rem;
-  color: white;
-  background:
-    linear-gradient(115deg, rgba(15,23,42,.96), rgba(15,118,110,.82) 52%, rgba(249,115,22,.76)),
-    url("https://quasar.novatalent.com/files?token=5fa2132ffa935b1e653d07bd83ebfcf5355bf540c69faa121cd8d827c6bda82b1d4272feb517d9998a3baa015e1f28a174ea2c068c9e691ae9bffe46287c144c") center/cover;
+  color: var(--ink);
+  background: var(--paper);
 }
 
 .slidev-layout:has(.hero) {
@@ -57,29 +71,31 @@
 .slidev-layout .hero h1 {
   font-size: 5.5rem !important;
   margin: .4rem 0 1rem;
+  max-width: 900px;
 }
 
 .kicker,
 .source-pill {
   display: inline-block;
   width: fit-content;
-  border: 1px solid rgba(255,255,255,.45);
+  border: 1px solid var(--line);
   border-radius: 999px;
   padding: .35rem .75rem;
   font-size: .78rem;
   text-transform: uppercase;
-  color: rgba(255,255,255,.86);
+  color: var(--primary-active);
+  background: var(--surface-soft);
 }
 
 .subtitle {
   font-size: 1.65rem;
   max-width: 760px;
-  color: rgba(255,255,255,.9);
+  color: var(--body);
 }
 
 .byline {
   margin-top: 2.25rem;
-  color: rgba(255,255,255,.72);
+  color: var(--muted);
 }
 
 .timeline,
@@ -104,12 +120,12 @@
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 1rem;
-  background: rgba(255,255,255,.72);
+  background: var(--surface-card);
 }
 
 .timeline span,
 .demo-flow span {
-  color: var(--coral);
+  color: var(--primary);
   font-weight: 800;
   margin-right: .75rem;
 }
@@ -137,19 +153,15 @@
 
 .dark,
 .split-dark {
-  color: white;
+  color: var(--paper);
 }
 
 .slidev-layout.dark {
-  background:
-    radial-gradient(circle at 18% 18%, rgba(249,115,22,.26), transparent 28%),
-    linear-gradient(135deg, #111827 0%, #18332f 58%, #f97316 140%) !important;
+  background: var(--surface-dark) !important;
 }
 
 .slidev-layout.split-dark {
-  background:
-    linear-gradient(135deg, rgba(16,16,20,.96) 0%, rgba(31,41,55,.94) 70%, rgba(15,118,110,.88) 140%),
-    url("https://www.anthropic.com/_next/image?q=75&url=https%3A%2F%2Fwww-cdn.anthropic.com%2Fimages%2F4zrzovbb%2Fwebsite%2Fd3083d3f40bb2b6f477901cc9a240738d3dd1371-2401x1000.png&w=3840") center/cover !important;
+  background: var(--surface-dark) !important;
 }
 
 .stat-slide {
@@ -162,13 +174,13 @@
 
 .stat-slide h1 {
   font-size: 10rem;
-  color: white;
+  color: var(--paper);
   margin: 1rem 0 0;
 }
 
 .stat-slide h2 {
   font-size: 2rem;
-  color: white;
+  color: var(--paper);
 }
 
 .stat-slide p {
@@ -197,16 +209,16 @@
 }
 
 .profile-card.accent {
-  background: #ecfdf5;
-  border-color: #99f6e4;
+  background: var(--primary-soft);
+  border-color: var(--primary);
 }
 
 .framed .callout,
 .callout {
   margin-top: 1rem;
   padding: .9rem 1rem;
-  border-left: 5px solid var(--coral);
-  background: white;
+  border-left: 5px solid var(--primary);
+  background: var(--surface-soft);
 }
 
 .water h1,
@@ -215,9 +227,7 @@
 }
 
 .slidev-layout.water {
-  background:
-    linear-gradient(180deg, rgba(248,250,252,.88) 0%, rgba(224,242,254,.86) 55%, rgba(204,251,241,.88) 100%),
-    url("https://images.unsplash.com/photo-1534088568595-a066f410bcda?auto=format&fit=crop&fm=jpg&ixlib=rb-4.1.0&q=70&w=2400") center/cover !important;
+  background: var(--paper) !important;
 }
 
 .water-steps {
@@ -229,9 +239,9 @@
 
 .water-steps div {
   min-height: 150px;
-  border: 1px solid #bae6fd;
+  border: 1px solid var(--line);
   border-radius: 8px;
-  background: white;
+  background: var(--surface-card);
   padding: 1.25rem;
   display: flex;
   flex-direction: column;
@@ -239,7 +249,7 @@
 }
 
 .water-steps b {
-  color: var(--teal);
+  color: var(--primary-active);
   font-size: 1.2rem;
 }
 
@@ -257,11 +267,11 @@
   border: 1px solid rgba(255,255,255,.25);
   border-radius: 8px;
   padding: 1.5rem;
-  background: rgba(255,255,255,.08);
+  background: var(--surface-dark-elevated);
 }
 
 .two-paths span {
-  color: #fed7aa;
+  color: var(--primary);
   text-transform: uppercase;
   font-size: .8rem;
 }
@@ -293,9 +303,9 @@
 }
 
 .demo-flow div {
-  border: 1px solid #99f6e4;
+  border: 1px solid var(--line);
   border-radius: 8px;
-  background: white;
+  background: var(--surface-card);
   padding: 1.25rem;
   min-height: 150px;
 }
@@ -309,29 +319,33 @@
   max-width: 760px;
 }
 
-.image-caption {
-  position: absolute;
-  left: 3rem;
-  bottom: 2rem;
-  max-width: 540px;
+.loop-card {
+  max-width: 760px;
   border-radius: 8px;
-  padding: 1rem 1.25rem;
-  background: rgba(17,24,39,.88);
-  color: white;
+  padding: 2rem;
+  background: var(--surface-dark);
+  color: var(--paper);
 }
 
-.image-caption strong,
-.image-caption span {
+.loop-card strong,
+.loop-card span {
   display: block;
 }
 
-.image-caption span {
+.loop-card strong {
+  font-size: 1.35rem;
+  margin-bottom: .75rem;
+}
+
+.loop-card span {
   color: rgba(255,255,255,.78);
+  font-size: 1.35rem;
+  line-height: 1.45;
 }
 
 .demo-section {
-  background: linear-gradient(135deg, #111827 0%, #0f766e 100%);
-  color: white;
+  background: var(--surface-dark);
+  color: var(--paper);
 }
 
 .watch-grid {
@@ -350,7 +364,7 @@
 
 .steer-grid div {
   min-height: 190px;
-  background: white;
+  background: var(--surface-card);
 }
 
 .watch-grid b,
@@ -366,11 +380,11 @@
 
 .watch-grid b {
   margin-bottom: .6rem;
-  color: var(--teal);
+  color: var(--primary-active);
 }
 
 .steer-grid b {
-  color: var(--coral);
+  color: var(--primary);
   font-size: 1.2rem;
 }
 
@@ -395,8 +409,8 @@
   border: 1px solid var(--line);
   border-radius: 999px;
   padding: .45rem .8rem;
-  background: white;
-  color: var(--teal);
+  background: var(--surface-soft);
+  color: var(--primary-active);
   font-weight: 700;
 }
 
@@ -411,8 +425,8 @@
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: .75rem .85rem;
-  background: white;
-  color: var(--teal);
+  background: var(--surface-card);
+  color: var(--primary-active);
   text-decoration: none;
   font-size: .9rem;
   font-weight: 700;

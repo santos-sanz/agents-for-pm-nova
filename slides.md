@@ -27,9 +27,6 @@ Set the contract immediately: the talk is short and practical. Theory is only he
 -->
 
 ---
-layout: image-right
-image: https://quasar.novatalent.com/files?token=5fa2132ffa935b1e653d07bd83ebfcf5355bf540c69faa121cd8d827c6bda82b1d4272feb517d9998a3baa015e1f28a174ea2c068c9e691ae9bffe46287c144c
----
 
 # What I want to cover before the demo
 
@@ -48,7 +45,6 @@ Keep this under one minute. It tells the audience that this will not be a long t
 
 ---
 class: dark
-background: linear-gradient(135deg, #111827 0%, #18332f 58%, #f97316 140%)
 ---
 
 <div class="stat-slide">
@@ -111,7 +107,6 @@ flowchart TB
 ---
 layout: center
 class: water
-background: linear-gradient(180deg, #f8fafc 0%, #e0f2fe 100%)
 ---
 
 # The water-cycle analogy
@@ -130,9 +125,6 @@ Use the "chamanes" example carefully: the point is not to mock early explanation
 -->
 
 ---
-layout: image-right
-image: https://www.anthropic.com/_next/image?q=75&url=https%3A%2F%2Fwww-cdn.anthropic.com%2Fimages%2F4zrzovbb%2Fwebsite%2Fd3083d3f40bb2b6f477901cc9a240738d3dd1371-2401x1000.png&w=3840
----
 
 # Agents are moving domains too
 
@@ -145,7 +137,7 @@ Early agents were difficult because every layer was separate:
 - fragile evals;
 - unclear deployment path.
 
-<p class="source">Image reference: Anthropic, "Building effective agents" - augmented LLM.</p>
+<p class="source">Concept reference: Anthropic, "Building effective agents" - augmented LLM.</p>
 
 <!--
 This image comes from the Anthropic reference. Use it to show that an agent is already a system, not a chat box.
@@ -153,7 +145,6 @@ This image comes from the Anthropic reference. Use it to show that an agent is a
 
 ---
 class: split-dark
-background: linear-gradient(135deg, #101014 0%, #1f2937 70%, #0f766e 140%)
 ---
 
 # Two ways the market is reducing complexity
@@ -174,9 +165,6 @@ background: linear-gradient(135deg, #101014 0%, #1f2937 70%, #0f766e 140%)
 </div>
 
 ---
-layout: image-right
-image: https://www.anthropic.com/_next/image?q=75&url=https%3A%2F%2Fwww-cdn.anthropic.com%2Fimages%2F4zrzovbb%2Fwebsite%2F58d9f10c985c4eb5d53798dea315f7bb5ab6249e-2401x1000.png&w=3840
----
 
 # What changes with managed agents
 
@@ -190,11 +178,10 @@ Claude Managed Agents lets us talk about a full execution loop:
   <div><b>Output</b><span>reviewable artifact</span></div>
 </div>
 
-<p class="source">Image reference: Anthropic, autonomous agent loop.</p>
+<p class="source">Concept reference: Anthropic, autonomous agent loop.</p>
 
 ---
 class: demo-map
-background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 58%, #ccfbf1 130%)
 ---
 
 # Demo structure
@@ -216,11 +203,8 @@ This is the last theory slide. After this, switch to terminal/browser demo.
 -->
 
 ---
-layout: image
-image: https://www.anthropic.com/_next/image?q=75&url=https%3A%2F%2Fwww-cdn.anthropic.com%2Fimages%2F4zrzovbb%2Fwebsite%2F4b9a1f4eb63d5962a6e1746ac26bbc857cf3474f-2400x1666.png&w=3840
----
 
-<div class="image-caption">
+<div class="loop-card">
   <strong>Reference mental model</strong>
   <span>Coding agents work because they can close the loop against ground truth: edit, run, test, inspect, fix.</span>
 </div>
@@ -309,5 +293,4 @@ Use the Anthropic workshops as the backbone: Ship Your First Managed Agent for t
   <a href="https://youtu.be/jWWsLe4Gh5Y">Claude - Production-ready agent</a>
   <a href="https://youtu.be/mWvtOHlZM-I">Claude - Tool, skill, or subagent?</a>
   <a href="https://github.com/anthropics/cwc-workshops/tree/main">Anthropic - Code with Claude workshops</a>
-  <a href="https://unsplash.com/photos/cumulus-clouds-Pe1Ol9oLc4o">Water-cycle background - Unsplash</a>
 </div>
