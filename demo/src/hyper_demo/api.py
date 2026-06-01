@@ -12,9 +12,11 @@ from pydantic import BaseModel
 
 from hyper_demo.adapters.anthropic_managed import ManagedAgentResearchClient
 from hyper_demo.adapters.hyperliquid import ExecutionBlocked, HyperliquidTestnetAdapter
+from hyper_demo.adapters.paper import PaperExecutionBlocked, PaperTradingAdapter
 from hyper_demo.config import Settings, get_settings
 from hyper_demo.models import (
     DemoRun,
+    OrderRecord,
     OrderRequest,
     PortfolioMetrics,
     PositionSnapshot,
@@ -24,7 +26,8 @@ from hyper_demo.models import (
     RunEvent,
     TradePlan,
 )
-from hyper_demo.services.market import MarketDataClient
+from hyper_demo.services.agent_team import INVESTOR_SKILLS, build_multi_agent_decision
+from hyper_demo.services.market import CoinbasePublicMarketDataClient, MarketDataClient
 from hyper_demo.services.metrics import compute_portfolio_metrics
 from hyper_demo.services.monitoring import HyperliquidWebsocketMonitor
 from hyper_demo.services.proposals import build_trade_plan
@@ -46,6 +49,7 @@ class SetupCheck(BaseModel):
     hyperliquid_configured: bool
     hyperliquid_base_url: str
     hyperliquid_ws_url: str
+    paper_market_base_url: str
     warnings: list[str]
 
 
@@ -69,6 +73,7 @@ def setup_check(settings: Settings | None = None) -> SetupCheck:
         hyperliquid_configured=settings.has_hyperliquid_credentials,
         hyperliquid_base_url=settings.hyperliquid_base_url,
         hyperliquid_ws_url=settings.hyperliquid_ws_url,
+        paper_market_base_url=settings.paper_market_base_url,
         warnings=warnings,
     )
 
@@ -168,6 +173,36 @@ def submit_testnet_order(request: OrderRequest):
     return {"run": run, "order": order}
 
 
+@app.post("/api/orders/paper")
+def submit_paper_order(request: OrderRequest):
+    store = get_store()
+    plan = store.get("plans", request.plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plan not found.")
+    try:
+        order = PaperTradingAdapter(get_settings()).execute_plan(plan, request.confirmed)
+    except PaperExecutionBlocked as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    store.save("orders", order)
+    run = DemoRun(
+        profile_id=plan.profile_id,
+        research_id=plan.research_id,
+        plan_id=plan.id,
+        order_id=order.id,
+        status="executed",
+    )
+    store.save("runs", run)
+    for trace in order.raw_response.get("debug_trace", []):
+        store.append_event(
+            RunEvent(
+                run_id=run.id,
+                message=f"Paper trading debug: {trace['step']}",
+                payload=trace,
+            )
+        )
+    return {"run": run, "order": order}
+
+
 @app.get("/api/runs/{run_id}")
 def get_run(run_id: str):
     run = get_store().get("runs", run_id)
@@ -181,24 +216,40 @@ def get_run_events(run_id: str):
     return get_store().events_for_run(run_id)
 
 
+def _position_from_latest_state(
+    plan: TradePlan | None,
+    order: OrderRecord | None,
+    settings: Settings,
+) -> PositionSnapshot | None:
+    if not plan:
+        return None
+    if order and order.plan_id == plan.id and order.exchange == "paper-coinbase":
+        fill = order.raw_response.get("fill", {})
+        entry_price = float(fill.get("fill_price") or plan.entry_price)
+        size_usdc = float(fill.get("notional_usdc") or plan.size_usdc)
+        current = CoinbasePublicMarketDataClient(settings).mark_price(plan.asset).mark_price
+    else:
+        entry_price = plan.entry_price
+        size_usdc = plan.size_usdc
+        current = MarketDataClient(settings).mark_price(plan.asset).mark_price
+    direction = 1 if plan.side.value == "long" else -1
+    pnl = (current - entry_price) / entry_price * size_usdc * direction
+    return PositionSnapshot(
+        asset=plan.asset,
+        side=plan.side,
+        entry_price=entry_price,
+        mark_price=current,
+        size_usdc=size_usdc,
+        unrealized_pnl_usdc=pnl,
+        leverage=plan.leverage,
+    )
+
+
 @app.get("/api/portfolio/metrics", response_model=PortfolioMetrics)
 def get_portfolio_metrics():
     store = get_store()
     plan = store.latest("plans")
-    position = None
-    if plan:
-        current = MarketDataClient(get_settings()).mark_price(plan.asset).mark_price
-        direction = 1 if plan.side.value == "long" else -1
-        pnl = (current - plan.entry_price) / plan.entry_price * plan.size_usdc * direction
-        position = PositionSnapshot(
-            asset=plan.asset,
-            side=plan.side,
-            entry_price=plan.entry_price,
-            mark_price=current,
-            size_usdc=plan.size_usdc,
-            unrealized_pnl_usdc=pnl,
-            leverage=plan.leverage,
-        )
+    position = _position_from_latest_state(plan, store.latest("orders"), get_settings())
     equity_curve = [10_000, 10_040, 10_015, 10_120, 10_090, 10_180]
     if position:
         equity_curve[-1] = equity_curve[-1] + position.unrealized_pnl_usdc
@@ -208,6 +259,30 @@ def get_portfolio_metrics():
         eth_benchmark=[100, 100.7, 99.8, 101.6, 101.1, 102.0],
         positions=[position] if position else [],
     )
+
+
+@app.get("/api/agents/skills")
+def get_agent_skills():
+    return list(INVESTOR_SKILLS)
+
+
+@app.post("/api/agents/debate")
+def run_agent_debate(request: ProposalRequest):
+    store = get_store()
+    profile = (
+        store.get("profiles", request.profile_id)
+        if request.profile_id
+        else store.latest("profiles")
+    )
+    research = (
+        store.get("research", request.research_id)
+        if request.research_id
+        else store.latest("research")
+    )
+    plan = store.latest("plans")
+    if plan and plan.asset != request.asset:
+        plan = None
+    return build_multi_agent_decision(request.asset, profile, research, plan)
 
 
 @app.get("/api/market/{asset}/ws-sample")
@@ -248,6 +323,7 @@ def replay_fixture(fixture_name: str):
 @app.get("/profile", response_class=HTMLResponse)
 @app.get("/research", response_class=HTMLResponse)
 @app.get("/proposal", response_class=HTMLResponse)
+@app.get("/agents", response_class=HTMLResponse)
 @app.get("/execution", response_class=HTMLResponse)
 @app.get("/monitor", response_class=HTMLResponse)
 @app.get("/settings", response_class=HTMLResponse)

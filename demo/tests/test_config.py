@@ -34,3 +34,8 @@ def test_settings_accept_testnet_urls() -> None:
         HYPERLIQUID_WS_URL="wss://api.hyperliquid-testnet.xyz/ws",
     )
     assert settings.demo_trading_mode == "testnet"
+
+
+def test_settings_reject_unknown_paper_market_url() -> None:
+    with pytest.raises(ValidationError):
+        Settings(PAPER_MARKET_BASE_URL="https://example.com")

@@ -44,6 +44,9 @@ Expected:
 uv run demo profile --asset BTC --horizon-days 30 --max-drawdown-pct 8 --leverage low --capital-at-risk-usdc 100 --stop-loss-pct 4
 uv run demo research --asset BTC
 uv run demo propose --asset BTC
+uv run demo skills
+uv run demo debate --asset BTC
+uv run demo paper --plan <plan_id> --confirm
 ```
 
 To execute on Hyperliquid testnet after reviewing the plan:
@@ -72,9 +75,11 @@ Suggested live flow:
 1. Create a risk profile.
 2. Run research.
 3. Create a proposal.
-4. Review the stop-loss, take-profit, max loss, and invalidation criteria.
-5. Confirm and submit only if Hyperliquid testnet credentials are configured.
-6. Monitor metrics and events.
+4. Run Agent Team to review search cards, quant signals, and investor-style skills.
+5. Review the stop-loss, take-profit, max loss, consensus, and invalidation criteria.
+6. Confirm and run paper trading first.
+7. Submit to Hyperliquid testnet only if credentials are configured and the presenter opts in.
+8. Monitor metrics and events.
 
 Optional websocket smoke test:
 
@@ -98,3 +103,5 @@ uv run ruff check .
 ```
 
 For rehearsal, also run the browser UI and load the fallback replay once before the session.
+The full coding-agent prompt runbook is in `docs/coding-agent-prompts.md`; the test strategy is in
+`docs/testing-pyramid.md`.
