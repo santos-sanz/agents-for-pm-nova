@@ -85,7 +85,8 @@
 .timeline,
 .profile-grid,
 .two-paths,
-.watch-grid {
+.watch-grid,
+.steer-grid {
   display: grid;
   gap: 1rem;
 }
@@ -98,6 +99,7 @@
 .timeline div,
 .profile-card,
 .watch-grid div,
+.steer-grid div,
 .demo-card {
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -121,6 +123,7 @@
 .timeline small,
 .profile-card small,
 .watch-grid span,
+.steer-grid span,
 .stack-list span {
   color: var(--muted);
 }
@@ -336,18 +339,39 @@
   margin-top: 2rem;
 }
 
+.steer-grid {
+  grid-template-columns: repeat(3, 1fr);
+  margin-top: 2rem;
+}
+
 .watch-grid div {
   min-height: 150px;
 }
 
+.steer-grid div {
+  min-height: 190px;
+  background: white;
+}
+
 .watch-grid b,
+.steer-grid b,
 .watch-grid span {
   display: block;
+}
+
+.steer-grid span {
+  display: block;
+  margin-top: .75rem;
 }
 
 .watch-grid b {
   margin-bottom: .6rem;
   color: var(--teal);
+}
+
+.steer-grid b {
+  color: var(--coral);
+  font-size: 1.2rem;
 }
 
 .closing h2 {
@@ -378,18 +402,19 @@
 
 .refs {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: .85rem;
-  margin-top: 2rem;
+  grid-template-columns: repeat(3, 1fr);
+  gap: .65rem;
+  margin-top: 1.5rem;
 }
 
 .refs a {
   border: 1px solid var(--line);
   border-radius: 8px;
-  padding: .9rem 1rem;
+  padding: .75rem .85rem;
   background: white;
   color: var(--teal);
   text-decoration: none;
+  font-size: .9rem;
   font-weight: 700;
 }
 

@@ -251,6 +251,22 @@ Create -> Run -> Inspect -> Improve
 
 ---
 
+# Steering the workshop
+
+<div class="steer-grid">
+  <div><b>Ship first</b><span>Keep the build linear: agent, environment, session, events, output.</span></div>
+  <div><b>Then harden</b><span>Ask what changes before this becomes production: confirmations, outcomes, evals, monitoring.</span></div>
+  <div><b>Decompose</b><span>Move responsibilities into tools, skills, or subagents instead of growing one large prompt.</span></div>
+</div>
+
+<p class="takeaway">The room should leave with a product habit: inspect the loop before trusting the agent.</p>
+
+<!--
+Use the Anthropic workshops as the backbone: Ship Your First Managed Agent for the linear build, Production-ready Agent for deployment concerns, and Agent Decomposition for the "tool, skill, or subagent?" discussion.
+-->
+
+---
+
 # Fallback if the live demo fails
 
 1. Show the agent contract.
@@ -289,5 +305,9 @@ Create -> Run -> Inspect -> Improve
   <a href="https://www.anthropic.com/news/enterprise-ai-services-company">Anthropic - Enterprise AI services company</a>
   <a href="https://openai.com/index/openai-launches-the-deployment-company/">OpenAI - Deployment Company</a>
   <a href="https://platform.claude.com/docs/en/agents-and-tools/managed-agents/overview">Claude Managed Agents</a>
+  <a href="https://youtu.be/19HDQ9HppOA">Claude - Ship your first Managed Agent</a>
+  <a href="https://youtu.be/jWWsLe4Gh5Y">Claude - Production-ready agent</a>
+  <a href="https://youtu.be/mWvtOHlZM-I">Claude - Tool, skill, or subagent?</a>
+  <a href="https://github.com/anthropics/cwc-workshops/tree/main">Anthropic - Code with Claude workshops</a>
   <a href="https://unsplash.com/photos/cumulus-clouds-Pe1Ol9oLc4o">Water-cycle background - Unsplash</a>
 </div>

@@ -104,6 +104,42 @@ Implementation note:
 
 Managed Agents is a beta product surface. The demo should include a fallback transcript and prebuilt output.
 
+## Anthropic Code with Claude Workshop References
+
+Source collection:
+
+- Anthropic, Code with Claude workshops repository: https://github.com/anthropics/cwc-workshops/tree/main
+- How to get to production faster with Claude Managed Agents: https://youtu.be/zenIB7XLZxQ
+- Build a production-ready agent with Claude Managed Agents: https://youtu.be/jWWsLe4Gh5Y
+- Getting more out of the Claude Platform: https://youtu.be/QIriO1-vHYw
+- Ship your first Managed Agent: https://youtu.be/19HDQ9HppOA
+- Tool, skill, or subagent? Decomposing an agent that outgrew its prompt: https://youtu.be/mWvtOHlZM-I
+
+Best references for this Nova workshop:
+
+- Ship Your First Managed Agent: https://github.com/anthropics/cwc-workshops/tree/main/ship-your-first-managed-agent
+  - Best fit for a PM-friendly workshop because the build is organized around seven small API calls: agent, environment, file upload, session, event stream, local tool handling, and cleanup.
+  - Useful steering idea: keep the demo path linear and visible. The audience should always know which resource is being created or inspected.
+- Production-ready Agent / Deal Desk: https://github.com/anthropics/cwc-workshops/tree/main/production-ready-agent
+  - Best fit for showing what "production-ready" means beyond a toy demo: event streams, gated tool confirmations, sub-agent threads, memory, resource mounts, and outcome definitions.
+  - Useful steering idea: after the first demo works, ask what would need to be added before a company could trust it.
+- Agent Decomposition: https://github.com/anthropics/cwc-workshops/tree/main/agent-decomposition
+  - Best fit for the "prompt is not the product" lesson. It gives a practical decision framework: tool call, skill, or subagent.
+  - Useful steering idea: turn the audience discussion into decomposition practice. Ask what should be deterministic tooling, what should live as reusable instructions, and what deserves a separate agent.
+
+Lower-priority references for the live deck:
+
+- "How to get to production faster" is useful background for the managed-platform argument, but overlaps with the production-ready and first-agent material.
+- "Getting more out of the Claude Platform" is broad platform context. Keep it as optional prep unless the audience needs more Claude Platform orientation.
+
+Workshop steering ideas:
+
+- Anchor every section in the same loop: define the job, attach evidence, run the session, inspect events, improve the contract.
+- Use the first managed-agent demo as the "happy path" and the production-ready workshop as the "what changes before real deployment?" discussion.
+- Ask PMs to critique outputs, not prompts. This keeps the session grounded in product quality, evidence, risk, and reviewability.
+- Treat tool/skill/subagent decomposition as a workshop exercise: give the room one messy agent behavior and ask where each responsibility should move.
+- Keep "managed" concrete: fewer custom decisions about environment, session state, tool execution, event streams, and inspection.
+
 ## Expert Deployment Services
 
 ### Anthropic Enterprise AI Services
