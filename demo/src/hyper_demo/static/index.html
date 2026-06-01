@@ -20,6 +20,7 @@
         <a href="/profile" data-route="/profile">Risk Profile</a>
         <a href="/research" data-route="/research">Research</a>
         <a href="/proposal" data-route="/proposal">Proposal</a>
+        <a href="/agents" data-route="/agents">Agent Team</a>
         <a href="/execution" data-route="/execution">Execution</a>
         <a href="/monitor" data-route="/monitor">Monitor</a>
         <a href="/settings" data-route="/settings">Settings</a>
@@ -113,7 +114,36 @@
         <pre id="proposal-output" class="output"></pre>
       </section>
 
+      <section id="agents" class="view">
+        <section class="panel action-panel">
+          <div>
+            <h2>Multi-Agent Review</h2>
+            <p>Combines search cards, quant signals, and investor-style skills before execution.</p>
+          </div>
+          <label>Asset<input id="agents-asset" value="BTC" /></label>
+          <button class="primary" data-action="agents">Run Agent Team</button>
+        </section>
+        <div class="grid two agent-grid">
+          <section class="panel">
+            <div class="panel-head">
+              <h2>Consensus</h2>
+              <span id="consensus-pill" class="pill">not run</span>
+            </div>
+            <div id="agent-opinions" class="agent-opinions"></div>
+          </section>
+          <pre id="agents-output" class="output compact"></pre>
+        </div>
+      </section>
+
       <section id="execution" class="view">
+        <section class="panel action-panel">
+          <div>
+            <h2>Paper Trading</h2>
+            <p>Simulates execution with public Coinbase Exchange ticker data and stores detailed debug traces.</p>
+          </div>
+          <label class="check-row"><input id="paper-confirm" type="checkbox" /> Confirm paper trading run</label>
+          <button class="primary" data-action="paper">Run Paper Trade</button>
+        </section>
         <section class="panel action-panel danger-zone">
           <div>
             <h2>Testnet Execution</h2>

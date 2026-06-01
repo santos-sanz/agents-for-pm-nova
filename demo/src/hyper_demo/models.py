@@ -136,7 +136,7 @@ class OrderRecord(BaseModel):
     id: str = Field(default_factory=lambda: new_id("order"))
     created_at: datetime = Field(default_factory=utc_now)
     plan_id: str
-    exchange: Literal["hyperliquid-testnet"] = "hyperliquid-testnet"
+    exchange: Literal["hyperliquid-testnet", "paper-coinbase"] = "hyperliquid-testnet"
     asset: str
     side: TradeSide
     size_usdc: float
@@ -192,3 +192,53 @@ class PortfolioMetrics(BaseModel):
     exposure_by_asset: dict[str, float]
     realized_pnl_usdc: float = 0.0
     unrealized_pnl_usdc: float = 0.0
+
+
+class InvestorSkill(BaseModel):
+    id: str
+    display_name: str
+    inspired_by: str
+    decision_style: str
+    must_check: list[str]
+    veto_rules: list[str]
+    prompt: str
+
+
+class SearchResult(BaseModel):
+    title: str
+    url: str
+    snippet: str
+    source: Literal["managed-agent-web", "local-research", "fallback"]
+
+
+class QuantSignal(BaseModel):
+    asset: str
+    mark_price: float
+    source: str
+    trend_score: float = Field(ge=-1.0, le=1.0)
+    volatility_score: float = Field(ge=0.0, le=1.0)
+    carry_score: float = Field(ge=-1.0, le=1.0)
+    liquidity_score: float = Field(ge=0.0, le=1.0)
+    recommendation: Literal["long_bias", "short_bias", "stand_aside"]
+    explanation: str
+
+
+class AgentOpinion(BaseModel):
+    skill_id: str
+    display_name: str
+    stance: Literal["support", "oppose", "abstain"]
+    confidence: float = Field(ge=0.0, le=1.0)
+    rationale: str
+    required_checks: list[str]
+
+
+class MultiAgentDecision(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("team"))
+    created_at: datetime = Field(default_factory=utc_now)
+    asset: str
+    search_results: list[SearchResult]
+    quant_signal: QuantSignal
+    opinions: list[AgentOpinion]
+    consensus: Literal["approve_paper_trade", "revise_plan", "reject_trade"]
+    next_actions: list[str]
+    safety_notes: list[str]

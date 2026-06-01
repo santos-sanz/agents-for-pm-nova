@@ -5,6 +5,7 @@ const state = {
   order: null,
   run: null,
   setup: null,
+  team: null,
 };
 
 const titles = {
@@ -12,6 +13,7 @@ const titles = {
   "/profile": ["Risk Profile", "Create the structured investor profile used by the agent."],
   "/research": ["Research", "Use Claude Managed Agents or the fallback transcript."],
   "/proposal": ["Proposal", "Generate a bounded testnet-only trade plan."],
+  "/agents": ["Agent Team", "Run search, quant signals, and investor-style review skills."],
   "/execution": ["Execution", "Submit confirmed Hyperliquid testnet orders."],
   "/monitor": ["Monitor", "Track portfolio metrics, thesis state, and run events."],
   "/settings": ["Settings", "Validate credentials and load fallback material."],
@@ -143,6 +145,23 @@ async function createProposal() {
   toast("Proposal created");
 }
 
+async function runAgentTeam() {
+  const payload = {
+    asset: $("#agents-asset").value,
+    profile_id: state.profile?.id,
+    research_id: state.research?.id,
+  };
+  state.team = await api("/api/agents/debate", { method: "POST", body: JSON.stringify(payload) });
+  $("#agents-output").textContent = pretty(state.team);
+  $("#consensus-pill").textContent = state.team.consensus.replaceAll("_", " ");
+  $("#agent-opinions").innerHTML = state.team.opinions
+    .map(
+      (opinion) => `<div><b>${opinion.display_name}</b><span>${opinion.stance}</span><small>${opinion.rationale}</small></div>`,
+    )
+    .join("");
+  toast("Agent team review completed");
+}
+
 async function executePlan() {
   if (!state.plan?.id) {
     throw new Error("Create a proposal before execution.");
@@ -154,6 +173,19 @@ async function executePlan() {
   $("#execution-output").textContent = pretty(result);
   renderState();
   toast("Testnet order submitted");
+}
+
+async function executePaperPlan() {
+  if (!state.plan?.id) {
+    throw new Error("Create a proposal before paper trading.");
+  }
+  const payload = { plan_id: state.plan.id, confirmed: $("#paper-confirm").checked };
+  const result = await api("/api/orders/paper", { method: "POST", body: JSON.stringify(payload) });
+  state.run = result.run;
+  state.order = result.order;
+  $("#execution-output").textContent = pretty(result);
+  renderState();
+  toast("Paper trade simulated");
 }
 
 async function updateMetrics() {
@@ -199,7 +231,9 @@ document.addEventListener("click", async (event) => {
     if (action === "refresh") await loadState();
     if (action === "research") await runResearch();
     if (action === "proposal") await createProposal();
+    if (action === "agents") await runAgentTeam();
     if (action === "execute") await executePlan();
+    if (action === "paper") await executePaperPlan();
     if (action === "metrics") await updateMetrics();
     if (action === "setup") await checkSetup();
     if (action === "replay") await loadReplay();

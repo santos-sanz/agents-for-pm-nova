@@ -10,6 +10,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 TESTNET_HTTP_HOSTS = {"api.hyperliquid-testnet.xyz"}
 TESTNET_WS_HOSTS = {"api.hyperliquid-testnet.xyz"}
+PAPER_MARKET_HTTP_HOSTS = {"api.exchange.coinbase.com"}
 
 
 class Settings(BaseSettings):
@@ -45,6 +46,10 @@ class Settings(BaseSettings):
     demo_trading_mode: Literal["testnet"] = Field(default="testnet", alias="DEMO_TRADING_MODE")
     demo_require_confirmation: bool = Field(default=True, alias="DEMO_REQUIRE_CONFIRMATION")
     demo_state_dir: Path = Field(default=Path(".demo_state"), alias="DEMO_STATE_DIR")
+    paper_market_base_url: str = Field(
+        default="https://api.exchange.coinbase.com",
+        alias="PAPER_MARKET_BASE_URL",
+    )
 
     @field_validator("hyperliquid_base_url")
     @classmethod
@@ -60,6 +65,16 @@ class Settings(BaseSettings):
         parsed = urlparse(value.rstrip("/"))
         if parsed.scheme != "wss" or parsed.hostname not in TESTNET_WS_HOSTS:
             raise ValueError("Only Hyperliquid testnet websocket URLs are allowed in this demo.")
+        return parsed.geturl().rstrip("/")
+
+    @field_validator("paper_market_base_url")
+    @classmethod
+    def require_open_paper_market_http(cls, value: str) -> str:
+        parsed = urlparse(value.rstrip("/"))
+        if parsed.scheme != "https" or parsed.hostname not in PAPER_MARKET_HTTP_HOSTS:
+            raise ValueError(
+                "Only Coinbase Exchange public market URLs are allowed for paper mode."
+            )
         return parsed.geturl().rstrip("/")
 
     @property

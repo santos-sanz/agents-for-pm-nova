@@ -190,6 +190,10 @@ nav a:hover {
   padding: 18px;
 }
 
+.panel + .panel {
+  margin-top: 16px;
+}
+
 .panel-head,
 .action-panel {
   display: flex;
@@ -300,17 +304,34 @@ select {
 }
 
 .metrics-list,
-.events-list {
+.events-list,
+.agent-opinions {
   display: grid;
   gap: 10px;
   margin-top: 16px;
 }
 
 .metrics-list div,
-.events-list div {
+.events-list div,
+.agent-opinions div {
   border-bottom: 1px solid var(--line);
   padding-bottom: 8px;
   color: var(--muted);
+}
+
+.agent-opinions b,
+.agent-opinions span,
+.agent-opinions small {
+  display: block;
+}
+
+.agent-opinions b {
+  color: var(--ink);
+}
+
+.agent-opinions span {
+  color: var(--teal);
+  margin: 3px 0;
 }
 
 .metrics-list b {

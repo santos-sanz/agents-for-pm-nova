@@ -12,6 +12,7 @@ from rich.table import Table
 
 from hyper_demo.adapters.anthropic_managed import ManagedAgentResearchClient
 from hyper_demo.adapters.hyperliquid import ExecutionBlocked, HyperliquidTestnetAdapter
+from hyper_demo.adapters.paper import PaperExecutionBlocked, PaperTradingAdapter
 from hyper_demo.api import setup_check
 from hyper_demo.config import get_settings
 from hyper_demo.models import (
@@ -21,6 +22,7 @@ from hyper_demo.models import (
     RiskProfileInput,
     RunEvent,
 )
+from hyper_demo.services.agent_team import INVESTOR_SKILLS, build_multi_agent_decision
 from hyper_demo.services.market import MarketDataClient
 from hyper_demo.services.metrics import compute_portfolio_metrics
 from hyper_demo.services.proposals import build_trade_plan
@@ -44,6 +46,7 @@ def setup_check_command() -> None:
     table.add_row("Hyperliquid configured", str(check.hyperliquid_configured))
     table.add_row("Hyperliquid HTTP", check.hyperliquid_base_url)
     table.add_row("Hyperliquid WS", check.hyperliquid_ws_url)
+    table.add_row("Paper market HTTP", check.paper_market_base_url)
     console.print(table)
     for warning in check.warnings:
         console.print(f"[yellow]warning:[/] {warning}")
@@ -116,6 +119,40 @@ def propose_command(
     console.print_json(plan.model_dump_json(indent=2))
 
 
+@app.command("skills")
+def skills_command() -> None:
+    table = Table(title="Investor Agent Skills")
+    table.add_column("Skill")
+    table.add_column("Inspired by")
+    table.add_column("Decision style")
+    for skill in INVESTOR_SKILLS:
+        table.add_row(skill.display_name, skill.inspired_by, skill.decision_style)
+    console.print(table)
+
+
+@app.command("debate")
+def debate_command(
+    asset: Annotated[str, typer.Option("--asset")] = "BTC",
+    profile_id: Annotated[str | None, typer.Option("--profile-id")] = None,
+    research_id: Annotated[str | None, typer.Option("--research-id")] = None,
+) -> None:
+    store = JsonStore(get_settings())
+    profile = store.get("profiles", profile_id) if profile_id else store.latest("profiles")
+    research = store.get("research", research_id) if research_id else store.latest("research")
+    plan = store.latest("plans")
+    if plan and plan.asset != asset.upper().replace("-PERP", ""):
+        plan = None
+    decision = build_multi_agent_decision(asset, profile, research, plan)
+    table = Table(title=f"Multi-Agent Decision: {decision.consensus}")
+    table.add_column("Agent")
+    table.add_column("Stance")
+    table.add_column("Rationale")
+    for opinion in decision.opinions:
+        table.add_row(opinion.display_name, opinion.stance, opinion.rationale)
+    console.print(table)
+    console.print_json(decision.model_dump_json(indent=2))
+
+
 @app.command("execute")
 def execute_command(
     plan: Annotated[str, typer.Option("--plan")],
@@ -142,6 +179,47 @@ def execute_command(
     store.append_event(
         RunEvent(run_id=run.id, message="CLI submitted Hyperliquid testnet order set.")
     )
+    console.print_json(
+        json.dumps(
+            {
+                "run": run.model_dump(mode="json"),
+                "order": order.model_dump(mode="json"),
+            }
+        )
+    )
+
+
+@app.command("paper")
+def paper_command(
+    plan: Annotated[str, typer.Option("--plan")],
+    confirm: Annotated[bool, typer.Option("--confirm")] = False,
+) -> None:
+    store = JsonStore(get_settings())
+    trade_plan = store.get("plans", plan)
+    if not trade_plan:
+        raise typer.BadParameter(f"Plan not found: {plan}")
+    try:
+        order = PaperTradingAdapter(get_settings()).execute_plan(trade_plan, confirm)
+    except PaperExecutionBlocked as exc:
+        console.print(f"[red]blocked:[/] {exc}")
+        raise typer.Exit(code=1) from exc
+    store.save("orders", order)
+    run = DemoRun(
+        profile_id=trade_plan.profile_id,
+        research_id=trade_plan.research_id,
+        plan_id=trade_plan.id,
+        order_id=order.id,
+        status="executed",
+    )
+    store.save("runs", run)
+    for trace in order.raw_response.get("debug_trace", []):
+        store.append_event(
+            RunEvent(
+                run_id=run.id,
+                message=f"CLI paper trading debug: {trace['step']}",
+                payload=trace,
+            )
+        )
     console.print_json(
         json.dumps(
             {
