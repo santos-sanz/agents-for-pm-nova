@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from hyper_demo.adapters.anthropic_managed import ManagedAgentResearchClient
-from hyper_demo.adapters.hyperliquid import ExecutionBlocked, HyperliquidTestnetAdapter
+from hyper_demo.adapters.hyperliquid import ExecutionBlocked, HyperliquidAdapter
 from hyper_demo.adapters.paper import PaperExecutionBlocked, PaperTradingAdapter
 from hyper_demo.config import Settings, get_settings
 from hyper_demo.models import (
@@ -49,6 +49,11 @@ class SetupCheck(BaseModel):
     hyperliquid_configured: bool
     hyperliquid_base_url: str
     hyperliquid_ws_url: str
+    hyperliquid_environment: str
+    hyperliquid_mainnet_enabled: bool
+    hyperliquid_max_order_usdc: float
+    hyperliquid_allowed_assets: list[str]
+    hyperliquid_account_address: str | None
     paper_market_base_url: str
     warnings: list[str]
 
@@ -63,7 +68,11 @@ def setup_check(settings: Settings | None = None) -> SetupCheck:
     if not settings.has_anthropic_credentials:
         warnings.append("ANTHROPIC_API_KEY is missing; research will use fallback output.")
     if not settings.has_hyperliquid_credentials:
-        warnings.append("Hyperliquid testnet credentials are missing; execution is blocked.")
+        warnings.append("Hyperliquid credentials are missing; exchange execution is blocked.")
+    if settings.is_mainnet_mode and not settings.hyperliquid_mainnet_enabled:
+        warnings.append("Mainnet mode selected, but HYPERLIQUID_MAINNET_ENABLED is false.")
+    if settings.is_mainnet_mode and not settings.demo_require_confirmation:
+        warnings.append("Mainnet mode should keep DEMO_REQUIRE_CONFIRMATION=true.")
     if settings.demo_require_confirmation:
         warnings.append("Order confirmation is enabled, as required for the demo.")
     return SetupCheck(
@@ -73,6 +82,11 @@ def setup_check(settings: Settings | None = None) -> SetupCheck:
         hyperliquid_configured=settings.has_hyperliquid_credentials,
         hyperliquid_base_url=settings.hyperliquid_base_url,
         hyperliquid_ws_url=settings.hyperliquid_ws_url,
+        hyperliquid_environment=settings.hyperliquid_environment,
+        hyperliquid_mainnet_enabled=settings.hyperliquid_mainnet_enabled,
+        hyperliquid_max_order_usdc=settings.hyperliquid_max_order_usdc,
+        hyperliquid_allowed_assets=sorted(settings.allowed_assets_set),
+        hyperliquid_account_address=_mask_address(settings.hyperliquid_account_address),
         paper_market_base_url=settings.paper_market_base_url,
         warnings=warnings,
     )
@@ -151,7 +165,11 @@ def submit_testnet_order(request: OrderRequest):
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found.")
     try:
-        order = HyperliquidTestnetAdapter(get_settings()).execute_plan(plan, request.confirmed)
+        order = HyperliquidAdapter(get_settings()).execute_plan(
+            plan,
+            request.confirmed,
+            request.confirmation_phrase,
+        )
     except ExecutionBlocked as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     store.save("orders", order)
@@ -166,11 +184,19 @@ def submit_testnet_order(request: OrderRequest):
     store.append_event(
         RunEvent(
             run_id=run.id,
-            message="Submitted Hyperliquid testnet order set.",
+            message=f"Submitted {order.exchange} order set.",
             payload={"order_id": order.id, "plan_id": plan.id},
         )
     )
     return {"run": run, "order": order}
+
+
+@app.get("/api/wallet")
+def get_wallet_state():
+    try:
+        return HyperliquidAdapter(get_settings()).wallet_state()
+    except ExecutionBlocked as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/api/orders/paper")
@@ -329,3 +355,11 @@ def replay_fixture(fixture_name: str):
 @app.get("/settings", response_class=HTMLResponse)
 def spa() -> HTMLResponse:
     return HTMLResponse((STATIC_ROOT / "index.html").read_text(encoding="utf-8"))
+
+
+def _mask_address(address: str | None) -> str | None:
+    if not address:
+        return None
+    if len(address) <= 12:
+        return address
+    return f"{address[:6]}...{address[-4:]}"

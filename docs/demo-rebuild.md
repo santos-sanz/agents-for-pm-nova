@@ -1,6 +1,6 @@
 # Rebuild Guide: Hyperliquid Testnet Investment Agent Demo
 
-This guide recreates the demo from a clean clone. The demo is English-only, educational, and testnet-only.
+This guide recreates the demo from a clean clone. The demo is English-only and defaults to testnet.
 
 ## 1. Install
 
@@ -19,11 +19,15 @@ HYPERLIQUID_BASE_URL=https://api.hyperliquid-testnet.xyz
 HYPERLIQUID_WS_URL=wss://api.hyperliquid-testnet.xyz/ws
 HYPERLIQUID_ACCOUNT_ADDRESS=...
 HYPERLIQUID_API_WALLET_PRIVATE_KEY=...
+HYPERLIQUID_MAX_ORDER_USDC=100
+HYPERLIQUID_ALLOWED_ASSETS=BTC,ETH,SOL
+HYPERLIQUID_MAINNET_ENABLED=false
 DEMO_TRADING_MODE=testnet
 DEMO_REQUIRE_CONFIRMATION=true
 ```
 
-Do not use a mainnet wallet. `.env` and `.env.*` are already ignored by Git.
+For mainnet, use only a Hyperliquid API/agent wallet private key, never the main wallet
+private key. `.env` and `.env.*` are already ignored by Git.
 
 ## 2. Check Setup
 
@@ -78,8 +82,29 @@ Suggested live flow:
 4. Run Agent Team to review search cards, quant signals, and investor-style skills.
 5. Review the stop-loss, take-profit, max loss, consensus, and invalidation criteria.
 6. Confirm and run paper trading first.
-7. Submit to Hyperliquid testnet only if credentials are configured and the presenter opts in.
+7. Submit to Hyperliquid only if credentials are configured and the presenter opts in.
 8. Monitor metrics and events.
+
+## 5. Optional Mainnet Guarded Mode
+
+Use this only for a controlled live-wallet demo. `HYPERLIQUID_ACCOUNT_ADDRESS` is the main
+Dreamcash/Hyperliquid wallet address used for read-only account state. The private key must
+belong to a Hyperliquid API/agent wallet authorized for that account.
+
+```bash
+DEMO_TRADING_MODE=mainnet_guarded
+HYPERLIQUID_MAINNET_ENABLED=true
+HYPERLIQUID_BASE_URL=https://api.hyperliquid.xyz
+HYPERLIQUID_WS_URL=wss://api.hyperliquid.xyz/ws
+HYPERLIQUID_ACCOUNT_ADDRESS=0x_your_main_wallet
+HYPERLIQUID_API_WALLET_PRIVATE_KEY=0x_your_api_wallet_private_key
+HYPERLIQUID_MAX_ORDER_USDC=100
+HYPERLIQUID_ALLOWED_ASSETS=BTC,ETH,SOL
+DEMO_REQUIRE_CONFIRMATION=true
+```
+
+The browser and CLI both require explicit confirmation. Mainnet also requires the exact phrase
+`CONFIRM MAINNET ORDER`.
 
 Optional websocket smoke test:
 
@@ -87,15 +112,18 @@ Optional websocket smoke test:
 curl http://127.0.0.1:8000/api/market/BTC/ws-sample
 ```
 
-## 5. Safety Boundaries
+## 6. Safety Boundaries
 
-- Mainnet Hyperliquid URLs are rejected by config validation.
+- Mainnet Hyperliquid URLs are rejected unless `mainnet_guarded` and
+  `HYPERLIQUID_MAINNET_ENABLED=true` are both set.
 - The execution endpoint refuses orders without explicit confirmation.
+- Mainnet orders require `CONFIRM MAINNET ORDER`.
 - Missing Hyperliquid credentials block execution instead of silently trading.
+- Orders above `HYPERLIQUID_MAX_ORDER_USDC` or outside `HYPERLIQUID_ALLOWED_ASSETS` are blocked.
 - Fallback replay never sends exchange requests.
 - All outputs are educational analysis, not financial advice.
 
-## 6. Validation
+## 7. Validation
 
 ```bash
 uv run pytest
