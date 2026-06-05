@@ -10,15 +10,32 @@ const state = {
 };
 
 const titles = {
-  "/": ["Dashboard", "Agent loop, guardrails, and exchange trading state."],
-  "/profile": ["Risk Profile", "Create the structured investor profile used by the agent."],
-  "/research": ["Research", "Use Claude Managed Agents or the fallback transcript."],
-  "/proposal": ["Proposal", "Generate a bounded guarded trade plan."],
-  "/agents": ["Agent Team", "Run search, quant signals, and investor-style review skills."],
-  "/execution": ["Execution", "Submit confirmed guarded Hyperliquid orders."],
+  "/": ["Agent console", "Agent loop, guardrails, and exchange trading state."],
+  "/profile": ["Risk profile", "Define the investor envelope that constrains every downstream agent."],
+  "/research": ["Research station", "Launch the research agent or use the fallback transcript when credentials are missing."],
+  "/proposal": ["Proposal station", "Generate a bounded guarded trade plan."],
+  "/agents": ["Agent review", "Run search, quant signals, and investor-style review skills."],
+  "/execution": ["Execution station", "Submit confirmed guarded Hyperliquid orders."],
   "/monitor": ["Monitor", "Track portfolio metrics, thesis state, and run events."],
-  "/settings": ["Settings", "Validate credentials and load fallback material."],
+  "/settings": ["System settings", "Validate credentials and load fallback material."],
 };
+
+const workflowSteps = [
+  ["profile", "Risk profile", "Investor constraints locked before any autonomous action.", "profile"],
+  ["research", "Research", "Market narrative, catalysts, and fallback intelligence gathered.", "research"],
+  ["plan", "Proposal", "Entry, invalidation, stop, take-profit, and sizing assembled.", "plan"],
+  ["team", "Agent review", "Specialist agents debate the plan before execution.", "team"],
+  ["order", "Execution", "Guarded Hyperliquid or paper order submitted only after explicit confirmation.", "order"],
+  ["monitor", "Monitor", "Metrics and run events keep the thesis observable.", "run"],
+];
+
+const fallbackAgents = [
+  ["Research Agent", "awaiting brief", "Collects market context and narrative risk.", "INTEL"],
+  ["Quant Agent", "awaiting signal", "Checks alpha, beta, VaR, and exposure.", "SIGNAL"],
+  ["Risk Agent", "guardrail active", "Enforces drawdown, leverage, and stop limits.", "SAFETY"],
+  ["Portfolio Agent", "standing by", "Translates plan into allocation posture.", "ALLOC"],
+  ["Execution Agent", "locked", "Requires explicit confirmation before order submission.", "ORDER"],
+];
 
 function $(selector) {
   return document.querySelector(selector);
@@ -68,15 +85,94 @@ async function loadState() {
 }
 
 function renderState() {
-  $("#profile-id").textContent = state.profile?.id || "Not created";
-  $("#research-id").textContent = state.research?.id || "Not created";
-  $("#plan-id").textContent = state.plan?.id || "Not created";
-  $("#order-id").textContent = state.order?.id || "Not submitted";
+  const profileId = $("#profile-id");
+  const researchId = $("#research-id");
+  const planId = $("#plan-id");
+  const orderId = $("#order-id");
+  if (profileId) profileId.textContent = state.profile?.id || "Not created";
+  if (researchId) researchId.textContent = state.research?.id || "Not created";
+  if (planId) planId.textContent = state.plan?.id || "Not created";
+  if (orderId) orderId.textContent = state.order?.id || "Not submitted";
   $("#anthropic-status").textContent = `Claude: ${state.setup?.anthropic_configured ? "ready" : "fallback"}`;
   $("#hyperliquid-status").textContent = `Hyperliquid: ${state.setup?.hyperliquid_configured ? "ready" : "missing"}`;
   $("#mode-status").textContent = `Mode: ${state.setup?.trading_mode || "testnet"}`;
-  $("#market-mode-pill").textContent =
-    state.setup?.hyperliquid_environment === "mainnet" ? "MAINNET GUARDED" : "testnet";
+  const marketModePill = $("#market-mode-pill");
+  if (marketModePill) {
+    marketModePill.textContent = state.setup?.hyperliquid_environment === "mainnet" ? "MAINNET GUARDED" : "testnet";
+  }
+  renderWorkflowTimeline();
+  renderReadiness();
+  renderAgentRoster();
+}
+
+function statusFor(key) {
+  if (key === "team" && state.team) return "complete";
+  if (key === "monitor" && state.run) return "running";
+  return state[key] ? "complete" : "pending";
+}
+
+function renderWorkflowTimeline() {
+  const el = $("#mission-timeline");
+  if (!el) return;
+  el.innerHTML = workflowSteps
+    .map(([key, title, description, stateKey], index) => {
+      const status = statusFor(stateKey);
+      const value = state[stateKey]?.id || (stateKey === "team" && state.team?.consensus) || "not started";
+      return `
+        <div class="mission-step ${status}">
+          <b class="step-index">${String(index + 1).padStart(2, "0")}</b>
+          <div>
+            <h3>${title}</h3>
+            <p>${description}</p>
+            <small>${value}</small>
+          </div>
+          <span class="state-chip">${status}</span>
+        </div>
+      `;
+    })
+    .join("");
+}
+
+function renderReadiness() {
+  const el = $("#readiness-list");
+  if (!el) return;
+  const rows = [
+    ["Claude managed agent", state.setup?.anthropic_configured ? "ready" : "fallback mode"],
+    ["Hyperliquid exchange", state.setup?.hyperliquid_configured ? "ready" : "credentials missing"],
+    ["Environment", state.setup?.hyperliquid_environment || "testnet"],
+    ["Trading mode", state.setup?.trading_mode || "testnet"],
+    ["Execution guardrail", "explicit confirmation required"],
+  ];
+  el.innerHTML = rows
+    .map(([label, value]) => `<div><b>${label}</b><small>${value}</small></div>`)
+    .join("");
+}
+
+function renderAgentRoster() {
+  const el = $("#agent-roster");
+  if (!el) return;
+  const opinions = state.team?.opinions?.length
+    ? state.team.opinions.map((opinion) => [
+        opinion.display_name,
+        opinion.stance,
+        opinion.rationale,
+        "LIVE",
+      ])
+    : fallbackAgents;
+  el.innerHTML = opinions
+    .map(
+      ([name, stance, detail, code]) => `
+        <div class="agent-card">
+          <em>${code}</em>
+          <div>
+            <b>${name}</b>
+            <small>${detail}</small>
+          </div>
+          <span>${String(stance).replaceAll("_", " ")}</span>
+        </div>
+      `,
+    )
+    .join("");
 }
 
 function drawMarketChart() {
@@ -86,9 +182,9 @@ function drawMarketChart() {
   const width = canvas.width;
   const height = canvas.height;
   ctx.clearRect(0, 0, width, height);
-  ctx.fillStyle = "#f8fbff";
+  ctx.fillStyle = "#000";
   ctx.fillRect(0, 0, width, height);
-  ctx.strokeStyle = "#d9e0ea";
+  ctx.strokeStyle = "#34343a";
   ctx.lineWidth = 1;
   for (let y = 40; y < height; y += 44) {
     ctx.beginPath();
@@ -97,8 +193,8 @@ function drawMarketChart() {
     ctx.stroke();
   }
   const points = [128, 118, 122, 101, 96, 83, 90, 76, 70, 64, 58, 53];
-  ctx.strokeStyle = "#0f766e";
-  ctx.lineWidth = 4;
+  ctx.strokeStyle = "#fff";
+  ctx.lineWidth = 3;
   ctx.beginPath();
   points.forEach((point, index) => {
     const x = 34 + index * ((width - 68) / (points.length - 1));
@@ -107,12 +203,12 @@ function drawMarketChart() {
     else ctx.lineTo(x, y);
   });
   ctx.stroke();
-  ctx.fillStyle = "#162033";
-  ctx.font = "18px Inter, sans-serif";
-  ctx.fillText(state.plan ? `${state.plan.asset} proposal` : "Demo market pulse", 26, 34);
-  ctx.fillStyle = "#667085";
-  ctx.font = "14px Inter, sans-serif";
-  ctx.fillText("Visual signal for the live demo; execution data comes from the API.", 26, height - 24);
+  ctx.fillStyle = "#fff";
+  ctx.font = "700 18px Arial Narrow, Arial, sans-serif";
+  ctx.fillText((state.plan ? `${state.plan.asset} proposal` : "Demo market pulse").toUpperCase(), 26, 34);
+  ctx.fillStyle = "#b7b7bd";
+  ctx.font = "14px Arial Narrow, Arial, sans-serif";
+  ctx.fillText("Signal display only. Execution data comes from the API.".toUpperCase(), 26, height - 24);
 }
 
 async function createProfile(event) {
