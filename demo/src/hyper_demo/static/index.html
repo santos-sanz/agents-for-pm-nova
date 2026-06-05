@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Hyperliquid Testnet Agent Demo</title>
+    <title>Hyperliquid Guarded Agent Demo</title>
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
@@ -12,7 +12,7 @@
         <span class="brand-mark">HL</span>
         <div>
           <strong>Investment Agent</strong>
-          <small>Hyperliquid testnet</small>
+          <small>Hyperliquid guarded</small>
         </div>
       </div>
       <nav aria-label="Demo navigation">
@@ -31,7 +31,7 @@
       <header class="topbar">
         <div>
           <h1 id="route-title">Dashboard</h1>
-          <p id="route-subtitle">Agent loop, guardrails, and testnet trading state.</p>
+          <p id="route-subtitle">Agent loop, guardrails, and exchange trading state.</p>
         </div>
         <div class="status-strip">
           <span id="anthropic-status">Claude: checking</span>
@@ -57,7 +57,7 @@
           <section class="panel market-panel">
             <div class="panel-head">
               <h2>Market Pulse</h2>
-              <span class="pill">testnet</span>
+              <span id="market-mode-pill" class="pill">testnet</span>
             </div>
             <canvas id="market-chart" width="640" height="260" aria-label="Market pulse chart"></canvas>
           </section>
@@ -68,6 +68,14 @@
           <section class="metric"><span>Beta</span><strong id="metric-beta">-</strong></section>
           <section class="metric"><span>VaR 95</span><strong id="metric-var">-</strong></section>
         </div>
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Wallet</h2>
+            <button data-action="wallet">Refresh Wallet</button>
+          </div>
+          <div id="wallet-summary" class="metrics-list"></div>
+          <pre id="wallet-output" class="output compact"></pre>
+        </section>
       </section>
 
       <section id="profile" class="view">
@@ -106,7 +114,7 @@
         <section class="panel action-panel">
           <div>
             <h2>Trade Proposal</h2>
-            <p>Creates a bounded testnet-only plan with entry, stop-loss, take-profit, and invalidation criteria.</p>
+            <p>Creates a bounded plan with entry, stop-loss, take-profit, and invalidation criteria.</p>
           </div>
           <label>Asset<input id="proposal-asset" value="BTC" /></label>
           <button class="primary" data-action="proposal">Create Proposal</button>
@@ -146,11 +154,12 @@
         </section>
         <section class="panel action-panel danger-zone">
           <div>
-            <h2>Testnet Execution</h2>
-            <p>Requires explicit confirmation and configured Hyperliquid testnet credentials.</p>
+            <h2>Hyperliquid Execution</h2>
+            <p>Requires explicit confirmation, configured API wallet credentials, and mainnet phrase when guarded mode is active.</p>
           </div>
-          <label class="check-row"><input id="execute-confirm" type="checkbox" /> Confirm testnet order submission</label>
-          <button class="danger" data-action="execute">Submit Testnet Order</button>
+          <label class="check-row"><input id="execute-confirm" type="checkbox" /> Confirm Hyperliquid order submission</label>
+          <label>Mainnet phrase<input id="mainnet-phrase" placeholder="CONFIRM MAINNET ORDER" /></label>
+          <button class="danger" data-action="execute">Submit Hyperliquid Order</button>
         </section>
         <pre id="execution-output" class="output"></pre>
       </section>

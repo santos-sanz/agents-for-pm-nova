@@ -130,13 +130,16 @@ class TradePlan(BaseModel):
 class OrderRequest(BaseModel):
     plan_id: str
     confirmed: bool = False
+    confirmation_phrase: str | None = None
 
 
 class OrderRecord(BaseModel):
     id: str = Field(default_factory=lambda: new_id("order"))
     created_at: datetime = Field(default_factory=utc_now)
     plan_id: str
-    exchange: Literal["hyperliquid-testnet", "paper-coinbase"] = "hyperliquid-testnet"
+    exchange: Literal["hyperliquid-testnet", "hyperliquid-mainnet", "paper-coinbase"] = (
+        "hyperliquid-testnet"
+    )
     asset: str
     side: TradeSide
     size_usdc: float

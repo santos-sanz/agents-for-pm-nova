@@ -209,7 +209,7 @@ def build_multi_agent_decision(
         next_actions=_next_actions(consensus, plan),
         safety_notes=[
             "Educational demo only; do not present output as personal financial advice.",
-            "Keep Hyperliquid execution on testnet and prefer paper mode for live demos.",
+            "Prefer paper/testnet for live demos; guarded mainnet needs explicit confirmation.",
             "Human confirmation is required before any simulated or testnet order is sent.",
         ],
     )

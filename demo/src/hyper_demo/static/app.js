@@ -6,15 +6,16 @@ const state = {
   run: null,
   setup: null,
   team: null,
+  wallet: null,
 };
 
 const titles = {
-  "/": ["Dashboard", "Agent loop, guardrails, and testnet trading state."],
+  "/": ["Dashboard", "Agent loop, guardrails, and exchange trading state."],
   "/profile": ["Risk Profile", "Create the structured investor profile used by the agent."],
   "/research": ["Research", "Use Claude Managed Agents or the fallback transcript."],
-  "/proposal": ["Proposal", "Generate a bounded testnet-only trade plan."],
+  "/proposal": ["Proposal", "Generate a bounded guarded trade plan."],
   "/agents": ["Agent Team", "Run search, quant signals, and investor-style review skills."],
-  "/execution": ["Execution", "Submit confirmed Hyperliquid testnet orders."],
+  "/execution": ["Execution", "Submit confirmed guarded Hyperliquid orders."],
   "/monitor": ["Monitor", "Track portfolio metrics, thesis state, and run events."],
   "/settings": ["Settings", "Validate credentials and load fallback material."],
 };
@@ -74,6 +75,8 @@ function renderState() {
   $("#anthropic-status").textContent = `Claude: ${state.setup?.anthropic_configured ? "ready" : "fallback"}`;
   $("#hyperliquid-status").textContent = `Hyperliquid: ${state.setup?.hyperliquid_configured ? "ready" : "missing"}`;
   $("#mode-status").textContent = `Mode: ${state.setup?.trading_mode || "testnet"}`;
+  $("#market-mode-pill").textContent =
+    state.setup?.hyperliquid_environment === "mainnet" ? "MAINNET GUARDED" : "testnet";
 }
 
 function drawMarketChart() {
@@ -166,13 +169,17 @@ async function executePlan() {
   if (!state.plan?.id) {
     throw new Error("Create a proposal before execution.");
   }
-  const payload = { plan_id: state.plan.id, confirmed: $("#execute-confirm").checked };
+  const payload = {
+    plan_id: state.plan.id,
+    confirmed: $("#execute-confirm").checked,
+    confirmation_phrase: $("#mainnet-phrase").value || null,
+  };
   const result = await api("/api/orders/testnet", { method: "POST", body: JSON.stringify(payload) });
   state.run = result.run;
   state.order = result.order;
   $("#execution-output").textContent = pretty(result);
   renderState();
-  toast("Testnet order submitted");
+  toast(`${result.order.exchange} order submitted`);
 }
 
 async function executePaperPlan() {
@@ -210,6 +217,21 @@ async function checkSetup() {
   toast("Setup checked");
 }
 
+async function loadWallet() {
+  state.wallet = await api("/api/wallet");
+  $("#wallet-output").textContent = pretty(state.wallet);
+  $("#wallet-summary").innerHTML = [
+    ["Account", state.setup?.hyperliquid_account_address || state.wallet.account_address],
+    ["Collateral", `${state.wallet.collateral_usdc} USDC`],
+    ["Margin used", `${state.wallet.total_margin_used_usdc} USDC`],
+    ["Exposure", `${state.wallet.exposure_usdc} USDC`],
+    ["Positions", state.wallet.open_positions.length],
+  ]
+    .map(([label, value]) => `<div>${label} <b>${value}</b></div>`)
+    .join("");
+  toast("Wallet state loaded");
+}
+
 async function loadReplay() {
   const result = await api("/api/replay/fallback", { method: "POST" });
   $("#settings-output").textContent = pretty(result);
@@ -236,6 +258,7 @@ document.addEventListener("click", async (event) => {
     if (action === "paper") await executePaperPlan();
     if (action === "metrics") await updateMetrics();
     if (action === "setup") await checkSetup();
+    if (action === "wallet") await loadWallet();
     if (action === "replay") await loadReplay();
   } catch (error) {
     toast(error.message);

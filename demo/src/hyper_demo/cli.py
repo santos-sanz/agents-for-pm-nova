@@ -11,7 +11,11 @@ from rich.panel import Panel
 from rich.table import Table
 
 from hyper_demo.adapters.anthropic_managed import ManagedAgentResearchClient
-from hyper_demo.adapters.hyperliquid import ExecutionBlocked, HyperliquidTestnetAdapter
+from hyper_demo.adapters.hyperliquid import (
+    MAINNET_CONFIRMATION_PHRASE,
+    ExecutionBlocked,
+    HyperliquidAdapter,
+)
 from hyper_demo.adapters.paper import PaperExecutionBlocked, PaperTradingAdapter
 from hyper_demo.api import setup_check
 from hyper_demo.config import get_settings
@@ -29,7 +33,7 @@ from hyper_demo.services.proposals import build_trade_plan
 from hyper_demo.services.risk import build_investor_profile
 from hyper_demo.storage import JsonStore
 
-app = typer.Typer(help="Hyperliquid testnet investment agent demo CLI.")
+app = typer.Typer(help="Hyperliquid guarded investment agent demo CLI.")
 console = Console()
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -46,6 +50,11 @@ def setup_check_command() -> None:
     table.add_row("Hyperliquid configured", str(check.hyperliquid_configured))
     table.add_row("Hyperliquid HTTP", check.hyperliquid_base_url)
     table.add_row("Hyperliquid WS", check.hyperliquid_ws_url)
+    table.add_row("Hyperliquid environment", check.hyperliquid_environment)
+    table.add_row("Mainnet enabled", str(check.hyperliquid_mainnet_enabled))
+    table.add_row("Max order USDC", str(check.hyperliquid_max_order_usdc))
+    table.add_row("Allowed assets", ", ".join(check.hyperliquid_allowed_assets))
+    table.add_row("Account address", check.hyperliquid_account_address or "missing")
     table.add_row("Paper market HTTP", check.paper_market_base_url)
     console.print(table)
     for warning in check.warnings:
@@ -157,13 +166,24 @@ def debate_command(
 def execute_command(
     plan: Annotated[str, typer.Option("--plan")],
     confirm: Annotated[bool, typer.Option("--confirm")] = False,
+    confirmation_phrase: Annotated[
+        str | None,
+        typer.Option(
+            "--confirmation-phrase",
+            help=f'Required in mainnet_guarded mode: "{MAINNET_CONFIRMATION_PHRASE}".',
+        ),
+    ] = None,
 ) -> None:
     store = JsonStore(get_settings())
     trade_plan = store.get("plans", plan)
     if not trade_plan:
         raise typer.BadParameter(f"Plan not found: {plan}")
     try:
-        order = HyperliquidTestnetAdapter(get_settings()).execute_plan(trade_plan, confirm)
+        order = HyperliquidAdapter(get_settings()).execute_plan(
+            trade_plan,
+            confirm,
+            confirmation_phrase,
+        )
     except ExecutionBlocked as exc:
         console.print(f"[red]blocked:[/] {exc}")
         raise typer.Exit(code=1) from exc
@@ -177,7 +197,7 @@ def execute_command(
     )
     store.save("runs", run)
     store.append_event(
-        RunEvent(run_id=run.id, message="CLI submitted Hyperliquid testnet order set.")
+        RunEvent(run_id=run.id, message=f"CLI submitted {order.exchange} order set.")
     )
     console.print_json(
         json.dumps(
@@ -187,6 +207,16 @@ def execute_command(
             }
         )
     )
+
+
+@app.command("wallet")
+def wallet_command() -> None:
+    try:
+        wallet = HyperliquidAdapter(get_settings()).wallet_state()
+    except ExecutionBlocked as exc:
+        console.print(f"[red]blocked:[/] {exc}")
+        raise typer.Exit(code=1) from exc
+    console.print_json(json.dumps(wallet))
 
 
 @app.command("paper")

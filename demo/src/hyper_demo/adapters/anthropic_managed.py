@@ -161,7 +161,10 @@ Do not recommend mainnet trading. Do not provide personal financial advice.
             ],
             assumptions=[
                 "The presenter wants an educational, English-language demo.",
-                "Execution remains on Hyperliquid testnet only.",
+                (
+                    "Execution remains paper/testnet by default; guarded mainnet requires "
+                    "human approval."
+                ),
                 reason or "Managed Agents fallback path selected.",
             ],
             why_not_invest=[
