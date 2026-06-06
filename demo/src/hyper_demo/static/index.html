@@ -3,232 +3,145 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Hyperliquid Investment Agent Console</title>
-    <link rel="stylesheet" href="/static/styles.css?v=agent-console-20260606" />
+    <title>Hyperliquid Claude Trading Agent</title>
+    <link rel="stylesheet" href="/static/styles.css?v=trading-cockpit-20260606" />
   </head>
   <body>
-    <header class="mission-nav">
-      <a class="brand" href="/" data-route="/">
+    <header class="topbar">
+      <a class="brand" href="/">
         <span class="brand-mark">HL</span>
         <span>
-          <strong>Investment Agent Console</strong>
-          <small>Hyperliquid guarded</small>
+          <strong>Claude Trading Agent</strong>
+          <small>Hyperliquid only</small>
         </span>
       </a>
-      <nav aria-label="Console navigation">
-        <a href="/" data-route="/">Dashboard</a>
-        <a href="/profile" data-route="/profile">Profile</a>
-        <a href="/research" data-route="/research">Research</a>
-        <a href="/proposal" data-route="/proposal">Proposal</a>
-        <a href="/agents" data-route="/agents">Agents</a>
-        <a href="/execution" data-route="/execution">Execute</a>
-        <a href="/monitor" data-route="/monitor">Monitor</a>
-        <a href="/settings" data-route="/settings">Settings</a>
-      </nav>
+      <div class="status-strip">
+        <span id="claude-status">Claude: checking</span>
+        <span id="hyperliquid-status">Hyperliquid: checking</span>
+        <span id="network-status">testnet</span>
+      </div>
     </header>
 
-    <main class="shell">
-      <section class="hero-band">
-        <div class="hero-copy">
-          <span class="eyebrow">Autonomous investment workflow / supervised execution</span>
-          <h1 id="route-title">Dashboard</h1>
-          <p id="route-subtitle">Agent loop, guardrails, and exchange trading state.</p>
-          <div class="hero-actions">
-            <a href="/agents" data-route="/agents" class="ghost-link">Run agent review</a>
-            <a href="/execution" data-route="/execution" class="ghost-link secondary-link">Execution gate</a>
-          </div>
-        </div>
-        <div class="hero-console">
-          <span class="eyebrow">System status</span>
-          <div class="status-strip" aria-label="System status">
-            <span id="anthropic-status">Claude: checking</span>
-            <span id="hyperliquid-status">Hyperliquid: checking</span>
-            <span id="mode-status">Mode: testnet</span>
-          </div>
-          <div class="safety-readout">
-            <b>Guarded execution</b>
-            <small>Human-confirmed orders. Mainnet requires the configured confirmation phrase.</small>
-          </div>
-        </div>
-      </section>
-
-      <section id="dashboard" class="view">
-        <div class="mission-grid">
-          <section class="mission-primary">
-            <div class="section-head">
-              <div>
-                <span class="eyebrow">Live sequence</span>
-                <h2>Agent workflow</h2>
-              </div>
-              <button data-action="refresh">Refresh status</button>
-            </div>
-            <div id="mission-timeline" class="mission-timeline"></div>
-          </section>
-
-          <aside class="mission-side">
-            <div class="readiness-panel">
-              <span class="eyebrow">Readiness</span>
-              <div id="readiness-list" class="readiness-list"></div>
-            </div>
-            <div class="market-panel">
-              <div class="panel-head">
-                <h2>Market pulse</h2>
-                <span id="market-mode-pill" class="pill">testnet</span>
-              </div>
-              <canvas id="market-chart" width="640" height="260" aria-label="Market pulse chart"></canvas>
-            </div>
-          </aside>
-        </div>
-
-        <section class="agent-band">
-          <div class="section-head">
-            <div>
-              <span class="eyebrow">Agent loop</span>
-              <h2>Agent team state</h2>
-            </div>
-            <a href="/agents" data-route="/agents" class="ghost-link">Open review</a>
-          </div>
-          <div id="agent-roster" class="agent-roster"></div>
-        </section>
-
-        <div class="grid three">
-          <section class="metric"><span>Alpha</span><strong id="metric-alpha">-</strong></section>
-          <section class="metric"><span>Beta</span><strong id="metric-beta">-</strong></section>
-          <section class="metric"><span>VaR 95</span><strong id="metric-var">-</strong></section>
-        </div>
+    <main class="cockpit">
+      <aside class="rail">
         <section class="panel">
-          <div class="panel-head">
-            <h2>Wallet</h2>
-            <button data-action="wallet">Refresh Wallet</button>
+          <span class="eyebrow">Runtime</span>
+          <div class="segmented" role="group" aria-label="Network">
+            <button id="testnet-button" data-network="testnet">Testnet</button>
+            <button id="prodnet-button" data-network="prodnet">Prodnet</button>
           </div>
-          <div id="wallet-summary" class="metrics-list"></div>
-          <pre id="wallet-output" class="output compact"></pre>
-        </section>
-      </section>
-
-      <section id="profile" class="view">
-        <form id="profile-form" class="panel form-grid">
-          <label>Horizon days<input name="horizon_days" type="number" min="1" max="365" value="30" /></label>
-          <label>Max drawdown %<input name="max_drawdown_pct" type="number" min="1" max="80" value="8" /></label>
-          <label>Leverage tolerance
-            <select name="leverage_tolerance">
-              <option value="none">None</option>
-              <option value="low" selected>Low</option>
-              <option value="moderate">Moderate</option>
-              <option value="high">High</option>
+          <label class="field">
+            View mode
+            <select id="ui-mode">
+              <option value="human">Human</option>
+              <option value="robot">Robot logs</option>
             </select>
           </label>
-          <label>Asset preference<input name="asset_preference" value="BTC" /></label>
-          <label>Capital at risk USDC<input name="capital_at_risk_usdc" type="number" min="10" value="100" /></label>
-          <label>Stop loss %<input name="stop_loss_pct" type="number" min="0.5" value="4" step="0.1" /></label>
-          <button class="primary" type="submit">Create risk profile</button>
-        </form>
-        <pre id="profile-output" class="output"></pre>
-      </section>
-
-      <section id="research" class="view">
-        <section class="panel action-panel">
-          <div>
-            <span class="eyebrow">Research agent</span>
-            <h2>Research</h2>
-            <p>Runs the Claude Managed Agent research step or the local fallback if credentials are missing.</p>
-          </div>
-          <label>Asset<input id="research-asset" value="BTC" /></label>
-          <button class="primary" data-action="research">Run research</button>
+          <label class="field">
+            Max order USDC
+            <input id="max-order" type="number" min="1" value="100" />
+          </label>
+          <label class="field">
+            Allowed assets
+            <input id="allowed-assets" value="BTC,ETH,SOL,HYPE" />
+          </label>
+          <button class="primary" data-action="save-settings">Save runtime</button>
         </section>
-        <pre id="research-output" class="output"></pre>
-      </section>
 
-      <section id="proposal" class="view">
-        <section class="panel action-panel">
-          <div>
-            <span class="eyebrow">Strategy agent</span>
-            <h2>Trade proposal</h2>
-            <p>Creates a bounded plan with entry, stop-loss, take-profit, and invalidation criteria.</p>
-          </div>
-          <label>Asset<input id="proposal-asset" value="BTC" /></label>
-          <button class="primary" data-action="proposal">Create proposal</button>
-        </section>
-        <pre id="proposal-output" class="output"></pre>
-      </section>
-
-      <section id="agents" class="view">
-        <section class="panel action-panel">
-          <div>
-            <span class="eyebrow">Multi-agent debate</span>
-            <h2>Agent team review</h2>
-            <p>Combines search cards, quant signals, and investor-style skills before execution.</p>
-          </div>
-          <label>Asset<input id="agents-asset" value="BTC" /></label>
-          <button class="primary" data-action="agents">Run agent team</button>
-        </section>
-        <div class="grid two agent-grid">
-          <section class="panel">
-            <div class="panel-head">
-              <h2>Consensus</h2>
-              <span id="consensus-pill" class="pill">not run</span>
-            </div>
-            <div id="agent-opinions" class="agent-opinions"></div>
-          </section>
-          <pre id="agents-output" class="output compact"></pre>
-        </div>
-      </section>
-
-      <section id="execution" class="view">
-        <section class="panel action-panel">
-          <div>
-            <span class="eyebrow">Simulation lane</span>
-            <h2>Paper trading</h2>
-            <p>Simulates execution with public Coinbase Exchange ticker data and stores detailed debug traces.</p>
-          </div>
-          <label class="check-row"><input id="paper-confirm" type="checkbox" /> Confirm paper trading run</label>
-          <button class="primary" data-action="paper">Run paper trade</button>
-        </section>
-        <section class="panel action-panel danger-zone">
-          <div>
-            <span class="eyebrow">Guarded execution lane</span>
-            <h2>Hyperliquid Execution</h2>
-            <p>Requires explicit confirmation, configured API wallet credentials, and mainnet phrase when guarded mode is active.</p>
-          </div>
-          <label class="check-row"><input id="execute-confirm" type="checkbox" /> Confirm Hyperliquid order submission</label>
-          <label>Mainnet phrase<input id="mainnet-phrase" placeholder="CONFIRM MAINNET ORDER" /></label>
-          <button class="danger" data-action="execute">Submit Hyperliquid Order</button>
-        </section>
-        <pre id="execution-output" class="output"></pre>
-      </section>
-
-      <section id="monitor" class="view">
-        <div class="grid two">
-          <section class="panel">
-            <div class="panel-head">
-              <h2>Portfolio metrics</h2>
-              <button data-action="metrics">Update</button>
-            </div>
-            <div id="metrics-list" class="metrics-list"></div>
-          </section>
-          <section class="panel">
-            <div class="panel-head">
-              <h2>Run events</h2>
-              <span class="pill">latest run</span>
-            </div>
-            <div id="events-list" class="events-list"></div>
-          </section>
-        </div>
-      </section>
-
-      <section id="settings" class="view">
         <section class="panel">
           <div class="panel-head">
-            <h2>Environment</h2>
-            <button data-action="setup">Check</button>
+            <span class="eyebrow">Watchlist</span>
+            <button data-action="scan">Scan</button>
           </div>
-          <pre id="settings-output" class="output compact"></pre>
-          <button data-action="replay">Load fallback replay</button>
+          <textarea id="watchlist" rows="7">BTC,ETH,SOL,HYPE</textarea>
+          <small class="muted">Proactive scan selects from this list and auto-executes only on testnet.</small>
+        </section>
+
+        <section class="panel compact-panel">
+          <span class="eyebrow">Wallet</span>
+          <div id="wallet-summary" class="kv"></div>
+          <button data-action="wallet">Refresh wallet</button>
+        </section>
+      </aside>
+
+      <section class="mainstage">
+        <section class="hero">
+          <div>
+            <span class="eyebrow">Reactive or proactive trading loop</span>
+            <h1>Trading Cockpit</h1>
+            <p>Claude analyzes any Hyperliquid asset, proposes a bounded trade, then either executes on testnet or waits for prodnet confirmation.</p>
+          </div>
+          <form id="analyze-form" class="analyze-form">
+            <input id="asset-input" placeholder="BTC" value="BTC" />
+            <input id="context-input" placeholder="Optional context" />
+            <button class="primary" type="submit">Analyze</button>
+          </form>
+        </section>
+
+        <section class="analysis-grid">
+          <article class="panel thesis-panel">
+            <div class="panel-head">
+              <div>
+                <span class="eyebrow">Human mode</span>
+                <h2>Proposal</h2>
+              </div>
+              <span id="decision-pill" class="pill">no proposal</span>
+            </div>
+            <div id="human-summary" class="human-summary empty">
+              <h3>No trade idea yet</h3>
+              <p>Run analysis or a proactive scan to create the first proposal.</p>
+            </div>
+          </article>
+
+          <aside class="panel ticket-panel">
+            <div class="panel-head">
+              <div>
+                <span class="eyebrow">Trade ticket</span>
+                <h2 id="ticket-title">Awaiting plan</h2>
+              </div>
+              <span id="confidence" class="pill">0%</span>
+            </div>
+            <div id="ticket" class="ticket"></div>
+            <label class="check-row">
+              <input id="execute-confirm" type="checkbox" />
+              Confirm order submission
+            </label>
+            <label class="field">
+              Prodnet phrase
+              <input id="mainnet-phrase" placeholder="CONFIRM MAINNET ORDER" />
+            </label>
+            <div class="button-row">
+              <button class="danger" data-action="execute">Execute</button>
+              <button data-action="reject">Reject</button>
+            </div>
+          </aside>
+        </section>
+
+        <section id="robot-panel" class="panel robot-panel">
+          <div class="panel-head">
+            <div>
+              <span class="eyebrow">Robot mode</span>
+              <h2>Raw state</h2>
+            </div>
+            <button data-action="refresh">Refresh</button>
+          </div>
+          <pre id="raw-output"></pre>
         </section>
       </section>
+
+      <aside class="events-panel">
+        <div class="panel-head">
+          <div>
+            <span class="eyebrow">Agent events</span>
+            <h2>Loop feed</h2>
+          </div>
+          <button data-action="events">Refresh</button>
+        </div>
+        <div id="events-list" class="events-list"></div>
+      </aside>
     </main>
 
     <div id="toast" role="status" aria-live="polite"></div>
-    <script src="/static/app.js?v=agent-console-20260606"></script>
+    <script src="/static/app.js?v=trading-cockpit-20260606"></script>
   </body>
 </html>

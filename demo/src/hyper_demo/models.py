@@ -34,6 +34,67 @@ class TradeSide(StrEnum):
     short = "short"
 
 
+class RuntimeNetwork(StrEnum):
+    testnet = "testnet"
+    prodnet = "prodnet"
+
+
+class ExecutionPolicy(StrEnum):
+    auto_testnet_confirm_prodnet = "auto_testnet_confirm_prodnet"
+
+
+class UIMode(StrEnum):
+    human = "human"
+    robot = "robot"
+
+
+class ExecutionDecision(StrEnum):
+    proposed = "proposed"
+    auto_executed = "auto_executed"
+    waiting_confirmation = "waiting_confirmation"
+    rejected = "rejected"
+    blocked = "blocked"
+
+
+class RuntimeSettings(BaseModel):
+    id: str = "runtime"
+    created_at: datetime = Field(default_factory=utc_now)
+    network: RuntimeNetwork = RuntimeNetwork.testnet
+    execution_policy: ExecutionPolicy = ExecutionPolicy.auto_testnet_confirm_prodnet
+    ui_mode: UIMode = UIMode.human
+    watchlist: list[str] = Field(default_factory=lambda: ["BTC", "ETH", "SOL", "HYPE"])
+    max_order_usdc: float = Field(default=100.0, gt=0)
+    allowed_assets: list[str] = Field(default_factory=lambda: ["BTC", "ETH", "SOL", "HYPE"])
+    require_prodnet_phrase: bool = True
+
+    @field_validator("watchlist", "allowed_assets")
+    @classmethod
+    def normalize_assets(cls, value: list[str]) -> list[str]:
+        normalized = []
+        for asset in value:
+            cleaned = asset.strip().upper().replace("-PERP", "")
+            if cleaned and cleaned not in normalized:
+                normalized.append(cleaned)
+        return normalized
+
+
+class RuntimeSettingsUpdate(BaseModel):
+    network: RuntimeNetwork | None = None
+    execution_policy: ExecutionPolicy | None = None
+    ui_mode: UIMode | None = None
+    watchlist: list[str] | None = None
+    max_order_usdc: float | None = Field(default=None, gt=0)
+    allowed_assets: list[str] | None = None
+    require_prodnet_phrase: bool | None = None
+
+    @field_validator("watchlist", "allowed_assets")
+    @classmethod
+    def normalize_optional_assets(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        return RuntimeSettings(watchlist=value).watchlist
+
+
 class RiskProfileInput(BaseModel):
     horizon_days: int = Field(default=30, ge=1, le=365)
     max_drawdown_pct: float = Field(default=8.0, ge=1.0, le=80.0)
@@ -113,6 +174,14 @@ class TradePlan(BaseModel):
     research_id: str | None = None
     rationale: str
     invalidation_criteria: list[str]
+    confidence: float = Field(default=0.62, ge=0.0, le=1.0)
+    thesis: str | None = None
+    evidence: list[str] = Field(default_factory=list)
+    execution_decision: ExecutionDecision = ExecutionDecision.proposed
+    network: RuntimeNetwork = RuntimeNetwork.testnet
+    agent_session_id: str | None = None
+    raw_agent_output: str | None = None
+    execution_message: str | None = None
     monitoring_cadence: str = "Every 60 seconds during the live demo."
     status: Literal["draft", "confirmed", "executed", "cancelled"] = "draft"
 
@@ -137,9 +206,7 @@ class OrderRecord(BaseModel):
     id: str = Field(default_factory=lambda: new_id("order"))
     created_at: datetime = Field(default_factory=utc_now)
     plan_id: str
-    exchange: Literal["hyperliquid-testnet", "hyperliquid-mainnet", "paper-coinbase"] = (
-        "hyperliquid-testnet"
-    )
+    exchange: Literal["hyperliquid-testnet", "hyperliquid-mainnet"] = "hyperliquid-testnet"
     asset: str
     side: TradeSide
     size_usdc: float
@@ -196,52 +263,3 @@ class PortfolioMetrics(BaseModel):
     realized_pnl_usdc: float = 0.0
     unrealized_pnl_usdc: float = 0.0
 
-
-class InvestorSkill(BaseModel):
-    id: str
-    display_name: str
-    inspired_by: str
-    decision_style: str
-    must_check: list[str]
-    veto_rules: list[str]
-    prompt: str
-
-
-class SearchResult(BaseModel):
-    title: str
-    url: str
-    snippet: str
-    source: Literal["managed-agent-web", "local-research", "fallback"]
-
-
-class QuantSignal(BaseModel):
-    asset: str
-    mark_price: float
-    source: str
-    trend_score: float = Field(ge=-1.0, le=1.0)
-    volatility_score: float = Field(ge=0.0, le=1.0)
-    carry_score: float = Field(ge=-1.0, le=1.0)
-    liquidity_score: float = Field(ge=0.0, le=1.0)
-    recommendation: Literal["long_bias", "short_bias", "stand_aside"]
-    explanation: str
-
-
-class AgentOpinion(BaseModel):
-    skill_id: str
-    display_name: str
-    stance: Literal["support", "oppose", "abstain"]
-    confidence: float = Field(ge=0.0, le=1.0)
-    rationale: str
-    required_checks: list[str]
-
-
-class MultiAgentDecision(BaseModel):
-    id: str = Field(default_factory=lambda: new_id("team"))
-    created_at: datetime = Field(default_factory=utc_now)
-    asset: str
-    search_results: list[SearchResult]
-    quant_signal: QuantSignal
-    opinions: list[AgentOpinion]
-    consensus: Literal["approve_paper_trade", "revise_plan", "reject_trade"]
-    next_actions: list[str]
-    safety_notes: list[str]

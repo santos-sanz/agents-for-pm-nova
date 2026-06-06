@@ -6,7 +6,7 @@ from json import JSONDecodeError
 from pathlib import Path
 from typing import Any, TypeVar
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from hyper_demo.config import Settings, get_settings
 from hyper_demo.models import (
@@ -15,6 +15,7 @@ from hyper_demo.models import (
     OrderRecord,
     ResearchReport,
     RunEvent,
+    RuntimeSettings,
     TradePlan,
 )
 
@@ -32,6 +33,7 @@ class JsonStore:
         "orders": OrderRecord,
         "runs": DemoRun,
         "events": RunEvent,
+        "runtime": RuntimeSettings,
     }
 
     def __init__(self, settings: Settings | None = None) -> None:
@@ -65,7 +67,13 @@ class JsonStore:
 
     def list(self, collection: str) -> list[T]:
         model = self.collections[collection]
-        return [model.model_validate(record) for record in self._read_raw(collection)]
+        items: list[T] = []
+        for record in self._read_raw(collection):
+            try:
+                items.append(model.model_validate(record))
+            except ValidationError:
+                continue
+        return items
 
     def get(self, collection: str, item_id: str) -> T | None:
         for item in self.list(collection):
@@ -93,3 +101,6 @@ class JsonStore:
 
     def events_for_run(self, run_id: str) -> list[RunEvent]:
         return [event for event in self.list("events") if event.run_id == run_id]
+
+    def runtime_settings(self) -> RuntimeSettings:
+        return self.get("runtime", "runtime") or self.save("runtime", RuntimeSettings())

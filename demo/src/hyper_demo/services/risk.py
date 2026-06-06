@@ -46,7 +46,7 @@ def build_investor_profile(inputs: RiskProfileInput) -> InvestorProfile:
     max_position = round(max(10.0, max_position), 2)
 
     guardrails = [
-        "Use paper/testnet by default; guarded mainnet requires explicit human confirmation.",
+        "Use Hyperliquid testnet by default; guarded mainnet requires explicit human confirmation.",
         "Require explicit user confirmation before submitting any order.",
         f"Do not exceed {inputs.capital_at_risk_usdc:.2f} USDC of planned loss.",
         f"Attach a stop-loss no wider than {inputs.stop_loss_pct:.2f}% from entry.",

@@ -1,9 +1,6 @@
 from typer.testing import CliRunner
 
 from hyper_demo.cli import app
-from hyper_demo.config import Settings
-from hyper_demo.models import TradePlan
-from hyper_demo.storage import JsonStore
 
 
 def test_cli_setup_check(tmp_path, monkeypatch) -> None:
@@ -14,49 +11,30 @@ def test_cli_setup_check(tmp_path, monkeypatch) -> None:
     assert "Demo Setup" in result.output
 
 
-def test_cli_profile_and_replay(tmp_path, monkeypatch) -> None:
+def test_cli_analyze_creates_trade_idea(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
     runner = CliRunner()
-    profile = runner.invoke(app, ["profile", "--asset", "BTC"])
-    assert profile.exit_code == 0
-    assert "Risk Profile" in profile.output
-
-    replay = runner.invoke(app, ["replay", "--fixture", "fallback"])
-    assert replay.exit_code == 0
-    assert "Loaded fixture" in replay.output
-
-
-def test_cli_skills_and_debate(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
-    runner = CliRunner()
-
-    skills = runner.invoke(app, ["skills"])
-    assert skills.exit_code == 0
-    assert "Investor Agent Skills" in skills.output
-
-    debate = runner.invoke(app, ["debate", "--asset", "BTC"])
-    assert debate.exit_code == 0
-    assert "Multi-Agent Decision" in debate.output
-
-
-def test_cli_paper_executes_latest_plan(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
-    store = JsonStore(Settings(DEMO_STATE_DIR=tmp_path))
-    plan = TradePlan(
-        asset="BTC",
-        side="long",
-        size_usdc=100,
-        entry_price=100,
-        stop_loss=95,
-        take_profit=110,
-        max_loss_usdc=5,
-        rationale="test",
-        invalidation_criteria=[],
-    )
-    store.save("plans", plan)
-
-    runner = CliRunner()
-    result = runner.invoke(app, ["paper", "--plan", plan.id, "--confirm"])
+    result = runner.invoke(app, ["analyze", "--asset", "BTC"])
 
     assert result.exit_code == 0
-    assert "paper-coinbase" in result.output
+    assert "Trade Idea" in result.output
+
+
+def test_cli_scan_creates_proactive_trade_idea(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+    runner = CliRunner()
+    result = runner.invoke(app, ["scan"])
+
+    assert result.exit_code == 0
+    assert "Proactive Trade Idea" in result.output
+
+
+def test_cli_removed_legacy_commands(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    runner = CliRunner()
+
+    for command in ["profile", "research", "propose", "skills", "debate", "replay"]:
+        result = runner.invoke(app, [command])
+        assert result.exit_code != 0

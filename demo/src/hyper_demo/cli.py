@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-from pathlib import Path
 from typing import Annotated
 
 import typer
@@ -10,32 +9,22 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from hyper_demo.adapters.anthropic_managed import ManagedAgentResearchClient
 from hyper_demo.adapters.hyperliquid import (
     MAINNET_CONFIRMATION_PHRASE,
     ExecutionBlocked,
-    HyperliquidAdapter,
 )
-from hyper_demo.adapters.paper import PaperExecutionBlocked, PaperTradingAdapter
 from hyper_demo.api import setup_check
-from hyper_demo.config import get_settings
-from hyper_demo.models import (
-    DemoRun,
-    LeverageTolerance,
-    ProposalRequest,
-    RiskProfileInput,
-    RunEvent,
-)
-from hyper_demo.services.agent_team import INVESTOR_SKILLS, build_multi_agent_decision
-from hyper_demo.services.market import MarketDataClient
+from hyper_demo.config import get_settings, settings_for_runtime
 from hyper_demo.services.metrics import compute_portfolio_metrics
-from hyper_demo.services.proposals import build_trade_plan
-from hyper_demo.services.risk import build_investor_profile
+from hyper_demo.services.trading_agent import (
+    analyze_trade,
+    manual_execute_trade,
+    run_proactive_scan,
+)
 from hyper_demo.storage import JsonStore
 
-app = typer.Typer(help="Hyperliquid guarded investment agent demo CLI.")
+app = typer.Typer(help="Hyperliquid Claude trading agent demo CLI.")
 console = Console()
-ROOT = Path(__file__).resolve().parents[2]
 
 
 @app.command("setup-check")
@@ -55,111 +44,30 @@ def setup_check_command() -> None:
     table.add_row("Max order USDC", str(check.hyperliquid_max_order_usdc))
     table.add_row("Allowed assets", ", ".join(check.hyperliquid_allowed_assets))
     table.add_row("Account address", check.hyperliquid_account_address or "missing")
-    table.add_row("Paper market HTTP", check.paper_market_base_url)
     console.print(table)
     for warning in check.warnings:
         console.print(f"[yellow]warning:[/] {warning}")
 
 
-@app.command("profile")
-def profile_command(
-    horizon_days: Annotated[int, typer.Option("--horizon-days")] = 30,
-    max_drawdown_pct: Annotated[float, typer.Option("--max-drawdown-pct")] = 8.0,
-    leverage_tolerance: Annotated[
-        LeverageTolerance, typer.Option("--leverage")
-    ] = LeverageTolerance.low,
-    asset_preference: Annotated[str, typer.Option("--asset")] = "BTC",
-    capital_at_risk_usdc: Annotated[float, typer.Option("--capital-at-risk-usdc")] = 100.0,
-    stop_loss_pct: Annotated[float, typer.Option("--stop-loss-pct")] = 4.0,
-) -> None:
-    inputs = RiskProfileInput(
-        horizon_days=horizon_days,
-        max_drawdown_pct=max_drawdown_pct,
-        leverage_tolerance=leverage_tolerance,
-        asset_preference=asset_preference,
-        capital_at_risk_usdc=capital_at_risk_usdc,
-        stop_loss_pct=stop_loss_pct,
-    )
-    profile = build_investor_profile(inputs)
-    JsonStore(get_settings()).save("profiles", profile)
-    console.print(Panel(profile.summary, title=f"Risk Profile {profile.id}"))
-    console.print_json(profile.model_dump_json(indent=2))
-
-
-@app.command("research")
-def research_command(
+@app.command("analyze")
+def analyze_command(
     asset: Annotated[str, typer.Option("--asset")] = "BTC",
-    profile_id: Annotated[str | None, typer.Option("--profile-id")] = None,
+    context: Annotated[str | None, typer.Option("--context")] = None,
 ) -> None:
     store = JsonStore(get_settings())
-    profile = store.get("profiles", profile_id) if profile_id else store.latest("profiles")
-    report = asyncio.run(
-        ManagedAgentResearchClient(get_settings()).research(asset.upper(), profile)
-    )
-    store.save("research", report)
-    console.print(Panel(report.thesis, title=f"Research {report.id}"))
-    console.print_json(report.model_dump_json(indent=2))
+    runtime = store.runtime_settings()
+    result = asyncio.run(analyze_trade(asset, runtime, store, context))
+    console.print(Panel(result.plan.rationale, title=f"Trade Idea {result.plan.id}"))
+    console.print_json(result.plan.model_dump_json(indent=2))
 
 
-@app.command("propose")
-def propose_command(
-    asset: Annotated[str, typer.Option("--asset")] = "BTC",
-    profile_id: Annotated[str | None, typer.Option("--profile-id")] = None,
-    research_id: Annotated[str | None, typer.Option("--research-id")] = None,
-) -> None:
+@app.command("scan")
+def scan_command() -> None:
     store = JsonStore(get_settings())
-    profile = store.get("profiles", profile_id) if profile_id else store.latest("profiles")
-    if not profile:
-        profile = build_investor_profile(RiskProfileInput(asset_preference=asset))
-        store.save("profiles", profile)
-    research = store.get("research", research_id) if research_id else store.latest("research")
-    plan = build_trade_plan(
-        ProposalRequest(
-            asset=asset,
-            profile_id=profile.id,
-            research_id=research.id if research else None,
-        ),
-        profile,
-        research,
-        MarketDataClient(get_settings()),
-    )
-    store.save("plans", plan)
-    console.print(Panel(plan.rationale, title=f"Trade Plan {plan.id}"))
-    console.print_json(plan.model_dump_json(indent=2))
-
-
-@app.command("skills")
-def skills_command() -> None:
-    table = Table(title="Investor Agent Skills")
-    table.add_column("Skill")
-    table.add_column("Inspired by")
-    table.add_column("Decision style")
-    for skill in INVESTOR_SKILLS:
-        table.add_row(skill.display_name, skill.inspired_by, skill.decision_style)
-    console.print(table)
-
-
-@app.command("debate")
-def debate_command(
-    asset: Annotated[str, typer.Option("--asset")] = "BTC",
-    profile_id: Annotated[str | None, typer.Option("--profile-id")] = None,
-    research_id: Annotated[str | None, typer.Option("--research-id")] = None,
-) -> None:
-    store = JsonStore(get_settings())
-    profile = store.get("profiles", profile_id) if profile_id else store.latest("profiles")
-    research = store.get("research", research_id) if research_id else store.latest("research")
-    plan = store.latest("plans")
-    if plan and plan.asset != asset.upper().replace("-PERP", ""):
-        plan = None
-    decision = build_multi_agent_decision(asset, profile, research, plan)
-    table = Table(title=f"Multi-Agent Decision: {decision.consensus}")
-    table.add_column("Agent")
-    table.add_column("Stance")
-    table.add_column("Rationale")
-    for opinion in decision.opinions:
-        table.add_row(opinion.display_name, opinion.stance, opinion.rationale)
-    console.print(table)
-    console.print_json(decision.model_dump_json(indent=2))
+    runtime = store.runtime_settings()
+    result = asyncio.run(run_proactive_scan(runtime, store))
+    console.print(Panel(result.plan.rationale, title=f"Proactive Trade Idea {result.plan.id}"))
+    console.print_json(result.plan.model_dump_json(indent=2))
 
 
 @app.command("execute")
@@ -178,32 +86,24 @@ def execute_command(
     trade_plan = store.get("plans", plan)
     if not trade_plan:
         raise typer.BadParameter(f"Plan not found: {plan}")
+    runtime = store.runtime_settings()
     try:
-        order = HyperliquidAdapter(get_settings()).execute_plan(
+        result = manual_execute_trade(
             trade_plan,
-            confirm,
-            confirmation_phrase,
+            runtime,
+            store,
+            confirmed=confirm,
+            confirmation_phrase=confirmation_phrase,
         )
     except ExecutionBlocked as exc:
         console.print(f"[red]blocked:[/] {exc}")
         raise typer.Exit(code=1) from exc
-    store.save("orders", order)
-    run = DemoRun(
-        profile_id=trade_plan.profile_id,
-        research_id=trade_plan.research_id,
-        plan_id=trade_plan.id,
-        order_id=order.id,
-        status="executed",
-    )
-    store.save("runs", run)
-    store.append_event(
-        RunEvent(run_id=run.id, message=f"CLI submitted {order.exchange} order set.")
-    )
     console.print_json(
         json.dumps(
             {
-                "run": run.model_dump(mode="json"),
-                "order": order.model_dump(mode="json"),
+                "plan": result.plan.model_dump(mode="json"),
+                "order_id": result.order_id,
+                "run_id": result.run_id,
             }
         )
     )
@@ -211,53 +111,15 @@ def execute_command(
 
 @app.command("wallet")
 def wallet_command() -> None:
+    runtime = JsonStore(get_settings()).runtime_settings()
     try:
-        wallet = HyperliquidAdapter(get_settings()).wallet_state()
+        from hyper_demo.adapters.hyperliquid import HyperliquidAdapter
+
+        wallet = HyperliquidAdapter(settings_for_runtime(runtime)).wallet_state()
     except ExecutionBlocked as exc:
         console.print(f"[red]blocked:[/] {exc}")
         raise typer.Exit(code=1) from exc
     console.print_json(json.dumps(wallet))
-
-
-@app.command("paper")
-def paper_command(
-    plan: Annotated[str, typer.Option("--plan")],
-    confirm: Annotated[bool, typer.Option("--confirm")] = False,
-) -> None:
-    store = JsonStore(get_settings())
-    trade_plan = store.get("plans", plan)
-    if not trade_plan:
-        raise typer.BadParameter(f"Plan not found: {plan}")
-    try:
-        order = PaperTradingAdapter(get_settings()).execute_plan(trade_plan, confirm)
-    except PaperExecutionBlocked as exc:
-        console.print(f"[red]blocked:[/] {exc}")
-        raise typer.Exit(code=1) from exc
-    store.save("orders", order)
-    run = DemoRun(
-        profile_id=trade_plan.profile_id,
-        research_id=trade_plan.research_id,
-        plan_id=trade_plan.id,
-        order_id=order.id,
-        status="executed",
-    )
-    store.save("runs", run)
-    for trace in order.raw_response.get("debug_trace", []):
-        store.append_event(
-            RunEvent(
-                run_id=run.id,
-                message=f"CLI paper trading debug: {trace['step']}",
-                payload=trace,
-            )
-        )
-    console.print_json(
-        json.dumps(
-            {
-                "run": run.model_dump(mode="json"),
-                "order": order.model_dump(mode="json"),
-            }
-        )
-    )
 
 
 @app.command("monitor")
@@ -277,30 +139,6 @@ def monitor_command(run: Annotated[str, typer.Option("--run")]) -> None:
     for event in events:
         console.print(f"[{event.level}] {event.created_at.isoformat()} {event.message}")
     console.print_json(metrics.model_dump_json(indent=2))
-
-
-@app.command("replay")
-def replay_command(fixture: Annotated[str, typer.Option("--fixture")] = "fallback") -> None:
-    fixture_path = ROOT / "fixtures" / f"{fixture}.json"
-    if not fixture_path.exists():
-        raise typer.BadParameter(f"Fixture not found: {fixture}")
-    payload = json.loads(fixture_path.read_text(encoding="utf-8"))
-    store = JsonStore(get_settings())
-    saved = []
-    for collection, model_name in [
-        ("profiles", "profile"),
-        ("research", "research"),
-        ("plans", "plan"),
-        ("orders", "order"),
-        ("runs", "run"),
-    ]:
-        if model_name in payload:
-            model = JsonStore.collections[collection].model_validate(payload[model_name])
-            store.save(collection, model)
-            saved.append(f"{model_name}: {model.id}")
-    for event in payload.get("events", []):
-        store.append_event(RunEvent.model_validate(event))
-    console.print(Panel("\n".join(saved), title=f"Loaded fixture: {fixture}"))
 
 
 if __name__ == "__main__":

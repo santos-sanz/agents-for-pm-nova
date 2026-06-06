@@ -8,11 +8,12 @@ from urllib.parse import urlparse
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from hyper_demo.models import RuntimeNetwork, RuntimeSettings
+
 TESTNET_HTTP_HOSTS = {"api.hyperliquid-testnet.xyz"}
 TESTNET_WS_HOSTS = {"api.hyperliquid-testnet.xyz"}
 MAINNET_HTTP_HOSTS = {"api.hyperliquid.xyz"}
 MAINNET_WS_HOSTS = {"api.hyperliquid.xyz"}
-PAPER_MARKET_HTTP_HOSTS = {"api.exchange.coinbase.com"}
 
 
 class Settings(BaseSettings):
@@ -59,11 +60,6 @@ class Settings(BaseSettings):
     hyperliquid_allowed_assets: str = Field(
         default="BTC,ETH,SOL", alias="HYPERLIQUID_ALLOWED_ASSETS"
     )
-    paper_market_base_url: str = Field(
-        default="https://api.exchange.coinbase.com",
-        alias="PAPER_MARKET_BASE_URL",
-    )
-
     @field_validator("hyperliquid_base_url")
     @classmethod
     def require_known_hyperliquid_http(cls, value: str) -> str:
@@ -79,16 +75,6 @@ class Settings(BaseSettings):
         parsed = urlparse(value.rstrip("/"))
         if parsed.scheme != "wss" or parsed.hostname not in TESTNET_WS_HOSTS | MAINNET_WS_HOSTS:
             raise ValueError("Only known Hyperliquid websocket URLs are allowed in this demo.")
-        return parsed.geturl().rstrip("/")
-
-    @field_validator("paper_market_base_url")
-    @classmethod
-    def require_open_paper_market_http(cls, value: str) -> str:
-        parsed = urlparse(value.rstrip("/"))
-        if parsed.scheme != "https" or parsed.hostname not in PAPER_MARKET_HTTP_HOSTS:
-            raise ValueError(
-                "Only Coinbase Exchange public market URLs are allowed for paper mode."
-            )
         return parsed.geturl().rstrip("/")
 
     @model_validator(mode="after")
@@ -138,6 +124,37 @@ class Settings(BaseSettings):
             for asset in self.hyperliquid_allowed_assets.split(",")
             if asset.strip()
         }
+
+
+def settings_for_runtime(runtime: RuntimeSettings, base: Settings | None = None) -> Settings:
+    """Derive exchange URLs from the selected runtime network.
+
+    The UI can select testnet/prodnet, but it cannot inject exchange URLs.
+    """
+
+    base = base or get_settings()
+    if runtime.network == RuntimeNetwork.prodnet and not base.hyperliquid_mainnet_enabled:
+        raise ValueError("Prodnet requires HYPERLIQUID_MAINNET_ENABLED=true.")
+
+    if runtime.network == RuntimeNetwork.prodnet:
+        return base.model_copy(
+            update={
+                "demo_trading_mode": "mainnet_guarded",
+                "hyperliquid_base_url": "https://api.hyperliquid.xyz",
+                "hyperliquid_ws_url": "wss://api.hyperliquid.xyz/ws",
+                "hyperliquid_max_order_usdc": runtime.max_order_usdc,
+                "hyperliquid_allowed_assets": ",".join(runtime.allowed_assets),
+            }
+        )
+    return base.model_copy(
+        update={
+            "demo_trading_mode": "testnet",
+            "hyperliquid_base_url": "https://api.hyperliquid-testnet.xyz",
+            "hyperliquid_ws_url": "wss://api.hyperliquid-testnet.xyz/ws",
+            "hyperliquid_max_order_usdc": runtime.max_order_usdc,
+            "hyperliquid_allowed_assets": ",".join(runtime.allowed_assets),
+        }
+    )
 
 
 @lru_cache

@@ -13,6 +13,7 @@ SYSTEM_PROMPT = """You are an educational investment analysis agent for a live d
 You may use web search and web fetch to gather current public context. You must not provide
 personal financial advice. You must not claim certainty. You must return reviewable analysis
 for a human presenter.
+Use Hyperliquid testnet/prodnet language only. Describe testnet as exchange testnet execution.
 
 Return only JSON with these keys:
 thesis: string
@@ -128,7 +129,8 @@ Risk profile: {profile_text}
 
 Use web search/fetch for current context. Return only JSON with:
 thesis, evidence, risks, assumptions, why_not_invest, sources.
-Do not recommend mainnet trading. Do not provide personal financial advice.
+Do not recommend mainnet trading. Do not describe testnet as a generic simulation. Do not
+provide personal financial advice.
 """
 
     def _fallback_report(
@@ -162,7 +164,7 @@ Do not recommend mainnet trading. Do not provide personal financial advice.
             assumptions=[
                 "The presenter wants an educational, English-language demo.",
                 (
-                    "Execution remains paper/testnet by default; guarded mainnet requires "
+                    "Execution remains Hyperliquid testnet by default; guarded mainnet requires "
                     "human approval."
                 ),
                 reason or "Managed Agents fallback path selected.",

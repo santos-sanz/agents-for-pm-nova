@@ -25,6 +25,7 @@ class MarketPrice:
 class MarketDataClient:
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
+        self._last_source = "hyperliquid"
 
     def all_mids(self) -> dict[str, float]:
         payload = json.dumps({"type": "allMids"}).encode("utf-8")
@@ -37,47 +38,20 @@ class MarketDataClient:
         try:
             with urllib.request.urlopen(request, timeout=8) as response:
                 data = json.loads(response.read().decode("utf-8"))
+            self._last_source = "hyperliquid"
             return {str(asset).upper(): float(price) for asset, price in data.items()}
         except (TimeoutError, urllib.error.URLError, ValueError, json.JSONDecodeError):
+            self._last_source = "fallback"
             return FALLBACK_PRICES.copy()
 
     def mark_price(self, asset: str) -> MarketPrice:
         normalized = asset.upper().replace("-PERP", "")
         mids = self.all_mids()
         if normalized in mids:
-            return MarketPrice(asset=normalized, mark_price=mids[normalized], source="hyperliquid")
-        fallback = FALLBACK_PRICES.get(normalized, 100.0)
-        return MarketPrice(asset=normalized, mark_price=fallback, source="fallback")
-
-
-class CoinbasePublicMarketDataClient:
-    """Public, credential-free market data for paper trading fills."""
-
-    def __init__(self, settings: Settings | None = None) -> None:
-        self.settings = settings or get_settings()
-
-    def product_id(self, asset: str) -> str:
-        return f"{asset.upper().replace('-PERP', '')}-USD"
-
-    def mark_price(self, asset: str) -> MarketPrice:
-        normalized = asset.upper().replace("-PERP", "")
-        product_id = self.product_id(normalized)
-        request = urllib.request.Request(
-            f"{self.settings.paper_market_base_url}/products/{product_id}/ticker",
-            headers={"Accept": "application/json", "User-Agent": "hyper-demo-paper-trading/0.1"},
-            method="GET",
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=8) as response:
-                data = json.loads(response.read().decode("utf-8"))
-            price = float(data["price"])
-            if price <= 0:
-                raise ValueError("Coinbase ticker returned a non-positive price.")
             return MarketPrice(
                 asset=normalized,
-                mark_price=price,
-                source=f"coinbase:{product_id}",
+                mark_price=mids[normalized],
+                source=self._last_source,
             )
-        except (TimeoutError, urllib.error.URLError, KeyError, ValueError, json.JSONDecodeError):
-            fallback = FALLBACK_PRICES.get(normalized, 100.0)
-            return MarketPrice(asset=normalized, mark_price=fallback, source="fallback")
+        fallback = FALLBACK_PRICES.get(normalized, 100.0)
+        return MarketPrice(asset=normalized, mark_price=fallback, source="fallback")

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import json
-import re
 from pathlib import Path
 from typing import Any
 
@@ -10,36 +8,45 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from hyper_demo.adapters.anthropic_managed import ManagedAgentResearchClient
 from hyper_demo.adapters.hyperliquid import ExecutionBlocked, HyperliquidAdapter
-from hyper_demo.adapters.paper import PaperExecutionBlocked, PaperTradingAdapter
-from hyper_demo.config import Settings, get_settings
+from hyper_demo.config import Settings, get_settings, settings_for_runtime
 from hyper_demo.models import (
-    DemoRun,
     OrderRecord,
-    OrderRequest,
     PortfolioMetrics,
     PositionSnapshot,
-    ProposalRequest,
-    ResearchRequest,
-    RiskProfileInput,
     RunEvent,
+    RuntimeNetwork,
+    RuntimeSettings,
+    RuntimeSettingsUpdate,
     TradePlan,
 )
-from hyper_demo.services.agent_team import INVESTOR_SKILLS, build_multi_agent_decision
-from hyper_demo.services.market import CoinbasePublicMarketDataClient, MarketDataClient
+from hyper_demo.services.market import MarketDataClient
 from hyper_demo.services.metrics import compute_portfolio_metrics
 from hyper_demo.services.monitoring import HyperliquidWebsocketMonitor
-from hyper_demo.services.proposals import build_trade_plan
-from hyper_demo.services.risk import build_investor_profile
+from hyper_demo.services.trading_agent import (
+    AGENT_RUN_ID,
+    analyze_trade,
+    manual_execute_trade,
+    reject_trade,
+    run_proactive_scan,
+)
 from hyper_demo.storage import JsonStore
 
 APP_ROOT = Path(__file__).resolve().parent
 STATIC_ROOT = APP_ROOT / "static"
-FIXTURE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
-app = FastAPI(title="Hyperliquid Testnet Investment Agent Demo", version="0.1.0")
+app = FastAPI(title="Hyperliquid Claude Trading Agent Demo", version="0.2.0")
 app.mount("/static", StaticFiles(directory=STATIC_ROOT), name="static")
+
+
+class AgentAnalyzeRequest(BaseModel):
+    asset: str
+    context: str | None = None
+
+
+class TradeExecutionRequest(BaseModel):
+    confirmed: bool = False
+    confirmation_phrase: str | None = None
 
 
 class SetupCheck(BaseModel):
@@ -54,12 +61,15 @@ class SetupCheck(BaseModel):
     hyperliquid_max_order_usdc: float
     hyperliquid_allowed_assets: list[str]
     hyperliquid_account_address: str | None
-    paper_market_base_url: str
     warnings: list[str]
 
 
 def get_store() -> JsonStore:
     return JsonStore(get_settings())
+
+
+def get_runtime(store: JsonStore | None = None) -> RuntimeSettings:
+    return (store or get_store()).runtime_settings()
 
 
 def setup_check(settings: Settings | None = None) -> SetupCheck:
@@ -87,7 +97,6 @@ def setup_check(settings: Settings | None = None) -> SetupCheck:
         hyperliquid_max_order_usdc=settings.hyperliquid_max_order_usdc,
         hyperliquid_allowed_assets=sorted(settings.allowed_assets_set),
         hyperliquid_account_address=_mask_address(settings.hyperliquid_account_address),
-        paper_market_base_url=settings.paper_market_base_url,
         warnings=warnings,
     )
 
@@ -105,128 +114,128 @@ def api_setup_check() -> SetupCheck:
 @app.get("/api/state")
 def api_state() -> dict[str, Any]:
     store = get_store()
+    runtime = get_runtime(store)
+    try:
+        effective_settings = settings_for_runtime(runtime)
+        setup = setup_check(effective_settings)
+    except ValueError as exc:
+        setup = setup_check()
+        setup.warnings.append(str(exc))
     return {
         "profile": store.latest("profiles"),
         "research": store.latest("research"),
         "plan": store.latest("plans"),
         "order": store.latest("orders"),
         "run": store.latest("runs"),
-        "setup": setup_check(),
+        "runtime": runtime,
+        "events": store.events_for_run(AGENT_RUN_ID),
+        "setup": setup,
     }
 
 
-@app.post("/api/profile")
-def create_profile(inputs: RiskProfileInput):
-    profile = build_investor_profile(inputs)
+@app.post("/api/settings/runtime", response_model=RuntimeSettings)
+def update_runtime_settings(update: RuntimeSettingsUpdate) -> RuntimeSettings:
     store = get_store()
-    store.save("profiles", profile)
-    return profile
-
-
-@app.post("/api/research")
-async def create_research(request: ResearchRequest):
-    store = get_store()
-    profile = (
-        store.get("profiles", request.profile_id)
-        if request.profile_id
-        else store.latest("profiles")
+    current = get_runtime(store)
+    payload = current.model_dump()
+    for key, value in update.model_dump(exclude_none=True).items():
+        payload[key] = value
+    candidate = RuntimeSettings.model_validate(payload)
+    if (
+        candidate.network == RuntimeNetwork.prodnet
+        and not get_settings().hyperliquid_mainnet_enabled
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Prodnet requires HYPERLIQUID_MAINNET_ENABLED=true.",
+        )
+    settings_for_runtime(candidate)
+    store.save("runtime", candidate)
+    store.append_event(
+        RunEvent(
+            run_id=AGENT_RUN_ID,
+            message=f"Runtime settings updated: {candidate.network}/{candidate.ui_mode}.",
+            payload=candidate.model_dump(mode="json"),
+        )
     )
-    client = ManagedAgentResearchClient(get_settings())
-    report = await client.research(request.asset, profile)
-    store.save("research", report)
-    return report
+    return candidate
 
 
-@app.post("/api/proposals", response_model=TradePlan)
-def create_proposal(request: ProposalRequest):
+@app.post("/api/agent/analyze")
+async def api_agent_analyze(request: AgentAnalyzeRequest):
     store = get_store()
-    profile = (
-        store.get("profiles", request.profile_id)
-        if request.profile_id
-        else store.latest("profiles")
-    )
-    if not profile:
-        profile = build_investor_profile(RiskProfileInput(asset_preference=request.asset))
-        store.save("profiles", profile)
-    research = (
-        store.get("research", request.research_id)
-        if request.research_id
-        else store.latest("research")
-    )
-    plan = build_trade_plan(request, profile, research, MarketDataClient(get_settings()))
-    store.save("plans", plan)
-    return plan
+    runtime = get_runtime(store)
+    try:
+        result = await analyze_trade(request.asset, runtime, store, request.context)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "plan": result.plan,
+        "order_id": result.order_id,
+        "run_id": result.run_id,
+    }
 
 
-@app.post("/api/orders/testnet")
-def submit_testnet_order(request: OrderRequest):
+@app.post("/api/agent/proactive-scan")
+async def api_proactive_scan():
     store = get_store()
-    plan = store.get("plans", request.plan_id)
+    runtime = get_runtime(store)
+    try:
+        result = await run_proactive_scan(runtime, store)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "plan": result.plan,
+        "order_id": result.order_id,
+        "run_id": result.run_id,
+    }
+
+
+@app.get("/api/agent/events")
+def api_agent_events():
+    return get_store().events_for_run(AGENT_RUN_ID)
+
+
+@app.post("/api/trades/{plan_id}/execute")
+def api_execute_trade(plan_id: str, request: TradeExecutionRequest):
+    store = get_store()
+    runtime = get_runtime(store)
+    plan = store.get("plans", plan_id)
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found.")
     try:
-        order = HyperliquidAdapter(get_settings()).execute_plan(
+        result = manual_execute_trade(
             plan,
-            request.confirmed,
-            request.confirmation_phrase,
+            runtime,
+            store,
+            confirmed=request.confirmed,
+            confirmation_phrase=request.confirmation_phrase,
         )
-    except ExecutionBlocked as exc:
+    except (ExecutionBlocked, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    store.save("orders", order)
-    run = DemoRun(
-        profile_id=plan.profile_id,
-        research_id=plan.research_id,
-        plan_id=plan.id,
-        order_id=order.id,
-        status="executed",
-    )
-    store.save("runs", run)
-    store.append_event(
-        RunEvent(
-            run_id=run.id,
-            message=f"Submitted {order.exchange} order set.",
-            payload={"order_id": order.id, "plan_id": plan.id},
-        )
-    )
-    return {"run": run, "order": order}
+    return {
+        "plan": result.plan,
+        "order_id": result.order_id,
+        "run_id": result.run_id,
+    }
+
+
+@app.post("/api/trades/{plan_id}/reject", response_model=TradePlan)
+def api_reject_trade(plan_id: str):
+    store = get_store()
+    plan = store.get("plans", plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plan not found.")
+    return reject_trade(plan, store)
 
 
 @app.get("/api/wallet")
 def get_wallet_state():
+    runtime = get_runtime()
     try:
-        return HyperliquidAdapter(get_settings()).wallet_state()
-    except ExecutionBlocked as exc:
+        return HyperliquidAdapter(settings_for_runtime(runtime)).wallet_state()
+    except (ExecutionBlocked, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@app.post("/api/orders/paper")
-def submit_paper_order(request: OrderRequest):
-    store = get_store()
-    plan = store.get("plans", request.plan_id)
-    if not plan:
-        raise HTTPException(status_code=404, detail="Plan not found.")
-    try:
-        order = PaperTradingAdapter(get_settings()).execute_plan(plan, request.confirmed)
-    except PaperExecutionBlocked as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    store.save("orders", order)
-    run = DemoRun(
-        profile_id=plan.profile_id,
-        research_id=plan.research_id,
-        plan_id=plan.id,
-        order_id=order.id,
-        status="executed",
-    )
-    store.save("runs", run)
-    for trace in order.raw_response.get("debug_trace", []):
-        store.append_event(
-            RunEvent(
-                run_id=run.id,
-                message=f"Paper trading debug: {trace['step']}",
-                payload=trace,
-            )
-        )
-    return {"run": run, "order": order}
 
 
 @app.get("/api/runs/{run_id}")
@@ -249,15 +258,9 @@ def _position_from_latest_state(
 ) -> PositionSnapshot | None:
     if not plan:
         return None
-    if order and order.plan_id == plan.id and order.exchange == "paper-coinbase":
-        fill = order.raw_response.get("fill", {})
-        entry_price = float(fill.get("fill_price") or plan.entry_price)
-        size_usdc = float(fill.get("notional_usdc") or plan.size_usdc)
-        current = CoinbasePublicMarketDataClient(settings).mark_price(plan.asset).mark_price
-    else:
-        entry_price = plan.entry_price
-        size_usdc = plan.size_usdc
-        current = MarketDataClient(settings).mark_price(plan.asset).mark_price
+    entry_price = plan.entry_price
+    size_usdc = plan.size_usdc
+    current = MarketDataClient(settings).mark_price(plan.asset).mark_price
     direction = 1 if plan.side.value == "long" else -1
     pnl = (current - entry_price) / entry_price * size_usdc * direction
     return PositionSnapshot(
@@ -274,8 +277,10 @@ def _position_from_latest_state(
 @app.get("/api/portfolio/metrics", response_model=PortfolioMetrics)
 def get_portfolio_metrics():
     store = get_store()
+    runtime = get_runtime(store)
+    settings = settings_for_runtime(runtime)
     plan = store.latest("plans")
-    position = _position_from_latest_state(plan, store.latest("orders"), get_settings())
+    position = _position_from_latest_state(plan, store.latest("orders"), settings)
     equity_curve = [10_000, 10_040, 10_015, 10_120, 10_090, 10_180]
     if position:
         equity_curve[-1] = equity_curve[-1] + position.unrealized_pnl_usdc
@@ -287,72 +292,13 @@ def get_portfolio_metrics():
     )
 
 
-@app.get("/api/agents/skills")
-def get_agent_skills():
-    return list(INVESTOR_SKILLS)
-
-
-@app.post("/api/agents/debate")
-def run_agent_debate(request: ProposalRequest):
-    store = get_store()
-    profile = (
-        store.get("profiles", request.profile_id)
-        if request.profile_id
-        else store.latest("profiles")
-    )
-    research = (
-        store.get("research", request.research_id)
-        if request.research_id
-        else store.latest("research")
-    )
-    plan = store.latest("plans")
-    if plan and plan.asset != request.asset:
-        plan = None
-    return build_multi_agent_decision(request.asset, profile, research, plan)
-
-
 @app.get("/api/market/{asset}/ws-sample")
 async def sample_market_websocket(asset: str):
     price = await HyperliquidWebsocketMonitor(get_settings()).sample_mark_price(asset)
     return price
 
 
-@app.post("/api/replay/{fixture_name}")
-def replay_fixture(fixture_name: str):
-    if not FIXTURE_NAME_PATTERN.fullmatch(fixture_name):
-        raise HTTPException(status_code=400, detail="Invalid fixture name.")
-    fixture_root = (Path(__file__).resolve().parents[2] / "fixtures").resolve()
-    fixture_path = (fixture_root / f"{fixture_name}.json").resolve()
-    if not fixture_path.is_relative_to(fixture_root):
-        raise HTTPException(status_code=400, detail="Invalid fixture path.")
-    if not fixture_path.exists():
-        raise HTTPException(status_code=404, detail="Fixture not found.")
-    payload = json.loads(fixture_path.read_text(encoding="utf-8"))
-    store = get_store()
-    saved: dict[str, Any] = {}
-    for collection, model_name in [
-        ("profiles", "profile"),
-        ("research", "research"),
-        ("plans", "plan"),
-        ("orders", "order"),
-        ("runs", "run"),
-    ]:
-        if model_name in payload:
-            model = JsonStore.collections[collection].model_validate(payload[model_name])
-            saved[model_name] = store.save(collection, model)
-    for event in payload.get("events", []):
-        store.append_event(RunEvent.model_validate(event))
-    return saved
-
-
 @app.get("/", response_class=HTMLResponse)
-@app.get("/profile", response_class=HTMLResponse)
-@app.get("/research", response_class=HTMLResponse)
-@app.get("/proposal", response_class=HTMLResponse)
-@app.get("/agents", response_class=HTMLResponse)
-@app.get("/execution", response_class=HTMLResponse)
-@app.get("/monitor", response_class=HTMLResponse)
-@app.get("/settings", response_class=HTMLResponse)
 def spa() -> HTMLResponse:
     return HTMLResponse((STATIC_ROOT / "index.html").read_text(encoding="utf-8"))
 

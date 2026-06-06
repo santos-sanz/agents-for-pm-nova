@@ -1,7 +1,8 @@
 import pytest
 from pydantic import ValidationError
 
-from hyper_demo.config import Settings
+from hyper_demo.config import Settings, settings_for_runtime
+from hyper_demo.models import RuntimeSettings
 
 
 def test_settings_reject_mainnet_urls_in_testnet_mode() -> None:
@@ -58,6 +59,29 @@ def test_settings_accept_mainnet_guarded_when_explicitly_enabled() -> None:
     assert settings.allowed_assets_set == {"BTC", "ETH"}
 
 
-def test_settings_reject_unknown_paper_market_url() -> None:
-    with pytest.raises(ValidationError):
-        Settings(PAPER_MARKET_BASE_URL="https://example.com")
+def test_runtime_derives_testnet_urls() -> None:
+    settings = settings_for_runtime(RuntimeSettings(network="testnet"))
+
+    assert settings.demo_trading_mode == "testnet"
+    assert settings.hyperliquid_base_url == "https://api.hyperliquid-testnet.xyz"
+    assert settings.hyperliquid_ws_url == "wss://api.hyperliquid-testnet.xyz/ws"
+
+
+def test_runtime_derives_prodnet_urls_when_enabled() -> None:
+    base = Settings(
+        HYPERLIQUID_MAINNET_ENABLED=True,
+    )
+    runtime = RuntimeSettings(network="prodnet", max_order_usdc=25, allowed_assets=["BTC"])
+
+    settings = settings_for_runtime(runtime, base)
+
+    assert settings.demo_trading_mode == "mainnet_guarded"
+    assert settings.hyperliquid_base_url == "https://api.hyperliquid.xyz"
+    assert settings.hyperliquid_ws_url == "wss://api.hyperliquid.xyz/ws"
+    assert settings.hyperliquid_max_order_usdc == 25
+    assert settings.allowed_assets_set == {"BTC"}
+
+
+def test_runtime_rejects_prodnet_without_enable_flag() -> None:
+    with pytest.raises(ValueError):
+        settings_for_runtime(RuntimeSettings(network="prodnet"), Settings())

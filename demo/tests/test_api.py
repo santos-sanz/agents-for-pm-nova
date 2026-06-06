@@ -1,42 +1,121 @@
 from fastapi.testclient import TestClient
 
 from hyper_demo.api import app
-from hyper_demo.models import OrderRecord, TradePlan
+from hyper_demo.models import OrderRecord, RuntimeSettings, TradePlan
 from hyper_demo.storage import JsonStore
 
 
-def test_profile_research_proposal_and_guarded_execution(tmp_path, monkeypatch) -> None:
+def test_agent_analyze_creates_trade_proposal(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("ANTHROPIC_API_KEY", "")
-    monkeypatch.setenv("HYPERLIQUID_BASE_URL", "https://api.hyperliquid-testnet.xyz")
-    monkeypatch.setenv("HYPERLIQUID_WS_URL", "wss://api.hyperliquid-testnet.xyz/ws")
     client = TestClient(app)
 
-    profile_response = client.post(
-        "/api/profile",
-        json={
-            "horizon_days": 30,
-            "max_drawdown_pct": 8,
-            "leverage_tolerance": "low",
-            "asset_preference": "BTC",
-            "capital_at_risk_usdc": 100,
-            "stop_loss_pct": 4,
-        },
+    response = client.post("/api/agent/analyze", json={"asset": "BTC"})
+
+    assert response.status_code == 200
+    plan = response.json()["plan"]
+    assert plan["asset"] == "BTC"
+    assert plan["network"] == "testnet"
+    assert plan["size_usdc"] <= 100
+    assert plan["execution_decision"] in {"blocked", "auto_executed"}
+    events = client.get("/api/agent/events")
+    assert events.status_code == 200
+    assert len(events.json()) >= 2
+
+
+def test_proactive_scan_generates_event_and_plan(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    client = TestClient(app)
+
+    response = client.post("/api/agent/proactive-scan")
+
+    assert response.status_code == 200
+    assert response.json()["plan"]["asset"] in {"BTC", "ETH", "SOL", "HYPE"}
+    events = client.get("/api/agent/events").json()
+    assert any("Proactive scan selected" in event["message"] for event in events)
+
+
+def test_testnet_auto_execution_uses_hyperliquid_adapter(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+
+    def fake_execute(self, plan, confirmed, confirmation_phrase=None):
+        assert confirmed is True
+        return OrderRecord(
+            plan_id=plan.id,
+            exchange="hyperliquid-testnet",
+            asset=plan.asset,
+            side=plan.side,
+            size_usdc=plan.size_usdc,
+            message="fake submitted",
+        )
+
+    monkeypatch.setattr(
+        "hyper_demo.services.trading_agent.HyperliquidAdapter.execute_plan",
+        fake_execute,
     )
-    assert profile_response.status_code == 200
+    client = TestClient(app)
 
-    research_response = client.post("/api/research", json={"asset": "BTC"})
-    assert research_response.status_code == 200
-    assert research_response.json()["fallback_used"] is True
+    response = client.post("/api/agent/analyze", json={"asset": "BTC"})
 
-    proposal_response = client.post("/api/proposals", json={"asset": "BTC"})
-    assert proposal_response.status_code == 200
-    plan_id = proposal_response.json()["id"]
+    assert response.status_code == 200
+    plan = response.json()["plan"]
+    assert plan["execution_decision"] == "auto_executed"
+    assert response.json()["order_id"]
 
-    blocked_response = client.post(
-        "/api/orders/testnet", json={"plan_id": plan_id, "confirmed": False}
+
+def test_prodnet_analysis_waits_for_confirmation(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("HYPERLIQUID_MAINNET_ENABLED", "true")
+    client = TestClient(app)
+
+    runtime = client.post("/api/settings/runtime", json={"network": "prodnet"})
+    assert runtime.status_code == 200
+
+    response = client.post("/api/agent/analyze", json={"asset": "BTC"})
+
+    assert response.status_code == 200
+    assert response.json()["plan"]["execution_decision"] == "waiting_confirmation"
+
+
+def test_prodnet_confirmation_requires_phrase(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("HYPERLIQUID_MAINNET_ENABLED", "true")
+    monkeypatch.setenv("HYPERLIQUID_ACCOUNT_ADDRESS", "0x0000000000000000000000000000000000000000")
+    monkeypatch.setenv(
+        "HYPERLIQUID_API_WALLET_PRIVATE_KEY",
+        "0x0000000000000000000000000000000000000000000000000000000000000001",
     )
-    assert blocked_response.status_code == 400
+    store = JsonStore()
+    store.save("runtime", RuntimeSettings(network="prodnet"))
+    plan = TradePlan(
+        asset="BTC",
+        side="long",
+        size_usdc=25,
+        entry_price=100,
+        stop_loss=95,
+        take_profit=110,
+        max_loss_usdc=5,
+        rationale="test",
+        invalidation_criteria=[],
+        network="prodnet",
+    )
+    store.save("plans", plan)
+    client = TestClient(app)
+
+    response = client.post(f"/api/trades/{plan.id}/execute", json={"confirmed": True})
+
+    assert response.status_code == 400
+    assert "CONFIRM MAINNET ORDER" in response.json()["detail"]
+
+
+def test_runtime_rejects_prodnet_when_disabled(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("HYPERLIQUID_MAINNET_ENABLED", "false")
+    client = TestClient(app)
+
+    response = client.post("/api/settings/runtime", json={"network": "prodnet"})
+
+    assert response.status_code == 400
 
 
 def test_metrics_endpoint(tmp_path, monkeypatch) -> None:
@@ -47,94 +126,21 @@ def test_metrics_endpoint(tmp_path, monkeypatch) -> None:
     assert "alpha" in response.json()
 
 
-def test_agent_team_endpoint_returns_consensus(tmp_path, monkeypatch) -> None:
+def test_legacy_workflow_routes_are_removed(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
     client = TestClient(app)
 
-    response = client.post("/api/agents/debate", json={"asset": "BTC"})
+    for path in [
+        "/api/profile",
+        "/api/research",
+        "/api/proposals",
+        "/api/orders/testnet",
+        "/api/agents/debate",
+        "/api/replay/fallback",
+    ]:
+        response = client.post(path, json={})
+        assert response.status_code == 404
 
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["asset"] == "BTC"
-    assert payload["consensus"] in {"approve_paper_trade", "revise_plan", "reject_trade"}
-    assert len(payload["opinions"]) == 4
-
-
-def test_replay_rejects_path_traversal(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
-    client = TestClient(app)
-    response = client.post("/api/replay/bad.name")
-    assert response.status_code == 400
-
-
-def test_paper_order_creates_debug_events(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
-    store = JsonStore()
-    plan = TradePlan(
-        asset="BTC",
-        side="long",
-        size_usdc=100,
-        entry_price=100,
-        stop_loss=95,
-        take_profit=110,
-        max_loss_usdc=5,
-        rationale="test",
-        invalidation_criteria=[],
-    )
-    store.save("plans", plan)
-    client = TestClient(app)
-
-    response = client.post("/api/orders/paper", json={"plan_id": plan.id, "confirmed": True})
-
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["order"]["exchange"] == "paper-coinbase"
-    events = client.get(f"/api/runs/{payload['run']['id']}/events")
-    assert events.status_code == 200
-    assert len(events.json()) == 3
-
-
-def test_metrics_use_paper_fill_price(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
-
-    class FakeResponse:
-        def __enter__(self):
-            import io
-            import json
-
-            return io.BytesIO(json.dumps({"price": "105"}).encode("utf-8"))
-
-        def __exit__(self, exc_type, exc, traceback) -> None:
-            return None
-
-    monkeypatch.setattr("urllib.request.urlopen", lambda request, timeout: FakeResponse())
-    store = JsonStore()
-    plan = TradePlan(
-        asset="BTC",
-        side="long",
-        size_usdc=100,
-        entry_price=100,
-        stop_loss=95,
-        take_profit=110,
-        max_loss_usdc=5,
-        rationale="test",
-        invalidation_criteria=[],
-    )
-    order = OrderRecord(
-        plan_id=plan.id,
-        exchange="paper-coinbase",
-        asset="BTC",
-        side="long",
-        size_usdc=100,
-        raw_response={"fill": {"fill_price": 100, "notional_usdc": 100}},
-        status="simulated",
-        message="paper",
-    )
-    store.save("plans", plan)
-    store.save("orders", order)
-    client = TestClient(app)
-
-    response = client.get("/api/portfolio/metrics")
-
-    assert response.status_code == 200
-    assert response.json()["unrealized_pnl_usdc"] == 5.0
+    for path in ["/profile", "/research", "/proposal", "/agents", "/execution", "/settings"]:
+        response = client.get(path)
+        assert response.status_code == 404
