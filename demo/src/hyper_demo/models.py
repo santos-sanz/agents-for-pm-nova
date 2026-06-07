@@ -56,6 +56,49 @@ class ExecutionDecision(StrEnum):
     blocked = "blocked"
 
 
+class ConnectedWalletSource(StrEnum):
+    privy = "privy"
+
+
+class ConnectedWallet(BaseModel):
+    id: str = "connected_wallet"
+    created_at: datetime = Field(default_factory=utc_now)
+    source: ConnectedWalletSource = ConnectedWalletSource.privy
+    address: str
+    user_id: str | None = None
+    email: str | None = None
+    wallet_id: str | None = None
+
+    @field_validator("address")
+    @classmethod
+    def normalize_address(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned.startswith("0x") or len(cleaned) != 42:
+            raise ValueError("Wallet address must be a 0x-prefixed EVM address.")
+        return cleaned
+
+
+class PrivyAgentWallet(BaseModel):
+    id: str = "privy_agent_wallet"
+    created_at: datetime = Field(default_factory=utc_now)
+    network: RuntimeNetwork = RuntimeNetwork.testnet
+    master_wallet_id: str
+    master_wallet_address: str
+    agent_wallet_id: str
+    agent_wallet_address: str
+    agent_name: str = "Nova Agent"
+    registered: bool = False
+    raw_response: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("master_wallet_address", "agent_wallet_address")
+    @classmethod
+    def normalize_wallet_address(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned.startswith("0x") or len(cleaned) != 42:
+            raise ValueError("Wallet address must be a 0x-prefixed EVM address.")
+        return cleaned
+
+
 class RuntimeSettings(BaseModel):
     id: str = "runtime"
     created_at: datetime = Field(default_factory=utc_now)
@@ -262,4 +305,3 @@ class PortfolioMetrics(BaseModel):
     exposure_by_asset: dict[str, float]
     realized_pnl_usdc: float = 0.0
     unrealized_pnl_usdc: float = 0.0
-

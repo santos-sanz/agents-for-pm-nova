@@ -1,0 +1,11 @@
+{
+  "name": "hyper-demo-privy-helper",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@nktkas/hyperliquid": "^0.32.2",
+    "@privy-io/node": "^0.20.0",
+    "viem": "^2.52.2"
+  }
+}

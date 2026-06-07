@@ -3,16 +3,16 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Hyperliquid Claude Trading Agent</title>
-    <link rel="stylesheet" href="/static/styles.css?v=trading-cockpit-20260606" />
+    <title>Nova Trading Agent</title>
+    <link rel="stylesheet" href="/static/styles.css?v=consumer-trading-20260607" />
   </head>
   <body>
     <header class="topbar">
       <a class="brand" href="/">
         <span class="brand-mark">HL</span>
         <span>
-          <strong>Claude Trading Agent</strong>
-          <small>Hyperliquid only</small>
+          <strong>Nova Trading Agent</strong>
+          <small>Hyperliquid markets</small>
         </span>
       </a>
       <div class="status-strip">
@@ -58,32 +58,93 @@
         </section>
 
         <section class="panel compact-panel">
-          <span class="eyebrow">Wallet</span>
+          <div class="panel-head">
+            <span class="eyebrow">Privy Wallet</span>
+            <span id="privy-status" class="pill">checking</span>
+          </div>
+          <div id="privy-wallet-summary" class="kv"></div>
+          <label class="field">
+            Email
+            <input id="privy-email" type="email" placeholder="you@example.com" autocomplete="email" />
+          </label>
+          <div class="button-row">
+            <button data-action="privy-send-code">Send code</button>
+            <button data-action="privy-connect">Connect</button>
+          </div>
+          <label class="field">
+            Code
+            <input id="privy-code" inputmode="numeric" autocomplete="one-time-code" />
+          </label>
+          <button class="primary" data-action="privy-create-wallet">Create or link wallet</button>
+          <button data-action="privy-setup-agent">Initialize agent</button>
+        </section>
+
+        <section class="panel compact-panel">
+          <span class="eyebrow">Hyperliquid Wallet</span>
           <div id="wallet-summary" class="kv"></div>
           <button data-action="wallet">Refresh wallet</button>
         </section>
       </aside>
 
       <section class="mainstage">
-        <section class="hero">
-          <div>
-            <span class="eyebrow">Reactive or proactive trading loop</span>
-            <h1>Trading Cockpit</h1>
-            <p>Claude analyzes any Hyperliquid asset, proposes a bounded trade, then either executes on testnet or waits for prodnet confirmation.</p>
+        <section class="hero portfolio-hero">
+          <div class="hero-copy">
+            <span class="eyebrow">Agent portfolio</span>
+            <h1 id="portfolio-value">10,180.00 USDC</h1>
+            <p id="portfolio-pnl" class="portfolio-delta neutral">Loading live risk metrics</p>
+            <div class="hero-stats" id="hero-stats">
+              <div>
+                <span>Alpha</span>
+                <b>0.000000</b>
+              </div>
+              <div>
+                <span>Beta</span>
+                <b>0.0000</b>
+              </div>
+              <div>
+                <span>VaR 95</span>
+                <b>0.00 USDC</b>
+              </div>
+            </div>
           </div>
           <form id="analyze-form" class="analyze-form">
-            <input id="asset-input" placeholder="BTC" value="BTC" />
-            <input id="context-input" placeholder="Optional context" />
+            <label>
+              <span>Market</span>
+              <input id="asset-input" placeholder="BTC" value="BTC" />
+            </label>
+            <label>
+              <span>Context</span>
+              <input id="context-input" placeholder="Optional context" />
+            </label>
             <button class="primary" type="submit">Analyze</button>
           </form>
+        </section>
+
+        <section class="metrics-strip" id="metrics-strip" aria-label="Portfolio metrics">
+          <article>
+            <span>Exposure</span>
+            <b>0.00</b>
+          </article>
+          <article>
+            <span>Drawdown</span>
+            <b>0.00%</b>
+          </article>
+          <article>
+            <span>Sharpe</span>
+            <b>0.0000</b>
+          </article>
+          <article>
+            <span>BTC corr</span>
+            <b>0.0000</b>
+          </article>
         </section>
 
         <section class="analysis-grid">
           <article class="panel thesis-panel">
             <div class="panel-head">
               <div>
-                <span class="eyebrow">Human mode</span>
-                <h2>Proposal</h2>
+                <span class="eyebrow">Trade idea</span>
+                <h2>Agent read</h2>
               </div>
               <span id="decision-pill" class="pill">no proposal</span>
             </div>
@@ -142,6 +203,7 @@
     </main>
 
     <div id="toast" role="status" aria-live="polite"></div>
-    <script src="/static/app.js?v=trading-cockpit-20260606"></script>
+    <script src="/static/app.js?v=consumer-trading-20260607-privy-configured-2"></script>
+    <script type="module" src="/static/privy.js?v=trading-cockpit-20260607-privy-configured-2"></script>
   </body>
 </html>
