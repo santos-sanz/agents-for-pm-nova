@@ -11,6 +11,16 @@ function setStatus(value) {
   if (el) el.textContent = value;
 }
 
+function errorMessage(error) {
+  if (error instanceof Error && error.message) return error.message;
+  if (typeof error === "string") return error;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return "Unexpected Privy error";
+  }
+}
+
 function walletFromUser(user) {
   if (!user) return null;
   const linked = user.linkedAccounts || user.linked_accounts || [];
@@ -53,6 +63,7 @@ async function ensurePrivy() {
 
   const iframe = document.createElement("iframe");
   iframe.src = privyClient.embeddedWallet.getURL();
+  const iframeOrigin = new URL(iframe.src).origin;
   iframe.title = "Privy secure wallet context";
   iframe.hidden = true;
   document.body.appendChild(iframe);
@@ -61,6 +72,7 @@ async function ensurePrivy() {
     () => {
       privyClient.setMessagePoster(iframe.contentWindow);
       window.addEventListener("message", (event) => {
+        if (event.source !== iframe.contentWindow || event.origin !== iframeOrigin) return;
         privyClient.embeddedWallet.onMessage(event.data);
       });
     },
@@ -126,7 +138,7 @@ document.addEventListener("click", async (event) => {
     if (action === "privy-create-wallet") await createOrLinkWallet();
   } catch (error) {
     setStatus("error");
-    window.hyperDemo.toast(error.message);
+    window.hyperDemo.toast(errorMessage(error));
   }
 });
 

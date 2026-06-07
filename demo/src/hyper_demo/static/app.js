@@ -85,12 +85,13 @@ function renderRuntime() {
 function renderSetup() {
   const setup = state.setup || {};
   $("#claude-status").textContent = `Claude: ${setup.anthropic_configured ? "ready" : "fallback"}`;
-  const hyperliquidReady =
-    setup.hyperliquid_configured ||
-    (setup.privy_execution_enabled && setup.privy_server_configured);
-  $("#hyperliquid-status").textContent = `Hyperliquid: ${
-    hyperliquidReady ? "Privy ready" : "missing creds"
-  }`;
+  let hyperliquidStatus = "missing creds";
+  if (setup.hyperliquid_configured) {
+    hyperliquidStatus = "ready";
+  } else if (setup.privy_execution_enabled && setup.privy_server_configured) {
+    hyperliquidStatus = "Privy ready";
+  }
+  $("#hyperliquid-status").textContent = `Hyperliquid: ${hyperliquidStatus}`;
   const privyStatus = $("#privy-status");
   if (privyStatus && privyStatus.textContent === "checking") {
     privyStatus.textContent = setup.privy_configured ? "configured" : "missing config";

@@ -196,17 +196,17 @@ def save_connected_wallet(request: ConnectedWalletRequest) -> ConnectedWallet:
 def setup_privy_agent_wallet():
     store = get_store()
     runtime = get_runtime(store)
-    settings = settings_for_runtime(runtime)
     current = store.get("privy_agent_wallet", "privy_agent_wallet")
     connected_wallet = store.get("connected_wallet", "connected_wallet")
     try:
+        settings = settings_for_runtime(runtime)
         agent = PrivyHyperliquidAdapter(settings).setup_agent_wallet(
             runtime.network,
             current,
             master_wallet_id=connected_wallet.wallet_id if connected_wallet else None,
             master_wallet_address=connected_wallet.address if connected_wallet else None,
         )
-    except ExecutionBlocked as exc:
+    except (ExecutionBlocked, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     store.save("privy_agent_wallet", agent)
     store.append_event(
