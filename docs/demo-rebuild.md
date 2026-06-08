@@ -1,4 +1,4 @@
-# Rebuild Guide: Hyperliquid Claude Trading Agent Demo
+# Rebuild Guide: HyperClaude
 
 This guide recreates the demo from a clean clone. The demo is Hyperliquid-only and defaults
 to testnet auto-execution when credentials and guardrails pass.
