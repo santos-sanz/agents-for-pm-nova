@@ -15,6 +15,7 @@ from hyper_demo.models import (
     RuntimeNetwork,
     RuntimeSettings,
     TradePlan,
+    normalize_asset_symbol,
 )
 from hyper_demo.services.hypertracker import (
     HyperTrackerClient,
@@ -59,7 +60,7 @@ async def analyze_trade(
     base_settings: Settings | None = None,
 ) -> AgentTradeResult:
     effective_settings = settings_for_runtime(runtime, base_settings)
-    normalized = asset.strip().upper().replace("-PERP", "")
+    normalized = normalize_asset_symbol(asset)
     append_agent_event(
         store,
         f"Analyzing {normalized} on Hyperliquid {runtime.network}.",
@@ -257,7 +258,10 @@ def _execute_plan_with_configured_adapter(
     confirmation_phrase: str | None,
 ):
     if effective_settings.privy_execution_enabled:
-        agent = store.get("privy_agent_wallet", "privy_agent_wallet")
+        agent = store.get("privy_agent_wallet", f"privy_agent_wallet_{runtime.network.value}")
+        legacy_agent = store.get("privy_agent_wallet", "privy_agent_wallet")
+        if not agent and legacy_agent and legacy_agent.network == runtime.network:
+            agent = legacy_agent
         if not agent:
             raise ExecutionBlocked("Initialize a Privy Hyperliquid agent wallet first.")
         return PrivyHyperliquidAdapter(effective_settings).execute_plan(

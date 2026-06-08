@@ -48,6 +48,23 @@ class UIMode(StrEnum):
     robot = "robot"
 
 
+def normalize_asset_symbol(value: str) -> str:
+    cleaned = value.strip().replace("-PERP", "")
+    if ":" not in cleaned:
+        return cleaned.upper()
+    dex, symbol = cleaned.split(":", 1)
+    return f"{dex.lower()}:{symbol.upper()}"
+
+
+def normalize_asset_list(value: list[str]) -> list[str]:
+    normalized = []
+    for asset in value:
+        cleaned = normalize_asset_symbol(asset)
+        if cleaned and cleaned not in normalized:
+            normalized.append(cleaned)
+    return normalized
+
+
 class ExecutionDecision(StrEnum):
     proposed = "proposed"
     auto_executed = "auto_executed"
@@ -86,7 +103,7 @@ class PrivyAgentWallet(BaseModel):
     master_wallet_address: str
     agent_wallet_id: str
     agent_wallet_address: str
-    agent_name: str = "Nova Agent"
+    agent_name: str = "HyperClaude"
     registered: bool = False
     raw_response: dict[str, Any] = Field(default_factory=dict)
 
@@ -108,17 +125,19 @@ class RuntimeSettings(BaseModel):
     watchlist: list[str] = Field(default_factory=lambda: ["BTC", "ETH", "SOL", "HYPE"])
     max_order_usdc: float = Field(default=100.0, gt=0)
     allowed_assets: list[str] = Field(default_factory=lambda: ["BTC", "ETH", "SOL", "HYPE"])
+    sync_asset_lists: bool = True
     require_prodnet_phrase: bool = True
 
     @field_validator("watchlist", "allowed_assets")
     @classmethod
     def normalize_assets(cls, value: list[str]) -> list[str]:
-        normalized = []
-        for asset in value:
-            cleaned = asset.strip().upper().replace("-PERP", "")
-            if cleaned and cleaned not in normalized:
-                normalized.append(cleaned)
-        return normalized
+        return normalize_asset_list(value)
+
+    @model_validator(mode="after")
+    def sync_assets_when_enabled(self) -> RuntimeSettings:
+        if self.sync_asset_lists:
+            self.watchlist = list(self.allowed_assets)
+        return self
 
 
 class RuntimeSettingsUpdate(BaseModel):
@@ -128,6 +147,7 @@ class RuntimeSettingsUpdate(BaseModel):
     watchlist: list[str] | None = None
     max_order_usdc: float | None = Field(default=None, gt=0)
     allowed_assets: list[str] | None = None
+    sync_asset_lists: bool | None = None
     require_prodnet_phrase: bool | None = None
 
     @field_validator("watchlist", "allowed_assets")
@@ -135,7 +155,7 @@ class RuntimeSettingsUpdate(BaseModel):
     def normalize_optional_assets(cls, value: list[str] | None) -> list[str] | None:
         if value is None:
             return None
-        return RuntimeSettings(watchlist=value).watchlist
+        return normalize_asset_list(value)
 
 
 class RiskProfileInput(BaseModel):
@@ -149,7 +169,7 @@ class RiskProfileInput(BaseModel):
     @field_validator("asset_preference")
     @classmethod
     def normalize_asset(cls, value: str) -> str:
-        return value.strip().upper().replace("-PERP", "")
+        return normalize_asset_symbol(value)
 
 
 class InvestorProfile(BaseModel):
@@ -171,7 +191,7 @@ class ResearchRequest(BaseModel):
     @field_validator("asset")
     @classmethod
     def normalize_asset(cls, value: str) -> str:
-        return value.strip().upper().replace("-PERP", "")
+        return normalize_asset_symbol(value)
 
 
 class ResearchReport(BaseModel):
@@ -198,7 +218,7 @@ class ProposalRequest(BaseModel):
     @field_validator("asset")
     @classmethod
     def normalize_asset(cls, value: str) -> str:
-        return value.strip().upper().replace("-PERP", "")
+        return normalize_asset_symbol(value)
 
 
 class TradePlan(BaseModel):

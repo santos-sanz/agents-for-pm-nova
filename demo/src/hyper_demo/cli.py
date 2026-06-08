@@ -23,7 +23,7 @@ from hyper_demo.services.trading_agent import (
 )
 from hyper_demo.storage import JsonStore
 
-app = typer.Typer(help="Hyperliquid Claude trading agent demo CLI.")
+app = typer.Typer(help="HyperClaude trading agent demo CLI.")
 console = Console()
 
 

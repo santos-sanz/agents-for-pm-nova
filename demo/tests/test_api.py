@@ -151,14 +151,36 @@ def test_prodnet_confirmation_requires_phrase(tmp_path, monkeypatch) -> None:
     assert "CONFIRM MAINNET ORDER" in response.json()["detail"]
 
 
-def test_runtime_rejects_prodnet_when_disabled(tmp_path, monkeypatch) -> None:
+def test_runtime_accepts_prodnet_selection_when_execution_disabled(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("HYPERLIQUID_MAINNET_ENABLED", "false")
     client = TestClient(app)
 
     response = client.post("/api/settings/runtime", json={"network": "prodnet"})
 
-    assert response.status_code == 400
+    assert response.status_code == 200
+    assert response.json()["network"] == "prodnet"
+    state = client.get("/api/state").json()
+    assert any("Execution remains blocked" in item for item in state["setup"]["warnings"])
+
+
+def test_runtime_syncs_asset_lists_when_enabled(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/settings/runtime",
+        json={
+            "sync_asset_lists": True,
+            "allowed_assets": ["BTC", "xyz:SPCX"],
+            "watchlist": ["ETH"],
+        },
+    )
+
+    assert response.status_code == 200
+    runtime = response.json()
+    assert runtime["allowed_assets"] == ["BTC", "xyz:SPCX"]
+    assert runtime["watchlist"] == ["BTC", "xyz:SPCX"]
 
 
 def test_connected_privy_wallet_is_saved_in_state(tmp_path, monkeypatch) -> None:
@@ -213,6 +235,71 @@ def test_setup_privy_agent_wallet_saves_agent(tmp_path, monkeypatch) -> None:
     assert response.status_code == 200
     state = client.get("/api/state").json()
     assert state["privy_agent_wallet"]["agent_wallet_id"] == "agent-id"
+
+
+def test_setup_privy_agent_wallet_is_scoped_by_network(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("PRIVY_EXECUTION_ENABLED", "true")
+    monkeypatch.setenv("PRIVY_APP_ID", "app")
+    monkeypatch.setenv("PRIVY_APP_SECRET", "secret")
+    monkeypatch.setenv("HYPERLIQUID_MAINNET_ENABLED", "true")
+
+    def fake_setup(
+        self,
+        network,
+        current=None,
+        master_wallet_id=None,
+        master_wallet_address=None,
+    ):
+        suffix = network.value
+        return PrivyAgentWallet(
+            network=network,
+            master_wallet_id=f"master-{suffix}",
+            master_wallet_address="0x0000000000000000000000000000000000000000",
+            agent_wallet_id=f"agent-{suffix}",
+            agent_wallet_address="0x0000000000000000000000000000000000000001",
+            registered=True,
+        )
+
+    monkeypatch.setattr(
+        "hyper_demo.api.PrivyHyperliquidAdapter.setup_agent_wallet",
+        fake_setup,
+    )
+    client = TestClient(app)
+
+    testnet = client.post("/api/privy/agent-wallet")
+    assert testnet.status_code == 200
+    client.post("/api/settings/runtime", json={"network": "prodnet"})
+    prodnet = client.post("/api/privy/agent-wallet")
+
+    assert prodnet.status_code == 200
+    store = JsonStore()
+    testnet_agent = store.get("privy_agent_wallet", "privy_agent_wallet_testnet")
+    prodnet_agent = store.get("privy_agent_wallet", "privy_agent_wallet_prodnet")
+    active_agent = client.get("/api/state").json()["privy_agent_wallet"]
+
+    assert testnet_agent.agent_wallet_id == "agent-testnet"
+    assert prodnet_agent.agent_wallet_id == "agent-prodnet"
+    assert active_agent["agent_wallet_id"] == "agent-prodnet"
+
+
+def test_setup_privy_agent_wallet_blocks_mainnet_without_enable_flag(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("PRIVY_EXECUTION_ENABLED", "true")
+    monkeypatch.setenv("PRIVY_APP_ID", "app")
+    monkeypatch.setenv("PRIVY_APP_SECRET", "secret")
+    monkeypatch.setenv("HYPERLIQUID_MAINNET_ENABLED", "false")
+    store = JsonStore()
+    store.save("runtime", RuntimeSettings(network="prodnet"))
+    client = TestClient(app)
+
+    response = client.post("/api/privy/agent-wallet")
+
+    assert response.status_code == 400
+    assert "Prodnet agent registration is disabled" in response.json()["detail"]
 
 
 def test_privy_execution_uses_privy_adapter(tmp_path, monkeypatch) -> None:

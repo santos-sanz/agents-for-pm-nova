@@ -1,4 +1,4 @@
-# Hyperliquid Claude Trading Agent Demo
+# HyperClaude
 
 English-language demo app for a Claude Managed Agents trading cockpit on Hyperliquid.
 

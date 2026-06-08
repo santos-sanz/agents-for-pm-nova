@@ -27,6 +27,16 @@ function requireEnv(name) {
   return value;
 }
 
+function formatError(error) {
+  const parts = [];
+  let current = error;
+  while (current) {
+    parts.push(current?.stack || current?.message || String(current));
+    current = current.cause;
+  }
+  return parts.join("\nCaused by: ");
+}
+
 function transportFor(network) {
   return new hl.HttpTransport({ isTestnet: network !== "prodnet" });
 }
@@ -62,10 +72,18 @@ async function withRetries(label, action, attempts = 3) {
 }
 
 function viemAccount(privy, wallet) {
-  return createViemAccount(privy, {
+  const account = createViemAccount(privy, {
     walletId: wallet.id,
     address: wallet.address,
   });
+
+  const signTypedData = account.signTypedData.bind(account);
+  account.signTypedData = async (typedData) => {
+    const { EIP712Domain, ...types } = typedData.types || {};
+    return signTypedData({ ...typedData, types });
+  };
+
+  return account;
 }
 
 async function assetContext(transport, asset) {
@@ -107,7 +125,7 @@ async function setupAgent(input) {
   const privy = privyClient();
   const network = input.network || "testnet";
   const transport = transportFor(network);
-  const agentName = input.agentName || "Nova Agent";
+  const agentName = input.agentName || "HyperClaude";
 
   const masterWallet = input.masterWalletId && input.masterWalletAddress
     ? { id: input.masterWalletId, address: input.masterWalletAddress }
@@ -267,6 +285,6 @@ try {
   else throw new Error(`Unknown command: ${command}`);
   process.stdout.write(JSON.stringify(output));
 } catch (error) {
-  process.stderr.write(error?.stack || error?.message || String(error));
+  process.stderr.write(formatError(error));
   process.exit(1);
 }

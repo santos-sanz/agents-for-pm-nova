@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from hyper_demo.models import RuntimeNetwork, RuntimeSettings
+from hyper_demo.models import RuntimeNetwork, RuntimeSettings, normalize_asset_symbol
 
 TESTNET_HTTP_HOSTS = {"api.hyperliquid-testnet.xyz"}
 TESTNET_WS_HOSTS = {"api.hyperliquid-testnet.xyz"}
@@ -162,7 +162,7 @@ class Settings(BaseSettings):
     @property
     def allowed_assets_set(self) -> set[str]:
         return {
-            asset.strip().upper().replace("-PERP", "")
+            normalize_asset_symbol(asset)
             for asset in self.hyperliquid_allowed_assets.split(",")
             if asset.strip()
         }
@@ -172,12 +172,11 @@ def settings_for_runtime(runtime: RuntimeSettings, base: Settings | None = None)
     """Derive exchange URLs from the selected runtime network.
 
     The UI can select testnet/prodnet, but it cannot inject exchange URLs.
+    Mainnet execution is still gated by HYPERLIQUID_MAINNET_ENABLED in the
+    execution adapters.
     """
 
     base = base or get_settings()
-    if runtime.network == RuntimeNetwork.prodnet and not base.hyperliquid_mainnet_enabled:
-        raise ValueError("Prodnet requires HYPERLIQUID_MAINNET_ENABLED=true.")
-
     if runtime.network == RuntimeNetwork.prodnet:
         return base.model_copy(
             update={
