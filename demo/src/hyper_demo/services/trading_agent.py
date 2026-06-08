@@ -15,6 +15,10 @@ from hyper_demo.models import (
     RuntimeSettings,
     TradePlan,
 )
+from hyper_demo.services.hypertracker import (
+    HyperTrackerClient,
+    enrich_research_with_market_intelligence,
+)
 from hyper_demo.services.market import MarketDataClient
 from hyper_demo.services.proposals import build_trade_plan
 from hyper_demo.services.risk import build_investor_profile
@@ -69,7 +73,15 @@ async def analyze_trade(
     )
     store.save("profiles", profile)
     report = await ManagedAgentResearchClient(effective_settings).research(normalized, profile)
+    intelligence = HyperTrackerClient(effective_settings).intelligence_for_asset(normalized)
+    report = enrich_research_with_market_intelligence(report, intelligence)
     store.save("research", report)
+    if intelligence.available:
+        append_agent_event(
+            store,
+            "HyperTracker market intelligence added to research.",
+            payload={"asset": normalized, "evidence_count": len(intelligence.evidence)},
+        )
     plan = build_trade_plan(
         ProposalRequest(asset=normalized, profile_id=profile.id, research_id=report.id),
         profile,

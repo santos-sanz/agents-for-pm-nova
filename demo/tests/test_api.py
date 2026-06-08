@@ -2,6 +2,7 @@ from fastapi.testclient import TestClient
 
 from hyper_demo.api import app
 from hyper_demo.models import OrderRecord, RuntimeSettings, TradePlan
+from hyper_demo.services.hypertracker import MarketIntelligence
 from hyper_demo.storage import JsonStore
 
 
@@ -21,6 +22,48 @@ def test_agent_analyze_creates_trade_proposal(tmp_path, monkeypatch) -> None:
     events = client.get("/api/agent/events")
     assert events.status_code == 200
     assert len(events.json()) >= 2
+
+
+def test_agent_analyze_adds_hypertracker_evidence(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+
+    def fake_intelligence(self, asset):
+        return MarketIntelligence(
+            asset=asset,
+            evidence=["HyperTracker shows aggregate BTC perpetual exposure near $125.00M."],
+            risks=["HyperTracker positioning is crowded long on BTC, raising squeeze risk."],
+            assumptions=[],
+            sources=["HyperTracker /api/external/position-metrics/coin/{asset}"],
+            available=True,
+        )
+
+    monkeypatch.setattr(
+        "hyper_demo.services.trading_agent.HyperTrackerClient.intelligence_for_asset",
+        fake_intelligence,
+    )
+    client = TestClient(app)
+
+    response = client.post("/api/agent/analyze", json={"asset": "BTC"})
+
+    assert response.status_code == 200
+    plan = response.json()["plan"]
+    assert any("HyperTracker shows aggregate BTC" in item for item in plan["evidence"])
+    events = client.get("/api/agent/events").json()
+    assert any("HyperTracker market intelligence added" in event["message"] for event in events)
+
+
+def test_setup_check_reflects_hypertracker_status(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("HYPERTRACKER_API_KEY", "")
+    client = TestClient(app)
+
+    response = client.get("/api/setup-check")
+
+    assert response.status_code == 200
+    setup = response.json()
+    assert setup["hypertracker_configured"] is False
+    assert any("market intelligence enrichment disabled" in item for item in setup["warnings"])
 
 
 def test_proactive_scan_generates_event_and_plan(tmp_path, monkeypatch) -> None:

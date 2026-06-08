@@ -53,6 +53,7 @@ class SetupCheck(BaseModel):
     trading_mode: str
     require_confirmation: bool
     anthropic_configured: bool
+    hypertracker_configured: bool
     hyperliquid_configured: bool
     hyperliquid_base_url: str
     hyperliquid_ws_url: str
@@ -77,6 +78,8 @@ def setup_check(settings: Settings | None = None) -> SetupCheck:
     warnings: list[str] = []
     if not settings.has_anthropic_credentials:
         warnings.append("ANTHROPIC_API_KEY is missing; research will use fallback output.")
+    if not settings.has_hypertracker_credentials:
+        warnings.append("HYPERTRACKER_API_KEY is missing; market intelligence enrichment disabled.")
     if not settings.has_hyperliquid_credentials:
         warnings.append("Hyperliquid credentials are missing; exchange execution is blocked.")
     if settings.is_mainnet_mode and not settings.hyperliquid_mainnet_enabled:
@@ -89,6 +92,7 @@ def setup_check(settings: Settings | None = None) -> SetupCheck:
         trading_mode=settings.demo_trading_mode,
         require_confirmation=settings.demo_require_confirmation,
         anthropic_configured=settings.has_anthropic_credentials,
+        hypertracker_configured=settings.has_hypertracker_credentials,
         hyperliquid_configured=settings.has_hyperliquid_credentials,
         hyperliquid_base_url=settings.hyperliquid_base_url,
         hyperliquid_ws_url=settings.hyperliquid_ws_url,
