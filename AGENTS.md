@@ -1,5 +1,15 @@
 # AGENTS.md - agents-for-pm-nova
 
+## Remote Synchronization
+
+- Before making any repository change, make sure the local branches are updated from the remote.
+- Treat the remote repository as the source of truth.
+- The first command to run before editing files is:
+
+```bash
+git pull
+```
+
 ## Repository Structure
 
 - Root: Slidev presentation and talk materials managed with npm/Node.js.
