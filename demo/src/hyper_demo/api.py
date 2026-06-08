@@ -9,8 +9,10 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from hyper_demo.adapters.hyperliquid import ExecutionBlocked, HyperliquidAdapter
+from hyper_demo.adapters.privy_hyperliquid import PrivyHyperliquidAdapter
 from hyper_demo.config import Settings, get_settings, settings_for_runtime
 from hyper_demo.models import (
+    ConnectedWallet,
     OrderRecord,
     PortfolioMetrics,
     PositionSnapshot,
@@ -61,7 +63,23 @@ class SetupCheck(BaseModel):
     hyperliquid_max_order_usdc: float
     hyperliquid_allowed_assets: list[str]
     hyperliquid_account_address: str | None
+    privy_configured: bool
+    privy_server_configured: bool
+    privy_execution_enabled: bool
     warnings: list[str]
+
+
+class PrivyPublicConfig(BaseModel):
+    app_id: str | None
+    client_id: str | None
+    configured: bool
+
+
+class ConnectedWalletRequest(BaseModel):
+    address: str
+    user_id: str | None = None
+    email: str | None = None
+    wallet_id: str | None = None
 
 
 def get_store() -> JsonStore:
@@ -77,7 +95,9 @@ def setup_check(settings: Settings | None = None) -> SetupCheck:
     warnings: list[str] = []
     if not settings.has_anthropic_credentials:
         warnings.append("ANTHROPIC_API_KEY is missing; research will use fallback output.")
-    if not settings.has_hyperliquid_credentials:
+    if not settings.has_hyperliquid_credentials and not (
+        settings.privy_execution_enabled and settings.has_privy_server_credentials
+    ):
         warnings.append("Hyperliquid credentials are missing; exchange execution is blocked.")
     if settings.is_mainnet_mode and not settings.hyperliquid_mainnet_enabled:
         warnings.append("Mainnet mode selected, but HYPERLIQUID_MAINNET_ENABLED is false.")
@@ -85,6 +105,8 @@ def setup_check(settings: Settings | None = None) -> SetupCheck:
         warnings.append("Mainnet mode should keep DEMO_REQUIRE_CONFIRMATION=true.")
     if settings.demo_require_confirmation:
         warnings.append("Order confirmation is enabled, as required for the demo.")
+    if settings.privy_execution_enabled and not settings.has_privy_server_credentials:
+        warnings.append("Privy execution is enabled, but PRIVY_APP_SECRET is missing.")
     return SetupCheck(
         trading_mode=settings.demo_trading_mode,
         require_confirmation=settings.demo_require_confirmation,
@@ -97,6 +119,9 @@ def setup_check(settings: Settings | None = None) -> SetupCheck:
         hyperliquid_max_order_usdc=settings.hyperliquid_max_order_usdc,
         hyperliquid_allowed_assets=sorted(settings.allowed_assets_set),
         hyperliquid_account_address=_mask_address(settings.hyperliquid_account_address),
+        privy_configured=settings.has_privy_config,
+        privy_server_configured=settings.has_privy_server_credentials,
+        privy_execution_enabled=settings.privy_execution_enabled,
         warnings=warnings,
     )
 
@@ -130,7 +155,68 @@ def api_state() -> dict[str, Any]:
         "runtime": runtime,
         "events": store.events_for_run(AGENT_RUN_ID),
         "setup": setup,
+        "connected_wallet": store.get("connected_wallet", "connected_wallet"),
+        "privy_agent_wallet": store.get("privy_agent_wallet", "privy_agent_wallet"),
     }
+
+
+@app.get("/api/privy/config", response_model=PrivyPublicConfig)
+def get_privy_config() -> PrivyPublicConfig:
+    settings = get_settings()
+    return PrivyPublicConfig(
+        app_id=settings.privy_app_id,
+        client_id=settings.privy_client_id,
+        configured=settings.has_privy_config,
+    )
+
+
+@app.post("/api/wallet/connected", response_model=ConnectedWallet)
+def save_connected_wallet(request: ConnectedWalletRequest) -> ConnectedWallet:
+    store = get_store()
+    wallet = store.save(
+        "connected_wallet",
+        ConnectedWallet(
+            address=request.address,
+            user_id=request.user_id,
+            email=request.email,
+            wallet_id=request.wallet_id,
+        ),
+    )
+    store.append_event(
+        RunEvent(
+            run_id=AGENT_RUN_ID,
+            message=f"Privy wallet connected: {_mask_address(wallet.address)}.",
+            payload=wallet.model_dump(mode="json"),
+        )
+    )
+    return wallet
+
+
+@app.post("/api/privy/agent-wallet")
+def setup_privy_agent_wallet():
+    store = get_store()
+    runtime = get_runtime(store)
+    current = store.get("privy_agent_wallet", "privy_agent_wallet")
+    connected_wallet = store.get("connected_wallet", "connected_wallet")
+    try:
+        settings = settings_for_runtime(runtime)
+        agent = PrivyHyperliquidAdapter(settings).setup_agent_wallet(
+            runtime.network,
+            current,
+            master_wallet_id=connected_wallet.wallet_id if connected_wallet else None,
+            master_wallet_address=connected_wallet.address if connected_wallet else None,
+        )
+    except (ExecutionBlocked, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    store.save("privy_agent_wallet", agent)
+    store.append_event(
+        RunEvent(
+            run_id=AGENT_RUN_ID,
+            message=f"Privy Hyperliquid agent wallet ready on {agent.network}.",
+            payload=agent.model_dump(mode="json"),
+        )
+    )
+    return agent
 
 
 @app.post("/api/settings/runtime", response_model=RuntimeSettings)
@@ -233,6 +319,12 @@ def api_reject_trade(plan_id: str):
 def get_wallet_state():
     runtime = get_runtime()
     try:
+        settings = settings_for_runtime(runtime)
+        if settings.privy_execution_enabled:
+            agent = get_store().get("privy_agent_wallet", "privy_agent_wallet")
+            if not agent:
+                raise ExecutionBlocked("Initialize a Privy Hyperliquid agent wallet first.")
+            return PrivyHyperliquidAdapter(settings).wallet_state(agent)
         return HyperliquidAdapter(settings_for_runtime(runtime)).wallet_state()
     except (ExecutionBlocked, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

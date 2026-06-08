@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from hyper_demo.adapters.anthropic_managed import ManagedAgentResearchClient
 from hyper_demo.adapters.hyperliquid import ExecutionBlocked, HyperliquidAdapter
+from hyper_demo.adapters.privy_hyperliquid import PrivyHyperliquidAdapter
 from hyper_demo.config import Settings, settings_for_runtime
 from hyper_demo.models import (
     DemoRun,
@@ -140,7 +141,14 @@ def maybe_execute_trade(
         return AgentTradeResult(plan=plan)
 
     try:
-        order = HyperliquidAdapter(effective_settings).execute_plan(plan, confirmed=True)
+        order = _execute_plan_with_configured_adapter(
+            plan,
+            runtime,
+            store,
+            effective_settings,
+            confirmed=True,
+            confirmation_phrase=None,
+        )
     except ExecutionBlocked as exc:
         plan.execution_decision = ExecutionDecision.blocked
         plan.execution_message = str(exc)
@@ -184,8 +192,11 @@ def manual_execute_trade(
 ) -> AgentTradeResult:
     effective_settings = settings_for_runtime(runtime, base_settings)
     try:
-        order = HyperliquidAdapter(effective_settings).execute_plan(
+        order = _execute_plan_with_configured_adapter(
             plan,
+            runtime,
+            store,
+            effective_settings,
             confirmed=confirmed,
             confirmation_phrase=confirmation_phrase,
         )
@@ -223,6 +234,31 @@ def manual_execute_trade(
         payload={"plan_id": plan.id, "order_id": order.id, "run_id": run.id},
     )
     return AgentTradeResult(plan=plan, order_id=order.id, run_id=run.id)
+
+
+def _execute_plan_with_configured_adapter(
+    plan: TradePlan,
+    runtime: RuntimeSettings,
+    store: JsonStore,
+    effective_settings: Settings,
+    confirmed: bool,
+    confirmation_phrase: str | None,
+):
+    if effective_settings.privy_execution_enabled:
+        agent = store.get("privy_agent_wallet", "privy_agent_wallet")
+        if not agent:
+            raise ExecutionBlocked("Initialize a Privy Hyperliquid agent wallet first.")
+        return PrivyHyperliquidAdapter(effective_settings).execute_plan(
+            plan,
+            runtime_agent=agent,
+            confirmed=confirmed,
+            confirmation_phrase=confirmation_phrase,
+        )
+    return HyperliquidAdapter(effective_settings).execute_plan(
+        plan,
+        confirmed=confirmed,
+        confirmation_phrase=confirmation_phrase,
+    )
 
 
 def reject_trade(plan: TradePlan, store: JsonStore) -> TradePlan:

@@ -10,9 +10,11 @@ from pydantic import BaseModel, ValidationError
 
 from hyper_demo.config import Settings, get_settings
 from hyper_demo.models import (
+    ConnectedWallet,
     DemoRun,
     InvestorProfile,
     OrderRecord,
+    PrivyAgentWallet,
     ResearchReport,
     RunEvent,
     RuntimeSettings,
@@ -34,6 +36,8 @@ class JsonStore:
         "runs": DemoRun,
         "events": RunEvent,
         "runtime": RuntimeSettings,
+        "connected_wallet": ConnectedWallet,
+        "privy_agent_wallet": PrivyAgentWallet,
     }
 
     def __init__(self, settings: Settings | None = None) -> None:
