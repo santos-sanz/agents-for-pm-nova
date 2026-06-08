@@ -3,89 +3,33 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Nova Trading Agent</title>
-    <link rel="stylesheet" href="/static/styles.css?v=consumer-trading-20260607" />
+    <title>HyperClaude</title>
+    <link rel="stylesheet" href="/static/styles.css?v=hyperclaude-search-picker-20260608-1" />
   </head>
-  <body>
+  <body class="trading-screen" data-screen="trading">
     <header class="topbar">
       <a class="brand" href="/">
-        <span class="brand-mark">HL</span>
+        <span class="brand-mark">HC</span>
         <span>
-          <strong>Nova Trading Agent</strong>
-          <small>Hyperliquid markets</small>
+          <strong>HyperClaude</strong>
+          <small>Hyperliquid agent</small>
         </span>
       </a>
+      <nav class="app-nav" aria-label="Primary">
+        <button class="active" data-screen="trading">Trading</button>
+        <button data-screen="settings">Settings</button>
+      </nav>
       <div class="status-strip">
         <span id="claude-status">Claude: checking</span>
         <span id="hypertracker-status">HyperTracker: checking</span>
         <span id="hyperliquid-status">Hyperliquid: checking</span>
         <span id="network-status">testnet</span>
+        <span id="wallet-status" class="wallet-status">No wallet</span>
       </div>
     </header>
 
     <main class="cockpit">
-      <aside class="rail">
-        <section class="panel">
-          <span class="eyebrow">Runtime</span>
-          <div class="segmented" role="group" aria-label="Network">
-            <button id="testnet-button" data-network="testnet">Testnet</button>
-            <button id="prodnet-button" data-network="prodnet">Prodnet</button>
-          </div>
-          <label class="field">
-            View mode
-            <select id="ui-mode">
-              <option value="human">Human</option>
-              <option value="robot">Robot logs</option>
-            </select>
-          </label>
-          <label class="field">
-            Max order USDC
-            <input id="max-order" type="number" min="1" value="100" />
-          </label>
-          <label class="field">
-            Allowed assets
-            <input id="allowed-assets" value="BTC,ETH,SOL,HYPE" />
-          </label>
-          <button class="primary" data-action="save-settings">Save runtime</button>
-        </section>
-
-        <section class="panel">
-          <div class="panel-head">
-            <span class="eyebrow">Watchlist</span>
-            <button data-action="scan">Scan</button>
-          </div>
-          <textarea id="watchlist" rows="7">BTC,ETH,SOL,HYPE</textarea>
-          <small class="muted">Proactive scan selects from this list and auto-executes only on testnet.</small>
-        </section>
-
-        <section class="panel compact-panel">
-          <div class="panel-head">
-            <span class="eyebrow">Privy Wallet</span>
-            <span id="privy-status" class="pill">checking</span>
-          </div>
-          <div id="privy-wallet-summary" class="kv"></div>
-          <label class="field">
-            Email
-            <input id="privy-email" type="email" placeholder="you@example.com" autocomplete="email" />
-          </label>
-          <div class="button-row">
-            <button data-action="privy-send-code">Send code</button>
-            <button data-action="privy-connect">Connect</button>
-          </div>
-          <label class="field">
-            Code
-            <input id="privy-code" inputmode="numeric" autocomplete="one-time-code" />
-          </label>
-          <button class="primary" data-action="privy-create-wallet">Create or link wallet</button>
-          <button data-action="privy-setup-agent">Initialize agent</button>
-        </section>
-
-        <section class="panel compact-panel">
-          <span class="eyebrow">Hyperliquid Wallet</span>
-          <div id="wallet-summary" class="kv"></div>
-          <button data-action="wallet">Refresh wallet</button>
-        </section>
-      </aside>
+      <aside class="rail"></aside>
 
       <section class="mainstage">
         <section class="hero portfolio-hero">
@@ -169,7 +113,7 @@
               Confirm order submission
             </label>
             <label class="field">
-              Prodnet phrase
+              Mainnet phrase
               <input id="mainnet-phrase" placeholder="CONFIRM MAINNET ORDER" />
             </label>
             <div class="button-row">
@@ -179,16 +123,6 @@
           </aside>
         </section>
 
-        <section id="robot-panel" class="panel robot-panel">
-          <div class="panel-head">
-            <div>
-              <span class="eyebrow">Robot mode</span>
-              <h2>Raw state</h2>
-            </div>
-            <button data-action="refresh">Refresh</button>
-          </div>
-          <pre id="raw-output"></pre>
-        </section>
       </section>
 
       <aside class="events-panel">
@@ -201,10 +135,132 @@
         </div>
         <div id="events-list" class="events-list"></div>
       </aside>
+
+      <section id="settings-screen" class="settings-screen" hidden>
+        <div class="settings-hero">
+          <div>
+            <span class="eyebrow">Configuration</span>
+            <h1>Runtime settings</h1>
+            <p>Choose the exchange environment, presentation mode, order limits, and scan universe before running the agent.</p>
+          </div>
+          <button class="primary" data-action="save-settings">Save settings</button>
+        </div>
+
+        <div class="settings-grid">
+          <section class="panel settings-card">
+            <div class="panel-head">
+              <div>
+                <span class="eyebrow">Environment</span>
+                <h2>Network</h2>
+              </div>
+              <span id="settings-network-pill" class="pill">testnet</span>
+            </div>
+            <div class="network-cards" role="group" aria-label="Network">
+              <button id="testnet-button" class="network-card" data-network="testnet">
+                <span>Testnet</span>
+                <b>Auto execution enabled with demo guardrails.</b>
+              </button>
+              <button id="prodnet-button" class="network-card" data-network="prodnet">
+                <span>Mainnet</span>
+                <b>Requires explicit enablement and confirmation phrase.</b>
+              </button>
+            </div>
+          </section>
+
+          <section class="panel settings-card">
+            <div class="panel-head">
+              <div>
+                <span class="eyebrow">Risk controls</span>
+                <h2>Order limits</h2>
+              </div>
+            </div>
+            <label class="field">
+              Max order USDC
+              <input id="max-order" type="number" min="1" value="100" />
+            </label>
+            <label class="switch-row asset-sync-row">
+              <input id="sync-asset-lists" type="checkbox" checked />
+              <span>
+                <b>Use one asset universe</b>
+                <small>Allowed assets and watchlist stay identical.</small>
+              </span>
+            </label>
+            <div class="asset-picker" data-asset-picker="allowed">
+              <div class="picker-title">
+                <span>Allowed assets</span>
+                <button type="button" data-asset-clear="allowed">Clear</button>
+              </div>
+              <input id="allowed-assets" type="hidden" value="BTC,ETH,SOL,HYPE" />
+              <input id="allowed-asset-search" class="asset-search" placeholder="Search Hyperliquid markets" autocomplete="off" />
+              <div id="allowed-asset-options" class="asset-options" aria-label="Allowed asset options"></div>
+            </div>
+          </section>
+
+          <section class="panel settings-card wide sync-watchlist-card">
+            <div class="panel-head">
+              <div>
+                <span class="eyebrow">Scan universe</span>
+                <h2>Watchlist</h2>
+              </div>
+              <button data-action="scan">Scan now</button>
+            </div>
+            <div class="asset-picker" data-asset-picker="watchlist">
+              <div class="picker-title">
+                <span>Scan assets</span>
+                <button type="button" data-asset-clear="watchlist">Clear</button>
+              </div>
+              <input id="watchlist" type="hidden" value="BTC,ETH,SOL,HYPE" />
+              <input id="watchlist-asset-search" class="asset-search" placeholder="Search Hyperliquid markets" autocomplete="off" />
+              <div id="watchlist-asset-options" class="asset-options" aria-label="Watchlist asset options"></div>
+            </div>
+            <small class="muted">Proactive scan selects from this list and auto-executes only on testnet.</small>
+          </section>
+
+          <section id="privy-auth-panel" class="auth-panel settings-wallet-auth" aria-labelledby="privy-auth-title">
+            <div class="auth-copy">
+              <span class="eyebrow">Wallet access</span>
+              <h1 id="privy-auth-title">Connect with Privy</h1>
+              <p>Use your email to create or recover the embedded wallet that signs HyperClaude's Hyperliquid agent flow.</p>
+              <span id="privy-auth-status" class="pill neutral">checking</span>
+            </div>
+            <form id="privy-auth-form" class="auth-form">
+              <label class="field">
+                Email
+                <span class="input-action">
+                  <input id="privy-email" type="email" placeholder="you@example.com" autocomplete="email" />
+                  <button type="button" data-action="privy-send-code">Send code</button>
+                </span>
+              </label>
+              <label class="field">
+                Verification code
+                <input id="privy-code" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code" />
+              </label>
+              <div class="auth-actions">
+                <button class="primary" type="button" data-action="privy-create-wallet">Continue</button>
+                <button type="button" data-action="privy-connect">Verify only</button>
+              </div>
+              <p class="auth-note">No wallet connected. This access panel disappears after a wallet is linked.</p>
+            </form>
+          </section>
+
+          <section id="connected-wallet-panel" class="panel compact-panel connected-wallet-panel settings-card" hidden>
+            <div class="panel-head">
+              <div>
+                <span class="eyebrow">Wallets</span>
+                <h2>Privy wallet</h2>
+              </div>
+              <span id="privy-status" class="pill">checking</span>
+            </div>
+            <div id="privy-wallet-summary" class="kv"></div>
+            <button class="primary" data-action="privy-setup-agent">Initialize agent</button>
+          </section>
+
+        </div>
+      </section>
     </main>
 
     <div id="toast" role="status" aria-live="polite"></div>
-    <script src="/static/app.js?v=consumer-trading-20260607-privy-configured-2"></script>
-    <script type="module" src="/static/privy.js?v=trading-cockpit-20260607-privy-configured-2"></script>
+    <script src="/static/app.js?v=hyperclaude-search-picker-20260608-1"></script>
+    <script type="module" src="/static/privy.js?v=hyperclaude-search-picker-20260608-1"></script>
   </body>
 </html>

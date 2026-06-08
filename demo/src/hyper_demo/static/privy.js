@@ -7,8 +7,9 @@ let privyHelpers = null;
 const $ = (selector) => document.querySelector(selector);
 
 function setStatus(value) {
-  const el = $("#privy-status");
-  if (el) el.textContent = value;
+  for (const el of document.querySelectorAll("#privy-status, #privy-auth-status")) {
+    el.textContent = value;
+  }
 }
 
 function errorMessage(error) {
@@ -136,6 +137,16 @@ document.addEventListener("click", async (event) => {
     if (action === "privy-send-code") await sendCode();
     if (action === "privy-connect") await connect();
     if (action === "privy-create-wallet") await createOrLinkWallet();
+  } catch (error) {
+    setStatus("error");
+    window.hyperDemo.toast(errorMessage(error));
+  }
+});
+
+$("#privy-auth-form")?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    await createOrLinkWallet();
   } catch (error) {
     setStatus("error");
     window.hyperDemo.toast(errorMessage(error));
