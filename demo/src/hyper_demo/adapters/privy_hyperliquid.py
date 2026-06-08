@@ -13,7 +13,14 @@ from hyper_demo.adapters.hyperliquid import (
     _extract_order_id,
 )
 from hyper_demo.config import Settings, get_settings
-from hyper_demo.models import OrderRecord, PrivyAgentWallet, RuntimeNetwork, TradePlan, TradeSide
+from hyper_demo.models import (
+    OrderRecord,
+    PrivyAgentWallet,
+    RuntimeNetwork,
+    TradePlan,
+    TradeSide,
+    normalize_asset_symbol,
+)
 
 SCRIPT_PATH = Path(__file__).resolve().parents[3] / "scripts" / "privy_hyperliquid.mjs"
 DEMO_ROOT = SCRIPT_PATH.parent.parent
@@ -35,7 +42,7 @@ class PrivyHyperliquidAdapter:
         self._validate_privy_config()
         payload: dict[str, Any] = {
             "network": network.value,
-            "agentName": "Nova Agent",
+            "agentName": "HyperClaude",
         }
         if master_wallet_id and master_wallet_address:
             payload.update(
@@ -51,7 +58,7 @@ class PrivyHyperliquidAdapter:
                     "masterWalletAddress": current.master_wallet_address,
                     "agentWalletId": current.agent_wallet_id,
                     "agentWalletAddress": current.agent_wallet_address,
-                    "agentName": current.agent_name,
+                    "agentName": "HyperClaude",
                 }
             )
         result = self._run_helper("setup-agent", payload)
@@ -61,7 +68,7 @@ class PrivyHyperliquidAdapter:
             master_wallet_address=result["masterWallet"]["address"],
             agent_wallet_id=result["agentWallet"]["id"],
             agent_wallet_address=result["agentWallet"]["address"],
-            agent_name=result.get("agentName") or "Nova Agent",
+            agent_name=result.get("agentName") or "HyperClaude",
             registered=bool(result.get("registered")),
             raw_response=result,
         )
@@ -156,7 +163,7 @@ class PrivyHyperliquidAdapter:
             raise ExecutionBlocked("Privy agent wallet network does not match the trade plan.")
         if not plan.stop_loss or not plan.take_profit:
             raise ExecutionBlocked("Stop-loss and take-profit are required before execution.")
-        asset = plan.asset.upper().replace("-PERP", "")
+        asset = normalize_asset_symbol(plan.asset)
         if asset not in self.settings.allowed_assets_set:
             raise ExecutionBlocked(f"{asset} is not in HYPERLIQUID_ALLOWED_ASSETS.")
         if plan.size_usdc > self.settings.hyperliquid_max_order_usdc:

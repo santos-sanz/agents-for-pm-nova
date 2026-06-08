@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from hyper_demo.config import Settings, get_settings
+from hyper_demo.models import normalize_asset_symbol
 
 
 @dataclass(frozen=True)
@@ -27,7 +28,7 @@ class HyperTrackerClient:
         self.timeout = timeout
 
     def intelligence_for_asset(self, asset: str) -> MarketIntelligence:
-        normalized = asset.strip().upper().replace("-PERP", "")
+        normalized = normalize_asset_symbol(asset)
         if not self.settings.has_hypertracker_credentials:
             return MarketIntelligence(
                 asset=normalized,

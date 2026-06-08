@@ -37,7 +37,7 @@ from hyper_demo.storage import JsonStore
 APP_ROOT = Path(__file__).resolve().parent
 STATIC_ROOT = APP_ROOT / "static"
 
-app = FastAPI(title="Hyperliquid Claude Trading Agent Demo", version="0.2.0")
+app = FastAPI(title="HyperClaude", version="0.2.0")
 app.mount("/static", StaticFiles(directory=STATIC_ROOT), name="static")
 
 
@@ -76,6 +76,16 @@ class PrivyPublicConfig(BaseModel):
     configured: bool
 
 
+class MarketAssetResponse(BaseModel):
+    symbol: str
+    max_leverage: int
+    sz_decimals: int
+    mark_price: float | None
+    delisted: bool
+    icon_url: str
+    dex: str | None = None
+
+
 class ConnectedWalletRequest(BaseModel):
     address: str
     user_id: str | None = None
@@ -91,6 +101,20 @@ def get_runtime(store: JsonStore | None = None) -> RuntimeSettings:
     return (store or get_store()).runtime_settings()
 
 
+def privy_agent_wallet_id(network: RuntimeNetwork) -> str:
+    return f"privy_agent_wallet_{network.value}"
+
+
+def get_privy_agent_wallet(store: JsonStore, runtime: RuntimeSettings) -> Any:
+    network_agent = store.get("privy_agent_wallet", privy_agent_wallet_id(runtime.network))
+    if network_agent:
+        return network_agent
+    legacy_agent = store.get("privy_agent_wallet", "privy_agent_wallet")
+    if legacy_agent and legacy_agent.network == runtime.network:
+        return legacy_agent
+    return None
+
+
 def setup_check(settings: Settings | None = None) -> SetupCheck:
     settings = settings or get_settings()
     warnings: list[str] = []
@@ -103,7 +127,10 @@ def setup_check(settings: Settings | None = None) -> SetupCheck:
     ):
         warnings.append("Hyperliquid credentials are missing; exchange execution is blocked.")
     if settings.is_mainnet_mode and not settings.hyperliquid_mainnet_enabled:
-        warnings.append("Mainnet mode selected, but HYPERLIQUID_MAINNET_ENABLED is false.")
+        warnings.append(
+            "Mainnet selected for market data. Execution remains blocked until "
+            "HYPERLIQUID_MAINNET_ENABLED=true."
+        )
     if settings.is_mainnet_mode and not settings.demo_require_confirmation:
         warnings.append("Mainnet mode should keep DEMO_REQUIRE_CONFIRMATION=true.")
     if settings.demo_require_confirmation:
@@ -160,7 +187,7 @@ def api_state() -> dict[str, Any]:
         "events": store.events_for_run(AGENT_RUN_ID),
         "setup": setup,
         "connected_wallet": store.get("connected_wallet", "connected_wallet"),
-        "privy_agent_wallet": store.get("privy_agent_wallet", "privy_agent_wallet"),
+        "privy_agent_wallet": get_privy_agent_wallet(store, runtime),
     }
 
 
@@ -172,6 +199,29 @@ def get_privy_config() -> PrivyPublicConfig:
         client_id=settings.privy_client_id,
         configured=settings.has_privy_config,
     )
+
+
+@app.get("/api/markets/assets", response_model=list[MarketAssetResponse])
+def get_market_assets() -> list[MarketAssetResponse]:
+    store = get_store()
+    runtime = get_runtime(store)
+    try:
+        settings = settings_for_runtime(runtime)
+    except ValueError:
+        settings = get_settings()
+    assets = MarketDataClient(settings).available_assets()
+    return [
+        MarketAssetResponse(
+            symbol=asset.symbol,
+            max_leverage=asset.max_leverage,
+            sz_decimals=asset.sz_decimals,
+            mark_price=asset.mark_price,
+            delisted=asset.delisted,
+            icon_url=asset.icon_url,
+            dex=asset.dex,
+        )
+        for asset in assets
+    ]
 
 
 @app.post("/api/wallet/connected", response_model=ConnectedWallet)
@@ -200,18 +250,26 @@ def save_connected_wallet(request: ConnectedWalletRequest) -> ConnectedWallet:
 def setup_privy_agent_wallet():
     store = get_store()
     runtime = get_runtime(store)
-    current = store.get("privy_agent_wallet", "privy_agent_wallet")
-    connected_wallet = store.get("connected_wallet", "connected_wallet")
+    agent_id = privy_agent_wallet_id(runtime.network)
+    current = store.get("privy_agent_wallet", agent_id)
+    if current and current.network != runtime.network:
+        current = None
     try:
         settings = settings_for_runtime(runtime)
+        if runtime.network.value == "prodnet" and not settings.hyperliquid_mainnet_enabled:
+            raise ExecutionBlocked(
+                "Prodnet agent registration is disabled. Set "
+                "HYPERLIQUID_MAINNET_ENABLED=true in demo/.env, restart the demo server, "
+                "then retry Initialize prodnet agent. This guard prevents accidental "
+                "mainnet approveAgent transactions."
+            )
         agent = PrivyHyperliquidAdapter(settings).setup_agent_wallet(
             runtime.network,
             current,
-            master_wallet_id=connected_wallet.wallet_id if connected_wallet else None,
-            master_wallet_address=connected_wallet.address if connected_wallet else None,
         )
     except (ExecutionBlocked, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    agent.id = agent_id
     store.save("privy_agent_wallet", agent)
     store.append_event(
         RunEvent(
@@ -231,14 +289,6 @@ def update_runtime_settings(update: RuntimeSettingsUpdate) -> RuntimeSettings:
     for key, value in update.model_dump(exclude_none=True).items():
         payload[key] = value
     candidate = RuntimeSettings.model_validate(payload)
-    if (
-        candidate.network == RuntimeNetwork.prodnet
-        and not get_settings().hyperliquid_mainnet_enabled
-    ):
-        raise HTTPException(
-            status_code=400,
-            detail="Prodnet requires HYPERLIQUID_MAINNET_ENABLED=true.",
-        )
     settings_for_runtime(candidate)
     store.save("runtime", candidate)
     store.append_event(
@@ -325,7 +375,8 @@ def get_wallet_state():
     try:
         settings = settings_for_runtime(runtime)
         if settings.privy_execution_enabled:
-            agent = get_store().get("privy_agent_wallet", "privy_agent_wallet")
+            store = get_store()
+            agent = get_privy_agent_wallet(store, runtime)
             if not agent:
                 raise ExecutionBlocked("Initialize a Privy Hyperliquid agent wallet first.")
             return PrivyHyperliquidAdapter(settings).wallet_state(agent)

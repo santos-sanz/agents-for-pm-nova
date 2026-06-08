@@ -7,6 +7,7 @@ from typing import Any
 import websockets
 
 from hyper_demo.config import Settings, get_settings
+from hyper_demo.models import normalize_asset_symbol
 from hyper_demo.services.market import FALLBACK_PRICES, MarketPrice
 
 
@@ -29,13 +30,13 @@ class HyperliquidWebsocketMonitor:
         if payload.get("channel") != "allMids":
             return None
         mids = payload.get("data", {}).get("mids", {})
-        normalized = asset.upper().replace("-PERP", "")
+        normalized = normalize_asset_symbol(asset)
         if normalized not in mids:
             return None
         return MarketPrice(asset=normalized, mark_price=float(mids[normalized]), source="websocket")
 
     async def sample_mark_price(self, asset: str, timeout_seconds: float = 5.0) -> MarketPrice:
-        normalized = asset.upper().replace("-PERP", "")
+        normalized = normalize_asset_symbol(asset)
         try:
             async with websockets.connect(self.settings.hyperliquid_ws_url) as websocket:
                 await websocket.send(json.dumps(self.all_mids_subscription()))

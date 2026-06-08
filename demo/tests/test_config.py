@@ -84,6 +84,28 @@ def test_runtime_derives_testnet_urls() -> None:
     assert settings.hyperliquid_ws_url == "wss://api.hyperliquid-testnet.xyz/ws"
 
 
+def test_runtime_asset_lists_sync_by_default() -> None:
+    runtime = RuntimeSettings(
+        watchlist=["ETH"],
+        allowed_assets=["BTC", "xyz:SPCX"],
+    )
+
+    assert runtime.sync_asset_lists is True
+    assert runtime.allowed_assets == ["BTC", "xyz:SPCX"]
+    assert runtime.watchlist == ["BTC", "xyz:SPCX"]
+
+
+def test_runtime_asset_lists_can_be_independent() -> None:
+    runtime = RuntimeSettings(
+        sync_asset_lists=False,
+        watchlist=["ETH"],
+        allowed_assets=["BTC", "xyz:SPCX"],
+    )
+
+    assert runtime.allowed_assets == ["BTC", "xyz:SPCX"]
+    assert runtime.watchlist == ["ETH"]
+
+
 def test_runtime_derives_prodnet_urls_when_enabled() -> None:
     base = Settings(
         HYPERLIQUID_MAINNET_ENABLED=True,
@@ -99,6 +121,10 @@ def test_runtime_derives_prodnet_urls_when_enabled() -> None:
     assert settings.allowed_assets_set == {"BTC"}
 
 
-def test_runtime_rejects_prodnet_without_enable_flag() -> None:
-    with pytest.raises(ValueError):
-        settings_for_runtime(RuntimeSettings(network="prodnet"), Settings())
+def test_runtime_derives_prodnet_urls_without_enabling_execution() -> None:
+    settings = settings_for_runtime(RuntimeSettings(network="prodnet"), Settings())
+
+    assert settings.demo_trading_mode == "mainnet_guarded"
+    assert settings.hyperliquid_base_url == "https://api.hyperliquid.xyz"
+    assert settings.hyperliquid_ws_url == "wss://api.hyperliquid.xyz/ws"
+    assert settings.hyperliquid_mainnet_enabled is False

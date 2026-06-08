@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from hyper_demo.config import Settings, get_settings
-from hyper_demo.models import OrderRecord, TradePlan, TradeSide
+from hyper_demo.models import OrderRecord, TradePlan, TradeSide, normalize_asset_symbol
 
 
 class ExecutionBlocked(RuntimeError):
@@ -107,7 +107,7 @@ class HyperliquidAdapter:
             )
         if not plan.stop_loss or not plan.take_profit:
             raise ExecutionBlocked("Stop-loss and take-profit are required before execution.")
-        asset = plan.asset.upper().replace("-PERP", "")
+        asset = normalize_asset_symbol(plan.asset)
         if asset not in self.settings.allowed_assets_set:
             raise ExecutionBlocked(
                 f"{asset} is not in HYPERLIQUID_ALLOWED_ASSETS."
