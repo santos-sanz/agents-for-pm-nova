@@ -1,7 +1,7 @@
 from fastapi.testclient import TestClient
 
 from hyper_demo.api import app
-from hyper_demo.models import OrderRecord, RuntimeSettings, TradePlan
+from hyper_demo.models import OrderRecord, PrivyAgentWallet, RuntimeSettings, TradePlan
 from hyper_demo.services.hypertracker import MarketIntelligence
 from hyper_demo.storage import JsonStore
 
@@ -159,6 +159,99 @@ def test_runtime_rejects_prodnet_when_disabled(tmp_path, monkeypatch) -> None:
     response = client.post("/api/settings/runtime", json={"network": "prodnet"})
 
     assert response.status_code == 400
+
+
+def test_connected_privy_wallet_is_saved_in_state(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/wallet/connected",
+        json={
+            "address": "0x0000000000000000000000000000000000000000",
+            "user_id": "privy-user",
+            "email": "pm@example.com",
+        },
+    )
+
+    assert response.status_code == 200
+    state = client.get("/api/state").json()
+    assert state["connected_wallet"]["address"] == "0x0000000000000000000000000000000000000000"
+    assert state["connected_wallet"]["source"] == "privy"
+
+
+def test_setup_privy_agent_wallet_saves_agent(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("PRIVY_EXECUTION_ENABLED", "true")
+    monkeypatch.setenv("PRIVY_APP_ID", "app")
+    monkeypatch.setenv("PRIVY_APP_SECRET", "secret")
+
+    def fake_setup(
+        self,
+        network,
+        current=None,
+        master_wallet_id=None,
+        master_wallet_address=None,
+    ):
+        return PrivyAgentWallet(
+            network=network,
+            master_wallet_id="master-id",
+            master_wallet_address="0x0000000000000000000000000000000000000000",
+            agent_wallet_id="agent-id",
+            agent_wallet_address="0x0000000000000000000000000000000000000001",
+            registered=True,
+        )
+
+    monkeypatch.setattr(
+        "hyper_demo.api.PrivyHyperliquidAdapter.setup_agent_wallet",
+        fake_setup,
+    )
+    client = TestClient(app)
+
+    response = client.post("/api/privy/agent-wallet")
+
+    assert response.status_code == 200
+    state = client.get("/api/state").json()
+    assert state["privy_agent_wallet"]["agent_wallet_id"] == "agent-id"
+
+
+def test_privy_execution_uses_privy_adapter(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("PRIVY_EXECUTION_ENABLED", "true")
+    monkeypatch.setenv("PRIVY_APP_ID", "app")
+    monkeypatch.setenv("PRIVY_APP_SECRET", "secret")
+    store = JsonStore()
+    agent = PrivyAgentWallet(
+        master_wallet_id="master-id",
+        master_wallet_address="0x0000000000000000000000000000000000000000",
+        agent_wallet_id="agent-id",
+        agent_wallet_address="0x0000000000000000000000000000000000000001",
+        registered=True,
+    )
+    store.save("privy_agent_wallet", agent)
+
+    def fake_execute(self, plan, runtime_agent, confirmed, confirmation_phrase=None):
+        assert runtime_agent.agent_wallet_id == "agent-id"
+        assert confirmed is True
+        return OrderRecord(
+            plan_id=plan.id,
+            exchange="hyperliquid-testnet",
+            asset=plan.asset,
+            side=plan.side,
+            size_usdc=plan.size_usdc,
+            message="privy submitted",
+        )
+
+    monkeypatch.setattr(
+        "hyper_demo.services.trading_agent.PrivyHyperliquidAdapter.execute_plan",
+        fake_execute,
+    )
+    client = TestClient(app)
+
+    response = client.post("/api/agent/analyze", json={"asset": "BTC"})
+
+    assert response.status_code == 200
+    assert response.json()["plan"]["execution_message"] == "privy submitted"
 
 
 def test_metrics_endpoint(tmp_path, monkeypatch) -> None:

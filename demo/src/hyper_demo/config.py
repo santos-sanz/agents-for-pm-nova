@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     hypertracker_base_url: str = Field(
         default="https://ht-api.coinmarketman.com", alias="HYPERTRACKER_BASE_URL"
     )
+    privy_app_id: str | None = Field(default=None, alias="PRIVY_APP_ID")
+    privy_client_id: str | None = Field(default=None, alias="PRIVY_CLIENT_ID")
+    privy_app_secret: SecretStr | None = Field(default=None, alias="PRIVY_APP_SECRET")
+    privy_execution_enabled: bool = Field(default=False, alias="PRIVY_EXECUTION_ENABLED")
 
     hyperliquid_base_url: str = Field(
         default="https://api.hyperliquid-testnet.xyz", alias="HYPERLIQUID_BASE_URL"
@@ -131,6 +135,20 @@ class Settings(BaseSettings):
             and key
             and key.get_secret_value()
             and "replace" not in key.get_secret_value().lower()
+        )
+
+    @property
+    def has_privy_config(self) -> bool:
+        return bool(self.privy_app_id and self.privy_client_id)
+
+    @property
+    def has_privy_server_credentials(self) -> bool:
+        secret = self.privy_app_secret
+        return bool(
+            self.privy_app_id
+            and secret
+            and secret.get_secret_value()
+            and "replace" not in secret.get_secret_value().lower()
         )
 
     @property

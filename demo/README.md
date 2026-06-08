@@ -19,6 +19,27 @@ cp .env.example .env
 
 Fill `.env` with Claude and Hyperliquid credentials. Use a Hyperliquid API/agent wallet
 private key only. Never put the private key for the main wallet in this project.
+To enable the browser wallet login, also set `PRIVY_APP_ID` and `PRIVY_CLIENT_ID`
+from the Privy Dashboard. Do not put the Privy app secret in the browser demo.
+To execute through Privy-managed Hyperliquid agent wallets, install the Node helper
+dependencies and enable the server-side Privy secret:
+
+```bash
+npm install
+```
+
+```bash
+PRIVY_APP_ID=...
+PRIVY_CLIENT_ID=...
+PRIVY_APP_SECRET=...
+PRIVY_EXECUTION_ENABLED=true
+```
+
+With `PRIVY_EXECUTION_ENABLED=true`, connect/create a Privy wallet in the browser, then use
+`Initialize agent` before execution. When the browser SDK provides a wallet ID, that wallet
+is used as the master wallet; otherwise the backend creates a Privy master wallet. The app
+then creates a Privy agent wallet, registers the agent on Hyperliquid, and routes trading
+orders through that registered agent.
 
 ```bash
 uv run demo setup-check
