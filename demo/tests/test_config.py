@@ -33,8 +33,25 @@ def test_settings_accept_testnet_urls() -> None:
     settings = Settings(
         HYPERLIQUID_BASE_URL="https://api.hyperliquid-testnet.xyz",
         HYPERLIQUID_WS_URL="wss://api.hyperliquid-testnet.xyz/ws",
+        HYPERTRACKER_BASE_URL="https://ht-api.coinmarketman.com",
     )
     assert settings.demo_trading_mode == "testnet"
+
+
+def test_settings_reject_unknown_hypertracker_url() -> None:
+    with pytest.raises(ValidationError):
+        Settings(HYPERTRACKER_BASE_URL="https://example.com")
+
+
+def test_settings_reject_non_https_hypertracker_url() -> None:
+    with pytest.raises(ValidationError):
+        Settings(HYPERTRACKER_BASE_URL="http://ht-api.coinmarketman.com")
+
+
+def test_hypertracker_credentials_ignore_empty_and_placeholders() -> None:
+    assert not Settings(HYPERTRACKER_API_KEY="").has_hypertracker_credentials
+    assert not Settings(HYPERTRACKER_API_KEY="replace-me").has_hypertracker_credentials
+    assert Settings(HYPERTRACKER_API_KEY="token").has_hypertracker_credentials
 
 
 def test_settings_reject_mainnet_guarded_without_enable_flag() -> None:

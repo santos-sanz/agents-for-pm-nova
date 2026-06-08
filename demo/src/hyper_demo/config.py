@@ -14,6 +14,7 @@ TESTNET_HTTP_HOSTS = {"api.hyperliquid-testnet.xyz"}
 TESTNET_WS_HOSTS = {"api.hyperliquid-testnet.xyz"}
 MAINNET_HTTP_HOSTS = {"api.hyperliquid.xyz"}
 MAINNET_WS_HOSTS = {"api.hyperliquid.xyz"}
+HYPERTRACKER_HTTP_HOSTS = {"ht-api.coinmarketman.com"}
 
 
 class Settings(BaseSettings):
@@ -32,6 +33,10 @@ class Settings(BaseSettings):
     )
     anthropic_agent_id: str | None = Field(default=None, alias="ANTHROPIC_AGENT_ID")
     anthropic_environment_id: str | None = Field(default=None, alias="ANTHROPIC_ENVIRONMENT_ID")
+    hypertracker_api_key: SecretStr | None = Field(default=None, alias="HYPERTRACKER_API_KEY")
+    hypertracker_base_url: str = Field(
+        default="https://ht-api.coinmarketman.com", alias="HYPERTRACKER_BASE_URL"
+    )
     privy_app_id: str | None = Field(default=None, alias="PRIVY_APP_ID")
     privy_client_id: str | None = Field(default=None, alias="PRIVY_CLIENT_ID")
     privy_app_secret: SecretStr | None = Field(default=None, alias="PRIVY_APP_SECRET")
@@ -64,6 +69,15 @@ class Settings(BaseSettings):
     hyperliquid_allowed_assets: str = Field(
         default="BTC,ETH,SOL", alias="HYPERLIQUID_ALLOWED_ASSETS"
     )
+
+    @field_validator("hypertracker_base_url")
+    @classmethod
+    def require_known_hypertracker_http(cls, value: str) -> str:
+        parsed = urlparse(value.rstrip("/"))
+        if parsed.scheme != "https" or parsed.hostname not in HYPERTRACKER_HTTP_HOSTS:
+            raise ValueError("Only the known HyperTracker HTTP URL is allowed in this demo.")
+        return parsed.geturl().rstrip("/")
+
     @field_validator("hyperliquid_base_url")
     @classmethod
     def require_known_hyperliquid_http(cls, value: str) -> str:
@@ -102,6 +116,16 @@ class Settings(BaseSettings):
     @property
     def has_anthropic_credentials(self) -> bool:
         return bool(self.anthropic_api_key and self.anthropic_api_key.get_secret_value())
+
+    @property
+    def has_hypertracker_credentials(self) -> bool:
+        key = self.hypertracker_api_key
+        return bool(
+            key
+            and key.get_secret_value()
+            and "replace" not in key.get_secret_value().lower()
+            and "your_" not in key.get_secret_value().lower()
+        )
 
     @property
     def has_hyperliquid_credentials(self) -> bool:

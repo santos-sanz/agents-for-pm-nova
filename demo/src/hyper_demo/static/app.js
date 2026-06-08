@@ -85,6 +85,7 @@ function renderRuntime() {
 function renderSetup() {
   const setup = state.setup || {};
   $("#claude-status").textContent = `Claude: ${setup.anthropic_configured ? "ready" : "fallback"}`;
+  $("#hypertracker-status").textContent = `HyperTracker: ${setup.hypertracker_configured ? "ready" : "off"}`;
   let hyperliquidStatus = "missing creds";
   if (setup.hyperliquid_configured) {
     hyperliquidStatus = "ready";
