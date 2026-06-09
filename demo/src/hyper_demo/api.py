@@ -51,6 +51,12 @@ class TradeExecutionRequest(BaseModel):
     confirmation_phrase: str | None = None
 
 
+class MasterDepositRequest(BaseModel):
+    amount_usdc: float
+    confirmed: bool = False
+    confirmation_phrase: str | None = None
+
+
 class SetupCheck(BaseModel):
     trading_mode: str
     require_confirmation: bool
@@ -279,6 +285,36 @@ def setup_privy_agent_wallet():
         )
     )
     return agent
+
+
+@app.post("/api/privy/deposit-master")
+def deposit_privy_master(request: MasterDepositRequest) -> dict[str, Any]:
+    store = get_store()
+    runtime = get_runtime(store)
+    agent = get_privy_agent_wallet(store, runtime)
+    if not agent:
+        raise HTTPException(status_code=400, detail="Initialize a Privy agent wallet first.")
+    try:
+        settings = settings_for_runtime(runtime)
+        result = PrivyHyperliquidAdapter(settings).deposit_master_collateral(
+            agent,
+            amount_usdc=request.amount_usdc,
+            confirmed=request.confirmed,
+            confirmation_phrase=request.confirmation_phrase,
+        )
+    except (ExecutionBlocked, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    store.append_event(
+        RunEvent(
+            run_id=AGENT_RUN_ID,
+            message=(
+                "Submitted Privy master wallet deposit to Hyperliquid "
+                f"({request.amount_usdc:.2f} USDC)."
+            ),
+            payload=result,
+        )
+    )
+    return result
 
 
 @app.post("/api/settings/runtime", response_model=RuntimeSettings)

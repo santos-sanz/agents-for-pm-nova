@@ -1,8 +1,24 @@
 import { PrivyClient } from "@privy-io/node";
 import { createViemAccount } from "@privy-io/node/viem";
 import * as hl from "@nktkas/hyperliquid";
+import { createPublicClient, createWalletClient, encodeFunctionData, http, parseUnits } from "viem";
+import { arbitrum } from "viem/chains";
 
 const command = process.argv[2];
+const ARBITRUM_USDC = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831";
+const HYPERLIQUID_BRIDGE2 = "0x2Df1c51E09aECF9cacB7bc98cB1742757f163dF7";
+const ERC20_ABI = [
+  {
+    type: "function",
+    name: "transfer",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "to", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    outputs: [{ name: "", type: "bool" }],
+  },
+];
 
 function readStdin() {
   return new Promise((resolve, reject) => {
@@ -276,12 +292,63 @@ async function walletState(input) {
   };
 }
 
+async function depositMaster(input) {
+  if ((input.network || "testnet") !== "prodnet") {
+    throw new Error("Integrated master deposits are only configured for prodnet.");
+  }
+  const amount = Number(input.amountUsdc || 0);
+  if (!Number.isFinite(amount) || amount < 5) {
+    throw new Error("Hyperliquid Bridge2 deposits require at least 5 USDC.");
+  }
+  if (!input.masterWalletId || !input.masterWalletAddress) {
+    throw new Error("masterWalletId and masterWalletAddress are required");
+  }
+
+  const privy = privyClient();
+  const account = viemAccount(privy, {
+    id: input.masterWalletId,
+    address: input.masterWalletAddress,
+  });
+  const walletClient = createWalletClient({
+    account,
+    chain: arbitrum,
+    transport: http(),
+  });
+  const publicClient = createPublicClient({
+    chain: arbitrum,
+    transport: http(),
+  });
+  const value = parseUnits(String(amount), 6);
+  const hash = await walletClient.sendTransaction({
+    account,
+    chain: arbitrum,
+    to: ARBITRUM_USDC,
+    data: encodeFunctionData({
+      abi: ERC20_ABI,
+      functionName: "transfer",
+      args: [HYPERLIQUID_BRIDGE2, value],
+    }),
+  });
+  const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  return {
+    network: "prodnet",
+    protocol: "Arbitrum One USDC -> Hyperliquid Bridge2",
+    bridgeAddress: HYPERLIQUID_BRIDGE2,
+    usdcAddress: ARBITRUM_USDC,
+    amountUsdc: amount,
+    hash,
+    status: receipt.status,
+    blockNumber: receipt.blockNumber.toString(),
+  };
+}
+
 try {
   const input = await readStdin();
   let output;
   if (command === "setup-agent") output = await setupAgent(input);
   else if (command === "execute-plan") output = await executePlan(input);
   else if (command === "wallet-state") output = await walletState(input);
+  else if (command === "deposit-master") output = await depositMaster(input);
   else throw new Error(`Unknown command: ${command}`);
   process.stdout.write(JSON.stringify(output));
 } catch (error) {

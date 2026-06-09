@@ -1,4 +1,15 @@
 const PRIVY_SDK_URL = "https://esm.sh/@privy-io/js-sdk-core@latest";
+const ARBITRUM_CHAIN_ID = "0xa4b1";
+const ARBITRUM_USDC = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831";
+const ARBITRUM_PARAMS = {
+  chainId: ARBITRUM_CHAIN_ID,
+  chainName: "Arbitrum One",
+  nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+  rpcUrls: ["https://arb1.arbitrum.io/rpc"],
+  blockExplorerUrls: ["https://arbiscan.io"],
+};
+
+window.hyperDemoPrivyFunding = { ready: false };
 
 let privyClient = null;
 let privyUser = null;
@@ -28,6 +39,72 @@ function walletFromUser(user) {
   return linked.find((account) => {
     const type = account.type || account.accountType || account.kind;
     return String(type || "").toLowerCase().includes("wallet") && account.address;
+  });
+}
+
+function parseDecimalUnits(value, decimals) {
+  const raw = String(value || "").trim();
+  if (!/^\d+(\.\d+)?$/.test(raw)) throw new Error("Enter a valid amount.");
+  const [whole, fraction = ""] = raw.split(".");
+  if (fraction.length > decimals) throw new Error(`Amount supports up to ${decimals} decimals.`);
+  return BigInt(whole) * 10n ** BigInt(decimals) + BigInt(fraction.padEnd(decimals, "0") || "0");
+}
+
+function encodeErc20Transfer(to, amount) {
+  const cleanTo = String(to || "").replace(/^0x/, "").toLowerCase();
+  if (!/^[0-9a-f]{40}$/.test(cleanTo)) throw new Error("Destination wallet is invalid.");
+  const addressArg = cleanTo.padStart(64, "0");
+  const amountArg = amount.toString(16).padStart(64, "0");
+  return `0xa9059cbb${addressArg}${amountArg}`;
+}
+
+async function getEmbeddedProvider() {
+  const privy = await ensurePrivy();
+  if (!privyUser) {
+    const session = await privy.user.get();
+    privyUser = session?.user || null;
+  }
+  if (!privyUser) throw new Error("Connect the Privy wallet first.");
+  const wallet = privyHelpers.getUserEmbeddedEthereumWallet(privyUser);
+  if (!wallet?.address) throw new Error("Privy embedded wallet is not available.");
+  const { entropyId, entropyIdVerifier } = privyHelpers.getEntropyDetailsFromUser(privyUser);
+  const provider = await privy.embeddedWallet.getEthereumProvider({
+    wallet,
+    entropyId,
+    entropyIdVerifier,
+  });
+  return { provider, wallet };
+}
+
+async function ensureArbitrum(provider) {
+  try {
+    await provider.request({
+      method: "wallet_switchEthereumChain",
+      params: [{ chainId: ARBITRUM_CHAIN_ID }],
+    });
+  } catch (error) {
+    await provider.request({
+      method: "wallet_addEthereumChain",
+      params: [ARBITRUM_PARAMS],
+    });
+  }
+}
+
+async function transferUserUsdcToMaster({ masterAddress, amountUsdc }) {
+  const { provider, wallet } = await getEmbeddedProvider();
+  await ensureArbitrum(provider);
+  const amount = parseDecimalUnits(amountUsdc, 6);
+  if (amount <= 0n) throw new Error("USDC amount must be greater than 0.");
+  return provider.request({
+    method: "eth_sendTransaction",
+    params: [
+      {
+        from: wallet.address,
+        to: ARBITRUM_USDC,
+        value: "0x0",
+        data: encodeErc20Transfer(masterAddress, amount),
+      },
+    ],
   });
 }
 
@@ -154,3 +231,8 @@ $("#privy-auth-form")?.addEventListener("submit", async (event) => {
 });
 
 ensurePrivy().catch(() => {});
+
+window.hyperDemoPrivyFunding = {
+  ready: true,
+  transferUserUsdcToMaster,
+};

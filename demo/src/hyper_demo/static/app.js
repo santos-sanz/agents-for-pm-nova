@@ -19,10 +19,14 @@ const state = {
     allowed: [],
     watchlist: [],
   },
+  showSensitiveWalletData: false,
+  fundingBalances: null,
 };
 
 const DEFAULT_ASSETS = ["BTC", "ETH", "SOL", "HYPE"];
 const AGENT_NAME = "HyperClaude";
+const ARBITRUM_RPC_URL = "https://arb1.arbitrum.io/rpc";
+const ARBITRUM_USDC_ADDRESS = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831";
 
 function $(selector) {
   return document.querySelector(selector);
@@ -309,18 +313,18 @@ function renderConnectedWallet() {
   if (!target) return;
   const rows = [];
   if (wallet) {
-    rows.push(["User wallet", maskAddress(wallet.address)]);
+    rows.push(["User wallet", sensitiveValue(wallet.address, redactAddress(wallet.address)), true]);
     rows.push(["Source", wallet.source]);
-    rows.push(["Email", wallet.email || "not shared"]);
+    rows.push(["Email", sensitiveValue(wallet.email, redactEmail(wallet.email)), Boolean(wallet.email)]);
   }
   if (activeAgent) {
     rows.push(["Network", activeAgent.network]);
-    rows.push(["Master", maskAddress(activeAgent.master_wallet_address)]);
-    rows.push(["Agent", maskAddress(activeAgent.agent_wallet_address)]);
+    rows.push(["Master", sensitiveValue(activeAgent.master_wallet_address, redactAddress(activeAgent.master_wallet_address)), true]);
+    rows.push(["Agent", sensitiveValue(activeAgent.agent_wallet_address, redactAddress(activeAgent.agent_wallet_address)), true]);
     rows.push(["Agent name", activeAgent.agent_name || AGENT_NAME]);
     rows.push(["Registered", activeAgent.registered ? "yes" : "no"]);
     const actionRequired = activeAgent.raw_response?.registerResponse?.action_required;
-    if (actionRequired) rows.push(["Action required", actionRequired]);
+    if (actionRequired && activeAgent.registered) rows.push(["Action required", actionRequired]);
   } else if (wallet) {
     if (agent) rows.push(["Saved agent", `${agent.network} agent does not match ${runtimeNetwork}`]);
     rows.push(["Agent wallet", `Not initialized on ${runtimeNetwork}`]);
@@ -333,9 +337,160 @@ function renderConnectedWallet() {
         : "Retry registration"
       : `Initialize ${runtimeNetwork} agent`;
   }
+  renderSensitiveToggle(hasWallet);
+  renderWalletFundingFlow(wallet, activeAgent);
   target.innerHTML = rows
-    .map(([label, value]) => `<div><span>${label}</span><b>${value}</b></div>`)
+    .map(([label, value, redacted]) => {
+      const valueClass = redacted && !state.showSensitiveWalletData ? ' class="redacted-value" aria-label="redacted"' : "";
+      return `<div><span>${escapeHtml(label)}</span><b${valueClass}>${escapeHtml(value)}</b></div>`;
+    })
     .join("");
+}
+
+function renderWalletFundingFlow(wallet, activeAgent) {
+  const target = $("#wallet-funding-flow");
+  if (!target) return;
+  const actionRequired = activeAgent?.raw_response?.registerResponse?.action_required;
+  const shouldShow = Boolean(wallet?.address && activeAgent && (!activeAgent.registered || actionRequired));
+  target.hidden = !shouldShow;
+  if (!shouldShow) {
+    target.innerHTML = "";
+    return;
+  }
+
+  const sensitiveClass = state.showSensitiveWalletData ? "" : " redacted-value";
+  const masterAddress = sensitiveValue(
+    activeAgent.master_wallet_address,
+    redactAddress(activeAgent.master_wallet_address),
+  );
+  const agentAddress = sensitiveValue(
+    activeAgent.agent_wallet_address,
+    redactAddress(activeAgent.agent_wallet_address),
+  );
+  const userAddress = sensitiveValue(wallet.address, redactAddress(wallet.address));
+  const depositNetwork = depositNetworkLabel(activeAgent.network);
+  const balances = state.fundingBalances?.address === wallet.address ? state.fundingBalances : null;
+  const usdcBalance = balances?.usdc ?? null;
+  const ethBalance = balances?.eth ?? null;
+  const hasUsdcBalance = usdcBalance !== null && usdcBalance !== undefined;
+  const usdcValue = hasUsdcBalance ? Math.min(Number(usdcBalance), 5) : 5;
+  const fundingBalanceText = state.showSensitiveWalletData
+    ? formatFundingBalanceLabel(usdcBalance, ethBalance)
+    : redactFundingBalanceLabel(usdcBalance, ethBalance);
+  const fundingBalanceClass = state.showSensitiveWalletData ? "" : " redacted-value";
+  const usdcMaxAttribute = state.showSensitiveWalletData ? usdcBalance ?? "" : "";
+  const status = actionRequired || "Master wallet needs a Hyperliquid deposit before agent registration.";
+  target.innerHTML = `
+    <div class="funding-head">
+      <span class="eyebrow">Funding flow</span>
+      <b>${activeAgent.registered ? "Agent ready" : "Registration blocked"}</b>
+      <p>${escapeHtml(status)}</p>
+    </div>
+    <div class="funding-steps">
+      <section class="funding-step">
+        <span class="step-badge">1</span>
+        <div>
+          <b>Prepare funds in the user wallet</b>
+          <p>Use the connected Privy wallet as the source wallet when funding Hyperliquid.</p>
+          <div class="address-row">
+            <code class="sensitive-code${sensitiveClass}">${escapeHtml(userAddress)}</code>
+            <button type="button" class="small-button" data-action="copy-wallet-address" data-wallet-target="user">Copy</button>
+          </div>
+        </div>
+      </section>
+      <section class="funding-step current">
+        <span class="step-badge">2</span>
+        <div>
+          <b>Fund the master wallet on Arbitrum</b>
+          <p>Send native USDC from the connected user wallet to the master wallet. The sender pays the Arbitrum transaction gas.</p>
+          <div class="network-row">
+            <span>Protocol / network</span>
+            <b>${escapeHtml(depositNetwork)}</b>
+          </div>
+          <div class="network-row">
+            <span>User wallet balance</span>
+            <b id="funding-balance-label" class="sensitive-balance${fundingBalanceClass}">${escapeHtml(fundingBalanceText)}</b>
+          </div>
+          <div class="address-row">
+            <code class="sensitive-code${sensitiveClass}">${escapeHtml(masterAddress)}</code>
+            <button type="button" class="small-button" data-action="copy-wallet-address" data-wallet-target="master">Copy</button>
+          </div>
+          <div class="funding-form">
+            <label>
+              USDC to master
+              <span class="input-action compact-input-action">
+                <input id="funding-usdc-amount" type="number" min="0" max="${escapeHtml(usdcMaxAttribute)}" step="0.01" value="${escapeHtml(formatFundingInputValue(usdcValue))}" />
+                <button type="button" data-action="funding-max-usdc">Max</button>
+              </span>
+            </label>
+            <label class="check-row compact-check">
+              <input id="funding-confirm" type="checkbox" />
+              Confirm wallet funding transactions
+            </label>
+            <div class="button-row funding-actions">
+              <button type="button" data-action="fund-master-usdc">Send USDC</button>
+            </div>
+          </div>
+        </div>
+      </section>
+      <section class="funding-step">
+        <span class="step-badge">3</span>
+        <div>
+          <b>Deposit master collateral, then retry</b>
+          <p>After the master wallet has gas and USDC, submit the master wallet deposit to Hyperliquid Bridge2 and retry setup.</p>
+          <div class="address-row">
+            <code class="sensitive-code${sensitiveClass}">${escapeHtml(agentAddress)}</code>
+          </div>
+          <label>
+            Mainnet phrase
+            <input id="funding-phrase" placeholder="CONFIRM MAINNET ORDER" />
+          </label>
+          <div class="button-row funding-actions">
+            <button type="button" data-action="deposit-master-hyperliquid">Deposit master to Hyperliquid</button>
+            <button type="button" data-action="privy-setup-agent">Retry registration</button>
+          </div>
+        </div>
+      </section>
+    </div>
+  `;
+  refreshFundingBalances(wallet.address).catch(() => {});
+}
+
+function renderSensitiveToggle(hasWallet) {
+  const button = $("#sensitive-toggle");
+  if (!button) return;
+  button.hidden = !hasWallet;
+  button.setAttribute("aria-pressed", String(state.showSensitiveWalletData));
+  button.setAttribute(
+    "aria-label",
+    state.showSensitiveWalletData ? "Hide sensitive wallet data" : "Show sensitive wallet data",
+  );
+  button.title = state.showSensitiveWalletData ? "Hide sensitive wallet data" : "Show sensitive wallet data";
+  button.innerHTML = state.showSensitiveWalletData ? eyeOffIcon() : eyeIcon();
+}
+
+function sensitiveValue(realValue, redactedValue) {
+  return state.showSensitiveWalletData ? realValue || "" : redactedValue || "";
+}
+
+function eyeIcon() {
+  return `
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path>
+      <circle cx="12" cy="12" r="3"></circle>
+    </svg>
+  `;
+}
+
+function eyeOffIcon() {
+  return `
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M3 3l18 18"></path>
+      <path d="M10.6 6.2A9.7 9.7 0 0 1 12 6c6 0 9.5 6 9.5 6a17.7 17.7 0 0 1-3 3.6"></path>
+      <path d="M6.5 6.8A17.7 17.7 0 0 0 2.5 12s3.5 6 9.5 6a9.8 9.8 0 0 0 3.4-.6"></path>
+      <path d="M10 10.2a3 3 0 0 0 3.8 3.8"></path>
+    </svg>
+  `;
 }
 
 function renderScreen() {
@@ -504,6 +659,219 @@ function maskAddress(address) {
   return `${address.slice(0, 6)}...${address.slice(-4)}`;
 }
 
+function redactAddress(address) {
+  return maskAddress(address);
+}
+
+function redactEmail(email) {
+  if (!email) return "not shared";
+  const [local = "", domain = ""] = email.split("@");
+  if (!domain) return "hidden email";
+  const [domainName = "", ...domainRest] = domain.split(".");
+  const tld = domainRest.length ? `.${domainRest.at(-1)}` : "";
+  const safeLocal = `${local.slice(0, 1)}${"*".repeat(Math.max(4, Math.min(local.length - 1, 8)))}`;
+  const safeDomain = `${domainName.slice(0, 1)}${"*".repeat(Math.max(3, Math.min(domainName.length - 1, 6)))}`;
+  return `${safeLocal}@${safeDomain}${tld}`;
+}
+
+function depositNetworkLabel(network) {
+  if (network === "prodnet") return "Arbitrum One USDC -> Hyperliquid mainnet";
+  return "Hyperliquid testnet funds";
+}
+
+function formatFundingBalanceLabel(usdc, eth) {
+  if (usdc === null || eth === null) return "Loading Arbitrum balances";
+  return `${formatTokenAmount(usdc)} USDC / ${formatTokenAmount(eth, 5)} ETH`;
+}
+
+function redactFundingBalanceLabel(usdc, eth) {
+  if (usdc === null || eth === null) return "Loading Arbitrum balances";
+  return "•••• USDC / •••• ETH";
+}
+
+function formatFundingInputValue(value) {
+  const numeric = Number(value || 0);
+  if (!Number.isFinite(numeric) || numeric <= 0) return "0";
+  return String(Math.floor(numeric * 100) / 100);
+}
+
+function formatTokenAmount(value, decimals = 2) {
+  const numeric = Number(value || 0);
+  if (!Number.isFinite(numeric)) return "0";
+  return numeric.toLocaleString("en-US", {
+    maximumFractionDigits: decimals,
+    minimumFractionDigits: 0,
+  });
+}
+
+function encodeBalanceOf(address) {
+  const clean = String(address || "").replace(/^0x/, "").toLowerCase();
+  if (!/^[0-9a-f]{40}$/.test(clean)) throw new Error("Wallet address is invalid.");
+  return `0x70a08231${clean.padStart(64, "0")}`;
+}
+
+async function arbitrumRpc(method, params) {
+  const response = await fetch(ARBITRUM_RPC_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: Date.now(),
+      method,
+      params,
+    }),
+  });
+  const payload = await response.json();
+  if (payload.error) throw new Error(payload.error.message || "Arbitrum RPC error.");
+  return payload.result;
+}
+
+function formatUnits(raw, decimals) {
+  const value = BigInt(raw || "0x0");
+  const scale = 10n ** BigInt(decimals);
+  const whole = value / scale;
+  const fraction = value % scale;
+  const fractionText = fraction.toString().padStart(decimals, "0").replace(/0+$/, "");
+  return Number(`${whole.toString()}${fractionText ? `.${fractionText}` : ""}`);
+}
+
+async function refreshFundingBalances(address) {
+  if (!address) return;
+  if (state.fundingBalances?.address === address && !state.fundingBalances.loading) return;
+  state.fundingBalances = { address, loading: true, usdc: null, eth: null };
+  const [ethRaw, usdcRaw] = await Promise.all([
+    arbitrumRpc("eth_getBalance", [address, "latest"]),
+    arbitrumRpc("eth_call", [
+      {
+        to: ARBITRUM_USDC_ADDRESS,
+        data: encodeBalanceOf(address),
+      },
+      "latest",
+    ]),
+  ]);
+  const balances = {
+    address,
+    loading: false,
+    eth: formatUnits(ethRaw, 18),
+    usdc: formatUnits(usdcRaw, 6),
+  };
+  state.fundingBalances = balances;
+  updateFundingBalanceDom(balances);
+}
+
+function updateFundingBalanceDom(balances) {
+  const label = $("#funding-balance-label");
+  if (label) {
+    label.textContent = state.showSensitiveWalletData
+      ? formatFundingBalanceLabel(balances.usdc, balances.eth)
+      : redactFundingBalanceLabel(balances.usdc, balances.eth);
+    label.classList.toggle("redacted-value", !state.showSensitiveWalletData);
+  }
+  const usdcInput = $("#funding-usdc-amount");
+  if (usdcInput) {
+    if (state.showSensitiveWalletData) {
+      usdcInput.max = String(balances.usdc);
+    } else {
+      usdcInput.removeAttribute("max");
+    }
+    const current = Number(usdcInput.value || 0);
+    if (!current || current > balances.usdc) {
+      usdcInput.value = formatFundingInputValue(balances.usdc);
+    }
+  }
+}
+
+function setFundingUsdcMax() {
+  const input = $("#funding-usdc-amount");
+  const max = state.fundingBalances?.usdc;
+  if (!input || max === null || max === undefined) {
+    throw new Error("User wallet USDC balance is still loading.");
+  }
+  input.value = formatFundingInputValue(max);
+}
+
+function walletAddressForTarget(target) {
+  if (target === "user") return state.connected_wallet?.address;
+  if (target === "master") return state.privy_agent_wallet?.master_wallet_address;
+  if (target === "agent") return state.privy_agent_wallet?.agent_wallet_address;
+  return null;
+}
+
+async function copyWalletAddress(target) {
+  const address = walletAddressForTarget(target);
+  if (!address) throw new Error("Wallet address is not available yet.");
+  await copyText(address);
+  toast("Wallet address copied");
+}
+
+async function copyText(value) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return;
+    } catch {
+      // Fall back for browser contexts that block async clipboard writes.
+    }
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand("copy");
+  textarea.remove();
+  if (!copied) throw new Error("Could not copy wallet address.");
+}
+
+function openHyperliquidDeposit() {
+  window.open("https://app.hyperliquid.xyz", "_blank", "noopener,noreferrer");
+}
+
+function requireFundingConfirmation() {
+  if (!$("#funding-confirm")?.checked) {
+    throw new Error("Confirm wallet funding transactions first.");
+  }
+}
+
+function currentMasterAddress() {
+  const address = state.privy_agent_wallet?.master_wallet_address;
+  if (!address) throw new Error("Initialize a Privy master wallet first.");
+  return address;
+}
+
+async function fundMasterUsdc() {
+  requireFundingConfirmation();
+  if (!window.hyperDemoPrivyFunding?.transferUserUsdcToMaster) {
+    throw new Error("Privy wallet funding is not ready yet.");
+  }
+  const hash = await window.hyperDemoPrivyFunding.transferUserUsdcToMaster({
+    masterAddress: currentMasterAddress(),
+    amountUsdc: $("#funding-usdc-amount").value,
+  });
+  toast(`USDC transfer submitted: ${maskHash(hash)}`);
+}
+
+async function depositMasterToHyperliquid() {
+  requireFundingConfirmation();
+  const result = await api("/api/privy/deposit-master", {
+    method: "POST",
+    body: JSON.stringify({
+      amount_usdc: Number($("#funding-usdc-amount").value),
+      confirmed: true,
+      confirmation_phrase: $("#funding-phrase").value || null,
+    }),
+  });
+  await loadState();
+  toast(`Master deposit submitted: ${maskHash(result.hash)}`);
+}
+
+function maskHash(hash) {
+  if (!hash || hash.length <= 12) return hash || "";
+  return `${hash.slice(0, 6)}...${hash.slice(-4)}`;
+}
+
 async function saveRuntime(partial = {}) {
   const syncAssetLists = isAssetSyncEnabled();
   let watchlist = uniqueAssets($("#watchlist").value);
@@ -585,7 +953,23 @@ async function setupPrivyAgent() {
   toast(actionRequired || "Agent wallet created, but registration is pending");
 }
 
+function toggleSensitiveWalletData() {
+  state.showSensitiveWalletData = !state.showSensitiveWalletData;
+  renderConnectedWallet();
+}
+
 document.addEventListener("click", async (event) => {
+  const copyTarget = event.target.closest('[data-action="copy-wallet-address"]');
+  if (copyTarget) {
+    event.preventDefault();
+    event.stopPropagation();
+    try {
+      await copyWalletAddress(copyTarget.dataset.walletTarget);
+    } catch (error) {
+      toast(error.message);
+    }
+    return;
+  }
   if (event.target.closest(".app-nav")) return;
   const assetToggle = event.target.closest("[data-asset-toggle]");
   if (assetToggle) {
@@ -617,7 +1001,8 @@ document.addEventListener("click", async (event) => {
     renderScreen();
     return;
   }
-  const action = event.target.dataset.action;
+  const actionTarget = event.target.closest("[data-action]");
+  const action = actionTarget?.dataset.action;
   if (!action) return;
   try {
     if (action === "save-settings") await saveRuntime();
@@ -628,10 +1013,21 @@ document.addEventListener("click", async (event) => {
     if (action === "execute") await executeTrade();
     if (action === "reject") await rejectTrade();
     if (action === "privy-setup-agent") await setupPrivyAgent();
+    if (action === "toggle-sensitive") toggleSensitiveWalletData();
+    if (action === "copy-wallet-address") await copyWalletAddress(actionTarget.dataset.walletTarget);
+    if (action === "open-hyperliquid-deposit") openHyperliquidDeposit();
+    if (action === "funding-max-usdc") setFundingUsdcMax();
+    if (action === "fund-master-usdc") await fundMasterUsdc();
+    if (action === "deposit-master-hyperliquid") await depositMasterToHyperliquid();
     if (action === "events" || action === "refresh") await loadState();
   } catch (error) {
     toast(error.message);
   }
+});
+
+$("#sensitive-toggle")?.addEventListener("click", (event) => {
+  event.stopPropagation();
+  toggleSensitiveWalletData();
 });
 
 for (const button of document.querySelectorAll(".app-nav [data-screen]")) {
