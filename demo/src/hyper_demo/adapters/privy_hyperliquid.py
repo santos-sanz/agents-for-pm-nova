@@ -6,12 +6,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from hyper_demo.adapters.hyperliquid import (
-    MAINNET_CONFIRMATION_PHRASE,
-    ExecutionBlocked,
-    PreparedOrder,
-    _extract_order_id,
-)
+from hyper_demo.adapters.hyperliquid import ExecutionBlocked, PreparedOrder, _extract_order_id
 from hyper_demo.config import Settings, get_settings
 from hyper_demo.models import (
     OrderRecord,
@@ -150,11 +145,6 @@ class PrivyHyperliquidAdapter:
             raise ExecutionBlocked(
                 "Mainnet is disabled. Set HYPERLIQUID_MAINNET_ENABLED=true to proceed."
             )
-        if confirmation_phrase != MAINNET_CONFIRMATION_PHRASE:
-            raise ExecutionBlocked(
-                "Mainnet funding requires confirmation phrase: "
-                f'"{MAINNET_CONFIRMATION_PHRASE}".'
-            )
         if amount_usdc < 5:
             raise ExecutionBlocked("Hyperliquid Bridge2 deposits require at least 5 USDC.")
         return self._run_helper(
@@ -206,11 +196,6 @@ class PrivyHyperliquidAdapter:
             if not self.settings.hyperliquid_mainnet_enabled:
                 raise ExecutionBlocked(
                     "Mainnet is disabled. Set HYPERLIQUID_MAINNET_ENABLED=true to proceed."
-                )
-            if confirmation_phrase != MAINNET_CONFIRMATION_PHRASE:
-                raise ExecutionBlocked(
-                    "Mainnet execution requires confirmation phrase: "
-                    f'"{MAINNET_CONFIRMATION_PHRASE}".'
                 )
 
     def _validate_privy_config(self) -> None:

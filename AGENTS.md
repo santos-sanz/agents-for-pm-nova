@@ -52,6 +52,7 @@ npm run export
 ```bash
 cd demo
 uv sync
+npm install
 cp .env.example .env
 uv run demo setup-check
 ```
@@ -96,7 +97,7 @@ Open `http://127.0.0.1:8000`. The FastAPI app serves the static UI from `demo/sr
 
 - Default mode is `testnet`.
 - `testnet`: auto-execution is allowed only when credentials and guardrails pass.
-- `prodnet`: guarded; requires browser UI confirmation and the exact phrase `CONFIRM MAINNET ORDER`.
+- `prodnet`: guarded; requires browser UI confirmation and explicit environment enablement.
 - Browser runtime settings live in `demo/.demo_state/runtime.json`.
 - CLI settings come from environment variables and `.env` files.
 - `HYPERLIQUID_MAINNET_ENABLED=true` is required before prodnet execution can be enabled.

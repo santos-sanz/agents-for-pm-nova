@@ -47,6 +47,24 @@ const DEFAULT_ASSETS = ["BTC", "ETH", "SOL", "HYPE"];
 const DEFAULT_NETWORK = "prodnet";
 const AGENT_NAME = "HyperClaude";
 const ARBITRUM_USDC_ADDRESS = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831";
+const CHART_COLORS = {
+  background: "#f5f0e8",
+  text: "#181715",
+  grid: "rgba(24, 23, 21, 0.12)",
+  up: "#2f7d4a",
+  down: "#9c3f3f",
+  entry: "#1f6feb",
+  takeProfit: "#2f7d4a",
+  stopLoss: "#9c3f3f",
+};
+const chartRuntime = {
+  chart: null,
+  candles: null,
+  key: "",
+  lineStyle: null,
+  priceLines: [],
+  resizeObserver: null,
+};
 
 function $(selector) {
   return document.querySelector(selector);
@@ -126,6 +144,7 @@ async function loadState() {
   const payload = await api("/api/state");
   Object.assign(state, payload);
   state.marketCandles = state.marketCandles || {};
+  syncManualOrderFromStoredPlan();
   syncAssetInputFromStoredTrade();
   try {
     state.metrics = await api("/api/portfolio/metrics");
@@ -174,8 +193,10 @@ function renderRuntime() {
   document.body.dataset.uiMode = "human";
   document.body.dataset.network = runtime.network || DEFAULT_NETWORK;
   const networkStatus = $("#network-status");
-  networkStatus.textContent = runtime.network === "prodnet" ? "mainnet guarded" : "testnet auto";
-  networkStatus.className = runtime.network === "prodnet" ? "prodnet" : "testnet";
+  if (networkStatus) {
+    networkStatus.textContent = runtime.network === "prodnet" ? "mainnet guarded" : "testnet auto";
+    networkStatus.className = runtime.network === "prodnet" ? "prodnet" : "testnet";
+  }
   const settingsNetworkPill = $("#settings-network-pill");
   if (settingsNetworkPill) {
     settingsNetworkPill.textContent = runtime.network === "prodnet" ? "mainnet guarded" : "testnet auto";
@@ -365,16 +386,16 @@ function toggleAsset(kind, asset) {
 
 function renderSetup() {
   const setup = state.setup || {};
-  $("#claude-status").textContent = `Claude: ${setup.anthropic_configured ? "ready" : "fallback"}`;
-  $("#hypertracker-status").textContent = `HyperTracker: ${setup.hypertracker_configured ? "ready" : "off"}`;
-  $("#perplexity-status").textContent = `Perplexity: ${setup.perplexity_configured ? "ready" : "off"}`;
+  if ($("#claude-status")) $("#claude-status").textContent = `Claude: ${setup.anthropic_configured ? "ready" : "fallback"}`;
+  if ($("#hypertracker-status")) $("#hypertracker-status").textContent = `HyperTracker: ${setup.hypertracker_configured ? "ready" : "off"}`;
+  if ($("#perplexity-status")) $("#perplexity-status").textContent = `Perplexity: ${setup.perplexity_configured ? "ready" : "off"}`;
   let hyperliquidStatus = "missing creds";
   if (setup.hyperliquid_configured) {
     hyperliquidStatus = "ready";
   } else if (setup.privy_execution_enabled && setup.privy_server_configured) {
     hyperliquidStatus = "Privy ready";
   }
-  $("#hyperliquid-status").textContent = `Hyperliquid: ${hyperliquidStatus}`;
+  if ($("#hyperliquid-status")) $("#hyperliquid-status").textContent = `Hyperliquid: ${hyperliquidStatus}`;
   const privyStatus = $("#privy-status");
   if (privyStatus && privyStatus.textContent === "checking") {
     privyStatus.textContent = setup.privy_configured ? "configured" : "missing config";
@@ -521,10 +542,6 @@ function renderWalletFundingFlow(wallet, activeAgent) {
             USDC to deposit
             <input id="funding-usdc-amount" type="number" min="5" step="0.000001" value="5" />
           </label>
-          <label>
-            Mainnet phrase
-            <input id="funding-phrase" placeholder="CONFIRM MAINNET ORDER" />
-          </label>
           <label class="check-row compact-check">
             <input id="funding-confirm" type="checkbox" />
             Confirm master wallet deposit
@@ -631,7 +648,7 @@ function renderTradingView() {
       ? `Loading ${displayPerpLabel(asset)} candles.`
       : analysis
       ? analysis.summary
-      : "Candles load automatically. Run analysis when you want a trade idea.";
+      : "Build a manual order from the ticket. Run AI analysis only when you want guidance.";
   }
   renderAnalyzeControls();
   renderChart();
@@ -703,10 +720,24 @@ function candidateMatchesPlan(candidate, plan) {
 
 function syncAssetInputFromStoredTrade() {
   const input = $("#asset-input");
-  const storedAsset = state.analysis?.asset || state.plan?.asset;
+  const storedAsset = state.plan?.source === "manual" ? state.plan.asset : state.analysis?.asset || state.plan?.asset;
   if (!input || !storedAsset) return;
   const current = currentInputAsset();
   if (!current || current === "BTC") input.value = normalizeAssetSymbol(storedAsset);
+}
+
+function syncManualOrderFromStoredPlan() {
+  const plan = state.plan;
+  if (plan?.source !== "manual") return;
+  state.manualOrder = {
+    side: plan.side || "long",
+    entry_type: plan.entry_type || "market",
+    size_usdc: plan.size_usdc ?? 25,
+    entry_price: plan.entry_type === "limit" ? String(plan.entry_price ?? "") : "",
+    stop_loss: plan.stop_loss ? String(plan.stop_loss) : "",
+    take_profit: plan.take_profit ? String(plan.take_profit) : "",
+    leverage: plan.leverage ?? 1,
+  };
 }
 
 function activeCandles() {
@@ -736,7 +767,7 @@ function renderAnalyzeControls() {
   const button = $("#analyze-form button[type='submit']");
   if (button) {
     button.disabled = state.isAnalyzing;
-    button.textContent = state.isAnalyzing ? "Analyzing" : "Analyze";
+    button.textContent = state.isAnalyzing ? "Analyzing" : "AI assist";
   }
   document.body.dataset.analyzing = state.isAnalyzing ? "true" : "false";
   document.body.dataset.loadingCandles = state.isLoadingCandles ? "true" : "false";
@@ -950,80 +981,84 @@ function renderTicket() {
   const manual = state.manualOrder;
   const maxLeverage = assetMaxLeverage(ticketAsset);
   if (Number(manual.leverage) > maxLeverage) manual.leverage = maxLeverage;
-  const decision = previewOnly ? "preview_only" : plan?.execution_decision || "no_proposal";
+  const decision = previewOnly ? "preview_only" : plan?.execution_decision || "manual_draft";
   const decisionPill = $("#decision-pill");
   if (decisionPill) {
-    decisionPill.textContent = isManualPlan ? "manual mode" : decision.replaceAll("_", " ");
+    decisionPill.textContent =
+      isManualPlan && decision === "proposed"
+        ? "manual mode"
+        : !plan
+        ? "manual mode"
+        : decision.replaceAll("_", " ");
     decisionPill.className = `pill ${decisionClass(decision)}`;
   }
-  $("#ticket-title").textContent = `ORDER ${displayPerpLabel(ticketAsset)}`;
-  const phraseField = $("#mainnet-phrase")?.closest(".field");
-  if (phraseField) phraseField.hidden = (state.runtime?.network || DEFAULT_NETWORK) !== "prodnet";
-  const executeButton = $('[data-action="execute"]');
+  $("#ticket-title").textContent = `Trade ${displayPerpLabel(ticketAsset)}`;
+  const submitButton = $('[data-action="submit-manual-order"]');
   const rejectButton = $('[data-action="reject"]');
-  if (executeButton) executeButton.disabled = !plan || previewOnly;
+  if (submitButton) submitButton.disabled = previewOnly;
   if (rejectButton) rejectButton.disabled = !plan;
   const source = candidate || plan;
   const mark = latestMarkPrice(ticketAsset);
   const limitHidden = manual.entry_type !== "limit" ? " hidden" : "";
   $("#ticket").innerHTML = `
-    <section class="manual-order-section user-inputs">
-      <div class="ticket-section-head">
-        <span class="ticket-label">User inputs</span>
-        <em>${isManualPlan ? "manual plan active" : "draft order"}</em>
+    <section class="manual-order-section order-ticket-core">
+      <div class="order-ticket-meta">
+        <div><span>Market</span><b>${displayPerpLabel(ticketAsset)}</b></div>
+        <div><span>Mark</span><b>${mark ? compactPrice(mark) : "--"}</b></div>
       </div>
-      <div class="manual-grid two">
-        <label>Side
-          <select data-manual-field="side">
-            <option value="long" ${manual.side === "long" ? "selected" : ""}>Long</option>
-            <option value="short" ${manual.side === "short" ? "selected" : ""}>Short</option>
-          </select>
-        </label>
-        <label>Order
-          <select data-manual-field="entry_type">
-            <option value="market" ${manual.entry_type === "market" ? "selected" : ""}>Market</option>
-            <option value="limit" ${manual.entry_type === "limit" ? "selected" : ""}>Limit</option>
-          </select>
-        </label>
+      <div class="trade-segment side-picker" aria-label="Side">
+        <button type="button" class="${manual.side === "long" ? "active" : ""}" data-manual-pick="side" data-value="long">Buy</button>
+        <button type="button" class="${manual.side === "short" ? "active" : ""}" data-manual-pick="side" data-value="short">Sell</button>
       </div>
-      <label>Size USDC
-        <input type="number" min="1" step="1" data-manual-field="size_usdc" value="${escapeHtml(manual.size_usdc)}" />
+      <div class="trade-segment" aria-label="Order type">
+        <button type="button" class="${manual.entry_type === "market" ? "active" : ""}" data-manual-pick="entry_type" data-value="market">Market</button>
+        <button type="button" class="${manual.entry_type === "limit" ? "active" : ""}" data-manual-pick="entry_type" data-value="limit">Limit</button>
+      </div>
+      <label class="primary-number">Size
+        <span>
+          <input type="number" min="1" step="1" data-manual-field="size_usdc" value="${escapeHtml(manual.size_usdc)}" />
+          <em>USDC</em>
+        </span>
       </label>
-      <label${limitHidden}>Limit price
+      <div class="size-presets" aria-label="Size presets">
+        ${[25, 50, 100]
+          .map(
+            (size) => `
+              <button type="button" class="${Number(manual.size_usdc) === size ? "active" : ""}" data-manual-size="${size}">
+                ${size}
+              </button>
+            `,
+          )
+          .join("")}
+      </div>
+      <label class="primary-number"${limitHidden}>Limit price
         <input type="number" min="0" step="0.000001" data-manual-field="entry_price" value="${escapeHtml(manual.entry_price)}" placeholder="${mark ? number(mark, 6) : "0.00"}" />
       </label>
-      <label>Leverage <b>${number(manual.leverage, 1)}x</b>
-        <input type="range" min="1" max="${maxLeverage}" step="0.1" data-manual-field="leverage" value="${escapeHtml(manual.leverage)}" />
-        <small>Max ${number(maxLeverage, 1)}x for ${displayAssetSymbol(ticketAsset)}</small>
-      </label>
-      <div class="manual-grid two">
-        <label>Stop loss
-          <input type="number" min="0" step="0.000001" data-manual-field="stop_loss" value="${escapeHtml(manual.stop_loss)}" placeholder="optional" />
-        </label>
-        <label>Take profit
-          <input type="number" min="0" step="0.000001" data-manual-field="take_profit" value="${escapeHtml(manual.take_profit)}" placeholder="optional" />
-        </label>
+      <div class="order-footprint">
+        <div><span>Leverage</span><b>1x</b></div>
+        <div><span>Max</span><b>${money(state.runtime?.max_order_usdc || 100)}</b></div>
+        <div><span>Network</span><b>${escapeHtml(state.runtime?.network || DEFAULT_NETWORK)}</b></div>
       </div>
     </section>
-    <section class="manual-order-section provided-data">
+    <section class="manual-order-section provided-data order-status-card">
       <div class="ticket-section-head">
-        <span class="ticket-label">Provided data</span>
-        <em>read only</em>
+        <span class="ticket-label">Status</span>
+        <em>${isManualPlan ? "active plan" : "draft"}</em>
       </div>
       <div class="provided-grid">
-        <div><span>Mark</span><b>${mark ? compactPrice(mark) : "--"}</b></div>
-        <div><span>Network</span><b>${escapeHtml(state.runtime?.network || DEFAULT_NETWORK)}</b></div>
-        <div><span>Mode</span><b>${isManualPlan ? "Manual" : plan ? "Agent proposal" : "None"}</b></div>
+        <div><span>Mode</span><b>${isManualPlan || !plan ? "Manual" : "AI assisted"}</b></div>
         <div><span>Active plan</span><b>${source ? `${escapeHtml(source.side)} ${number(source.entry_price, 4)}` : "none"}</b></div>
+        <div><span>Decision</span><b>${escapeHtml(decision.replaceAll("_", " "))}</b></div>
+        <div><span>Confirm</span><b>${$("#execute-confirm")?.checked ? "ready" : "required"}</b></div>
       </div>
     </section>
   `;
 }
 
 function renderChart() {
-  const canvas = $("#candle-chart");
+  const container = $("#candle-chart");
   const empty = $("#chart-empty");
-  if (!canvas) return;
+  if (!container) return;
   const candles = activeCandles();
   if (empty) empty.hidden = Boolean(candles.length);
   if (!candles.length) {
@@ -1034,274 +1069,164 @@ function renderChart() {
           ? "Loading candles."
           : "Candles unavailable.";
     }
-    clearChart(canvas);
+    clearLightweightChart();
     return;
   }
-  drawCandles(canvas, candles);
+  drawLightweightCandles(container, candles);
 }
 
-function clearChart(canvas) {
-  const context = canvas.getContext("2d");
-  if (!context) return;
+function clearLightweightChart() {
   state.chartViewport = null;
-  const rect = canvas.getBoundingClientRect();
-  const ratio = window.devicePixelRatio || 1;
-  canvas.width = Math.max(1, Math.floor(rect.width * ratio));
-  canvas.height = Math.max(1, Math.floor(rect.height * ratio));
-  context.clearRect(0, 0, canvas.width, canvas.height);
+  if (chartRuntime.candles) chartRuntime.candles.setData([]);
+  chartRuntime.key = "";
+  clearChartPriceLines();
 }
 
-function drawCandles(canvas, candles) {
-  const context = canvas.getContext("2d");
-  if (!context) return;
-  const rect = canvas.getBoundingClientRect();
-  const ratio = window.devicePixelRatio || 1;
-  const width = Math.max(320, Math.floor(rect.width || canvas.clientWidth || 960));
-  const height = Math.max(240, Math.floor(rect.height || canvas.clientHeight || 420));
-  canvas.width = width * ratio;
-  canvas.height = height * ratio;
-  context.setTransform(ratio, 0, 0, ratio, 0, 0);
-  context.clearRect(0, 0, width, height);
-  context.fillStyle = "#f5f0e8";
-  context.fillRect(0, 0, width, height);
-  const pad = { top: 18, right: 64, bottom: 28, left: 16 };
-  const visible = candles.slice(-90);
-  const highs = visible.map((candle) => Number(candle.high));
-  const lows = visible.map((candle) => Number(candle.low));
-  const maxPrice = Math.max(...highs);
-  const minPrice = Math.min(...lows);
-  const priceRange = Math.max(0.0001, maxPrice - minPrice);
-  const plotWidth = width - pad.left - pad.right;
-  const plotHeight = height - pad.top - pad.bottom;
-  const priceToY = (price) => pad.top + ((maxPrice - price) / priceRange) * plotHeight;
-  const step = plotWidth / visible.length;
-  const indexToX = (index) => pad.left + step * index + Math.max(3, step - 2) / 2;
+function ensureLightweightChart(container) {
+  const library = window.LightweightCharts;
+  if (!library?.createChart || !library?.CandlestickSeries) {
+    const empty = $("#chart-empty");
+    if (empty) {
+      empty.hidden = false;
+      empty.textContent = "TradingView chart library unavailable.";
+    }
+    return false;
+  }
+  if (chartRuntime.chart) return true;
+  const { CandlestickSeries, ColorType, CrosshairMode, LineStyle, createChart } = library;
+  const chart = createChart(container, {
+    autoSize: true,
+    layout: {
+      background: { type: ColorType.Solid, color: CHART_COLORS.background },
+      textColor: CHART_COLORS.text,
+      attributionLogo: false,
+    },
+    grid: {
+      vertLines: { color: CHART_COLORS.grid },
+      horzLines: { color: CHART_COLORS.grid },
+    },
+    crosshair: { mode: CrosshairMode.Normal },
+    rightPriceScale: {
+      borderVisible: false,
+      scaleMargins: { top: 0.12, bottom: 0.14 },
+    },
+    timeScale: {
+      borderVisible: false,
+      secondsVisible: false,
+      timeVisible: true,
+    },
+    handleScale: true,
+    handleScroll: true,
+  });
+  chartRuntime.chart = chart;
+  chartRuntime.candles = chart.addSeries(CandlestickSeries, {
+    borderDownColor: CHART_COLORS.down,
+    borderUpColor: CHART_COLORS.up,
+    downColor: CHART_COLORS.down,
+    lastValueVisible: true,
+    priceLineVisible: true,
+    upColor: CHART_COLORS.up,
+    wickDownColor: CHART_COLORS.down,
+    wickUpColor: CHART_COLORS.up,
+  });
+  chartRuntime.lineStyle = LineStyle;
+  chartRuntime.resizeObserver = new ResizeObserver(() => chart.timeScale().fitContent());
+  chartRuntime.resizeObserver.observe(container);
+  return true;
+}
+
+function candleTimestamp(candle) {
+  const value = candle?.opened_at || candle?.time;
+  const date = new Date(value);
+  if (!Number.isNaN(date.getTime())) return Math.floor(date.getTime() / 1000);
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function lightweightCandleData(candles) {
+  return candles
+    .map((candle) => {
+      const time = candleTimestamp(candle);
+      if (!time) return null;
+      return {
+        close: Number(candle.close),
+        high: Number(candle.high),
+        low: Number(candle.low),
+        open: Number(candle.open),
+        time,
+      };
+    })
+    .filter(
+      (candle) =>
+        candle &&
+        Number.isFinite(candle.open) &&
+        Number.isFinite(candle.high) &&
+        Number.isFinite(candle.low) &&
+        Number.isFinite(candle.close),
+    );
+}
+
+function drawLightweightCandles(container, candles) {
+  if (!ensureLightweightChart(container)) return;
+  const visible = lightweightCandleData(candles.slice(-180));
+  const latest = visible.at(-1);
+  const key = `${currentChartAsset()}::${state.activeTimeframe}::${visible.length}::${latest?.time || ""}::${latest?.close || ""}`;
+  if (key !== chartRuntime.key) {
+    chartRuntime.candles.setData(visible);
+    chartRuntime.chart.timeScale().fitContent();
+    chartRuntime.key = key;
+  }
+  const width = Math.max(320, container.clientWidth || 960);
+  const height = Math.max(240, container.clientHeight || 420);
+  const highs = visible.map((candle) => candle.high);
+  const lows = visible.map((candle) => candle.low);
+  const maxPrice = highs.length ? Math.max(...highs) : 0;
+  const minPrice = lows.length ? Math.min(...lows) : 0;
   state.chartViewport = {
     asset: currentChartAsset(),
-    interval: state.activeTimeframe,
-    width,
     height,
-    pad,
-    visible,
-    minPrice,
+    interval: state.activeTimeframe,
     maxPrice,
-    priceRange,
-    plotWidth,
-    plotHeight,
-    step,
+    minPrice,
+    pad: { bottom: 0, left: 0, right: 0, top: 0 },
+    plotHeight: height,
+    plotWidth: width,
+    priceRange: Math.max(0.0001, maxPrice - minPrice),
+    step: visible.length ? width / visible.length : 0,
+    visible,
+    width,
   };
-  context.strokeStyle = "rgba(24, 23, 21, 0.08)";
-  context.lineWidth = 1;
-  for (let i = 0; i < 5; i += 1) {
-    const y = pad.top + (plotHeight / 4) * i;
-    context.beginPath();
-    context.moveTo(pad.left, y);
-    context.lineTo(width - pad.right, y);
-    context.stroke();
-    const price = maxPrice - (priceRange / 4) * i;
-    context.fillStyle = "#8e8b82";
-    context.font = "11px Inter, system-ui, sans-serif";
-    context.fillText(compactPrice(price), width - pad.right + 10, y + 4);
-  }
-  const candleWidth = Math.max(3, plotWidth / visible.length - 2);
-  visible.forEach((candle, index) => {
-    const x = indexToX(index);
-    const open = Number(candle.open);
-    const close = Number(candle.close);
-    const high = Number(candle.high);
-    const low = Number(candle.low);
-    const gain = close >= open;
-    const color = gain ? "#6fa874" : "#a76561";
-    context.strokeStyle = color;
-    context.fillStyle = color;
-    context.beginPath();
-    context.moveTo(x, priceToY(high));
-    context.lineTo(x, priceToY(low));
-    context.stroke();
-    const bodyY = Math.min(priceToY(open), priceToY(close));
-    const bodyHeight = Math.max(2, Math.abs(priceToY(open) - priceToY(close)));
-    context.fillRect(x - candleWidth / 2, bodyY, candleWidth, bodyHeight);
-  });
-  drawTradeLevels(context, priceToY, width, pad);
-  drawChartMarks(context, priceToY, indexToX, visible, width, height, pad);
-  drawCrosshair(context, priceToY, indexToX, visible, width, height, pad);
+  drawLightweightTradeLevels();
 }
 
-function chartMarksForView() {
-  const asset = currentChartAsset();
-  const interval = state.activeTimeframe;
-  return state.chartMarks.filter((mark) => mark.asset === asset && mark.interval === interval);
+function clearChartPriceLines() {
+  if (!chartRuntime.candles) return;
+  for (const line of chartRuntime.priceLines) chartRuntime.candles.removePriceLine(line);
+  chartRuntime.priceLines = [];
 }
 
-function candleTimeLabel(candle) {
-  if (!candle?.opened_at) return "";
-  const date = new Date(candle.opened_at);
-  if (Number.isNaN(date.getTime())) return String(candle.opened_at);
-  return new Intl.DateTimeFormat("en", {
-    month: "short",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
-}
-
-function drawRoundedLabel(context, text, x, y, options = {}) {
-  const paddingX = options.paddingX || 8;
-  const height = options.height || 22;
-  context.font = options.font || "11px Inter, system-ui, sans-serif";
-  const width = context.measureText(text).width + paddingX * 2;
-  const left = Math.max(4, Math.min(x, (options.maxWidth || 10000) - width - 4));
-  const top = Math.max(4, Math.min(y, (options.maxHeight || 10000) - height - 4));
-  context.fillStyle = options.background || "rgba(24, 23, 21, 0.9)";
-  context.beginPath();
-  context.roundRect(left, top, width, height, 6);
-  context.fill();
-  context.fillStyle = options.color || "#faf9f5";
-  context.fillText(text, left + paddingX, top + 15);
-}
-
-function drawPriceLevel(context, price, label, color, priceToY, width, pad, dash = []) {
+function addChartPriceLine(price, title, color, dashed = false) {
   const value = Number(price);
-  if (!Number.isFinite(value)) return;
-  const y = priceToY(value);
-  if (y < pad.top - 18 || y > heightWithPad(context, pad) + 18) return;
-  context.save();
-  context.strokeStyle = color;
-  context.fillStyle = color;
-  context.lineWidth = 1.5;
-  context.setLineDash(dash);
-  context.beginPath();
-  context.moveTo(pad.left, y);
-  context.lineTo(width - pad.right, y);
-  context.stroke();
-  context.setLineDash([]);
-  drawRoundedLabel(context, `${label} ${compactPrice(value)}`, width - pad.right + 6, y - 11, {
-    background: color,
-    color: "#10110f",
-    maxWidth: width,
-  });
-  context.restore();
+  if (!chartRuntime.candles || !Number.isFinite(value)) return;
+  chartRuntime.priceLines.push(
+    chartRuntime.candles.createPriceLine({
+      axisLabelVisible: true,
+      color,
+      lineStyle: dashed ? chartRuntime.lineStyle.Dashed : chartRuntime.lineStyle.Solid,
+      lineWidth: 2,
+      price: value,
+      title,
+    }),
+  );
 }
 
-function heightWithPad(context, pad) {
-  return context.canvas.height / (window.devicePixelRatio || 1) - pad.bottom;
-}
-
-function drawTradeLevels(context, priceToY, width, pad) {
+function drawLightweightTradeLevels() {
+  clearChartPriceLines();
   const levels = selectedTradeLevels();
   if (!levels) return;
-  drawPriceLevel(context, levels.entry_price, "Entry", "#4a90e2", priceToY, width, pad);
-  drawPriceLevel(context, levels.take_profit, "TP", "#6fa874", priceToY, width, pad, [5, 4]);
-  drawPriceLevel(context, levels.stop_loss, "SL", "#a76561", priceToY, width, pad, [5, 4]);
-}
-
-function drawChartMarks(context, priceToY, indexToX, visible, width, height, pad) {
-  const marks = chartMarksForView();
-  if (!marks.length) return;
-  context.save();
-  for (const mark of marks) {
-    const index = visible.findIndex((candle) => candle.opened_at === mark.opened_at);
-    if (index < 0) continue;
-    const x = indexToX(index);
-    const y = priceToY(mark.price);
-    if (y < pad.top || y > height - pad.bottom) continue;
-    context.strokeStyle = "#4a90e2";
-    context.fillStyle = "#faf9f5";
-    context.lineWidth = 1.5;
-    context.beginPath();
-    context.arc(x, y, 5, 0, Math.PI * 2);
-    context.fill();
-    context.stroke();
-    context.beginPath();
-    context.moveTo(x - 8, y);
-    context.lineTo(x + 8, y);
-    context.moveTo(x, y - 8);
-    context.lineTo(x, y + 8);
-    context.stroke();
-  }
-  context.restore();
-}
-
-function drawCrosshair(context, priceToY, indexToX, visible, width, height, pad) {
-  const hover = state.chartHover;
-  if (!hover || hover.asset !== currentChartAsset() || hover.interval !== state.activeTimeframe) return;
-  const candle = visible[hover.index];
-  if (!candle) return;
-  const x = indexToX(hover.index);
-  const y = priceToY(hover.price);
-  if (x < pad.left || x > width - pad.right || y < pad.top || y > height - pad.bottom) return;
-  context.save();
-  context.strokeStyle = "rgba(74, 144, 226, 0.72)";
-  context.lineWidth = 1;
-  context.setLineDash([4, 4]);
-  context.beginPath();
-  context.moveTo(x, pad.top);
-  context.lineTo(x, height - pad.bottom);
-  context.moveTo(pad.left, y);
-  context.lineTo(width - pad.right, y);
-  context.stroke();
-  context.setLineDash([]);
-  drawRoundedLabel(context, compactPrice(hover.price), width - pad.right + 6, y - 11, {
-    background: "#4a90e2",
-    color: "#ffffff",
-    maxWidth: width,
-  });
-  drawRoundedLabel(context, candleTimeLabel(candle), x - 46, height - pad.bottom + 4, {
-    background: "rgba(24, 23, 21, 0.92)",
-    color: "#faf9f5",
-    maxWidth: width,
-    maxHeight: height,
-  });
-  context.restore();
-}
-
-function chartPointFromEvent(event) {
-  const viewport = state.chartViewport;
-  if (!viewport?.visible?.length) return null;
-  const canvas = $("#candle-chart");
-  if (!canvas) return null;
-  const rect = canvas.getBoundingClientRect();
-  const x = event.clientX - rect.left;
-  const y = event.clientY - rect.top;
-  const { pad, visible, plotWidth, plotHeight, priceRange, maxPrice } = viewport;
-  if (x < pad.left || x > viewport.width - pad.right || y < pad.top || y > viewport.height - pad.bottom) return null;
-  const rawIndex = Math.floor(((x - pad.left) / plotWidth) * visible.length);
-  const index = Math.min(Math.max(rawIndex, 0), visible.length - 1);
-  const price = maxPrice - ((y - pad.top) / plotHeight) * priceRange;
-  return {
-    asset: viewport.asset,
-    interval: viewport.interval,
-    index,
-    price,
-    opened_at: visible[index]?.opened_at,
-  };
-}
-
-function updateChartHover(event) {
-  const point = chartPointFromEvent(event);
-  state.chartHover = point;
-  renderChart();
-}
-
-function addChartMark(event) {
-  const point = chartPointFromEvent(event);
-  if (!point?.opened_at) return;
-  state.chartMarks.push({
-    asset: point.asset,
-    interval: point.interval,
-    opened_at: point.opened_at,
-    price: point.price,
-  });
-  renderChart();
-}
-
-function clearLatestChartMark() {
-  const asset = currentChartAsset();
-  const interval = state.activeTimeframe;
-  const index = state.chartMarks.findLastIndex((mark) => mark.asset === asset && mark.interval === interval);
-  if (index < 0) return;
-  state.chartMarks.splice(index, 1);
-  renderChart();
+  addChartPriceLine(levels.entry_price, "Entry", CHART_COLORS.entry);
+  addChartPriceLine(levels.take_profit, "TP", CHART_COLORS.takeProfit, true);
+  addChartPriceLine(levels.stop_loss, "SL", CHART_COLORS.stopLoss, true);
 }
 
 function actionText(plan) {
@@ -1526,7 +1451,6 @@ async function depositMasterToHyperliquid() {
     body: JSON.stringify({
       amount_usdc: Number($("#funding-usdc-amount").value),
       confirmed: true,
-      confirmation_phrase: $("#funding-phrase").value || null,
     }),
   });
   await loadState();
@@ -1556,7 +1480,6 @@ async function saveRuntime(partial = {}) {
     allowed_assets: allowedAssets.length ? allowedAssets : DEFAULT_ASSETS,
     sync_asset_lists: syncAssetLists,
     max_order_usdc: Number($("#max-order").value),
-    require_prodnet_phrase: true,
     ...partial,
   };
   state.runtime = await api("/api/settings/runtime", {
@@ -1627,6 +1550,7 @@ async function createManualPlan() {
   const mark = latestMarkPrice(asset);
   const entryPrice =
     manual.entry_type === "limit" ? optionalNumber(manual.entry_price) : mark || null;
+  const leverage = 1;
   const plan = await api("/api/trades/manual-plan", {
     method: "POST",
     body: JSON.stringify({
@@ -1635,9 +1559,9 @@ async function createManualPlan() {
       entry_type: manual.entry_type,
       size_usdc: Number(manual.size_usdc),
       entry_price: entryPrice,
-      stop_loss: optionalNumber(manual.stop_loss),
-      take_profit: optionalNumber(manual.take_profit),
-      leverage: Number(manual.leverage),
+      stop_loss: null,
+      take_profit: null,
+      leverage,
     }),
   });
   state.plan = plan;
@@ -1645,6 +1569,7 @@ async function createManualPlan() {
   state.selectedCandidateIndex = 0;
   await loadState();
   toast("Manual plan created");
+  return plan;
 }
 
 async function executeTrade() {
@@ -1653,12 +1578,17 @@ async function executeTrade() {
     method: "POST",
     body: JSON.stringify({
       confirmed: $("#execute-confirm").checked,
-      confirmation_phrase: $("#mainnet-phrase").value || null,
     }),
   });
   state.plan = result.plan;
   await loadState();
   toast("Execution submitted");
+}
+
+async function submitManualOrder() {
+  if (!$("#execute-confirm").checked) throw new Error("Confirm order submission first.");
+  await createManualPlan();
+  await executeTrade();
 }
 
 async function rejectTrade() {
@@ -1763,6 +1693,7 @@ document.addEventListener("click", async (event) => {
       await scan();
     }
     if (action === "create-manual-plan") await createManualPlan();
+    if (action === "submit-manual-order") await submitManualOrder();
     if (action === "execute") await executeTrade();
     if (action === "reject") await rejectTrade();
     if (action === "privy-setup-agent") await setupPrivyAgent();
@@ -1788,6 +1719,20 @@ document.addEventListener("change", (event) => {
   if (!field) return;
   state.manualOrder[field.dataset.manualField] = field.value;
   renderTradingView();
+});
+
+document.addEventListener("click", (event) => {
+  const pick = event.target.closest("[data-manual-pick]");
+  if (pick) {
+    state.manualOrder[pick.dataset.manualPick] = pick.dataset.value;
+    renderTradingView();
+    return;
+  }
+  const size = event.target.closest("[data-manual-size]");
+  if (size) {
+    state.manualOrder.size_usdc = Number(size.dataset.manualSize);
+    renderTradingView();
+  }
 });
 
 $("#sensitive-toggle")?.addEventListener("click", (event) => {
@@ -1831,14 +1776,6 @@ $("#analyze-form").addEventListener("submit", async (event) => {
 $("#asset-input")?.addEventListener("input", () => {
   selectChartAsset(currentChartAsset());
 });
-
-$("#candle-chart")?.addEventListener("mousemove", updateChartHover);
-$("#candle-chart")?.addEventListener("mouseleave", () => {
-  state.chartHover = null;
-  renderChart();
-});
-$("#candle-chart")?.addEventListener("click", addChartMark);
-$("#candle-chart")?.addEventListener("dblclick", clearLatestChartMark);
 
 window.addEventListener("resize", () => {
   if (state.screen === "trading") renderChart();

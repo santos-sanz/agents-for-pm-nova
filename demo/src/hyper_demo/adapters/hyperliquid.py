@@ -13,9 +13,6 @@ class ExecutionBlocked(RuntimeError):
     pass
 
 
-MAINNET_CONFIRMATION_PHRASE = "CONFIRM MAINNET ORDER"
-
-
 @dataclass(frozen=True)
 class PreparedOrder:
     coin: str
@@ -119,11 +116,6 @@ class HyperliquidAdapter:
             if not self.settings.hyperliquid_mainnet_enabled:
                 raise ExecutionBlocked(
                     "Mainnet is disabled. Set HYPERLIQUID_MAINNET_ENABLED=true to proceed."
-                )
-            if confirmation_phrase != MAINNET_CONFIRMATION_PHRASE:
-                raise ExecutionBlocked(
-                    "Mainnet execution requires confirmation phrase: "
-                    f'"{MAINNET_CONFIRMATION_PHRASE}".'
                 )
 
     def _submit_with_sdk(self, plan: TradePlan, prepared: PreparedOrder) -> dict[str, Any]:

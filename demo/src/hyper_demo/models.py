@@ -126,7 +126,6 @@ class RuntimeSettings(BaseModel):
     max_order_usdc: float = Field(default=100.0, gt=0)
     allowed_assets: list[str] = Field(default_factory=lambda: ["BTC", "ETH", "SOL", "HYPE"])
     sync_asset_lists: bool = True
-    require_prodnet_phrase: bool = True
 
     @field_validator("watchlist", "allowed_assets")
     @classmethod
@@ -148,7 +147,6 @@ class RuntimeSettingsUpdate(BaseModel):
     max_order_usdc: float | None = Field(default=None, gt=0)
     allowed_assets: list[str] | None = None
     sync_asset_lists: bool | None = None
-    require_prodnet_phrase: bool | None = None
 
     @field_validator("watchlist", "allowed_assets")
     @classmethod

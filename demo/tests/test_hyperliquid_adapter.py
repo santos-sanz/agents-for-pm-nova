@@ -1,13 +1,9 @@
 import pytest
 from pydantic import SecretStr
 
-from hyper_demo.adapters.hyperliquid import (
-    MAINNET_CONFIRMATION_PHRASE,
-    ExecutionBlocked,
-    HyperliquidAdapter,
-)
+from hyper_demo.adapters.hyperliquid import ExecutionBlocked, HyperliquidAdapter
 from hyper_demo.config import Settings
-from hyper_demo.models import TradePlan
+from hyper_demo.models import OrderRecord, TradePlan
 
 
 def test_execute_plan_reports_malformed_private_key() -> None:
@@ -79,7 +75,7 @@ def test_execute_plan_blocks_asset_outside_allowlist() -> None:
         HyperliquidAdapter(settings).execute_plan(plan, confirmed=True)
 
 
-def test_execute_plan_blocks_mainnet_without_phrase() -> None:
+def test_execute_plan_allows_mainnet_without_phrase(monkeypatch) -> None:
     settings = Settings(
         DEMO_TRADING_MODE="mainnet_guarded",
         HYPERLIQUID_MAINNET_ENABLED=True,
@@ -102,8 +98,16 @@ def test_execute_plan_blocks_mainnet_without_phrase() -> None:
         invalidation_criteria=[],
     )
 
-    with pytest.raises(ExecutionBlocked, match=MAINNET_CONFIRMATION_PHRASE):
-        HyperliquidAdapter(settings).execute_plan(plan, confirmed=True)
+    def fake_submit(self, submitted_plan, prepared):
+        assert submitted_plan == plan
+        return {"entry": {"response": {"data": {"statuses": [{"resting": {"oid": 123}}]}}}}
+
+    monkeypatch.setattr(HyperliquidAdapter, "_submit_with_sdk", fake_submit)
+
+    order = HyperliquidAdapter(settings).execute_plan(plan, confirmed=True)
+
+    assert isinstance(order, OrderRecord)
+    assert order.exchange == "hyperliquid-mainnet"
 
 
 def test_wallet_state_queries_main_account_address(monkeypatch) -> None:

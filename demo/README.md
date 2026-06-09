@@ -7,26 +7,24 @@ The app supports:
 - Reactive analysis: ask for a trade idea on any Hyperliquid asset.
 - Proactive scan: scan the configured watchlist and propose the strongest demo candidate.
 - Testnet auto-execution: guarded auto-submit when credentials and guardrails pass.
-- Prodnet guarded execution: never automatic; requires UI confirmation and `CONFIRM MAINNET ORDER`.
+- Prodnet guarded execution: never automatic; requires UI confirmation and explicit enablement.
 
 ## Setup
 
 ```bash
 cd demo
 uv sync
+npm install
 cp .env.example .env
 ```
 
 Fill `.env` with Claude and Hyperliquid credentials. Use a Hyperliquid API/agent wallet
 private key only. Never put the private key for the main wallet in this project.
+The browser UI serves TradingView Lightweight Charts from `node_modules`, so keep the npm
+dependencies installed before starting FastAPI.
 To enable the browser wallet login, also set `PRIVY_APP_ID` and `PRIVY_CLIENT_ID`
 from the Privy Dashboard. Do not put the Privy app secret in the browser demo.
-To execute through Privy-managed Hyperliquid agent wallets, install the Node helper
-dependencies and enable the server-side Privy secret:
-
-```bash
-npm install
-```
+To execute through Privy-managed Hyperliquid agent wallets, enable the server-side Privy secret:
 
 ```bash
 PRIVY_APP_ID=...
@@ -74,8 +72,7 @@ HYPERLIQUID_ALLOWED_ASSETS=BTC,ETH,SOL
 DEMO_REQUIRE_CONFIRMATION=true
 ```
 
-Prodnet execution still requires both the confirmation checkbox and the exact phrase
-`CONFIRM MAINNET ORDER`.
+Prodnet execution still requires the confirmation checkbox and explicit environment enablement.
 
 ## Validation
 
