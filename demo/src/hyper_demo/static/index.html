@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>HyperClaude</title>
-    <link rel="stylesheet" href="/static/styles.css?v=hyperclaude-search-picker-20260608-1" />
+    <link rel="stylesheet" href="/static/styles.css?v=hyperclaude-integrated-funding-20260609-4" />
   </head>
   <body class="trading-screen" data-screen="trading">
     <header class="topbar">
@@ -249,9 +249,20 @@
                 <span class="eyebrow">Wallets</span>
                 <h2>Privy wallet</h2>
               </div>
-              <span id="privy-status" class="pill">checking</span>
+              <div class="wallet-panel-actions">
+                <button
+                  id="sensitive-toggle"
+                  class="icon-button"
+                  type="button"
+                  data-action="toggle-sensitive"
+                  aria-label="Show sensitive wallet data"
+                  aria-pressed="false"
+                ></button>
+                <span id="privy-status" class="pill">checking</span>
+              </div>
             </div>
             <div id="privy-wallet-summary" class="kv"></div>
+            <div id="wallet-funding-flow" class="wallet-funding-flow" hidden></div>
             <button class="primary" data-action="privy-setup-agent">Initialize agent</button>
           </section>
 
@@ -260,7 +271,7 @@
     </main>
 
     <div id="toast" role="status" aria-live="polite"></div>
-    <script src="/static/app.js?v=hyperclaude-search-picker-20260608-1"></script>
-    <script type="module" src="/static/privy.js?v=hyperclaude-search-picker-20260608-1"></script>
+    <script src="/static/app.js?v=hyperclaude-integrated-funding-20260609-7"></script>
+    <script type="module" src="/static/privy.js?v=hyperclaude-integrated-funding-20260609-3"></script>
   </body>
 </html>

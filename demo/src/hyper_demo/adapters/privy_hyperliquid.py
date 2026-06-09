@@ -134,6 +134,39 @@ class PrivyHyperliquidAdapter:
             },
         )
 
+    def deposit_master_collateral(
+        self,
+        agent: PrivyAgentWallet,
+        amount_usdc: float,
+        confirmed: bool,
+        confirmation_phrase: str | None,
+    ) -> dict[str, Any]:
+        self._validate_privy_config()
+        if not confirmed:
+            raise ExecutionBlocked("Confirm the master wallet deposit before submitting.")
+        if agent.network != RuntimeNetwork.prodnet:
+            raise ExecutionBlocked("Integrated master deposits are only configured for prodnet.")
+        if not self.settings.hyperliquid_mainnet_enabled:
+            raise ExecutionBlocked(
+                "Mainnet is disabled. Set HYPERLIQUID_MAINNET_ENABLED=true to proceed."
+            )
+        if confirmation_phrase != MAINNET_CONFIRMATION_PHRASE:
+            raise ExecutionBlocked(
+                "Mainnet funding requires confirmation phrase: "
+                f'"{MAINNET_CONFIRMATION_PHRASE}".'
+            )
+        if amount_usdc < 5:
+            raise ExecutionBlocked("Hyperliquid Bridge2 deposits require at least 5 USDC.")
+        return self._run_helper(
+            "deposit-master",
+            {
+                "network": agent.network.value,
+                "masterWalletId": agent.master_wallet_id,
+                "masterWalletAddress": agent.master_wallet_address,
+                "amountUsdc": amount_usdc,
+            },
+        )
+
     def prepare_order(self, plan: TradePlan) -> PreparedOrder:
         size = plan.size_usdc / plan.entry_price
         return PreparedOrder(
