@@ -356,9 +356,11 @@ body.chat-screen-active .events-panel {
 
 .chat-grid {
   display: grid;
-  grid-template-columns: minmax(250px, 300px) minmax(0, 1fr) minmax(280px, 340px);
+  grid-template-columns: minmax(0, 1fr);
   gap: 16px;
   align-items: start;
+  max-width: 980px;
+  margin: 0 auto;
 }
 
 .chat-sidebar,
@@ -370,7 +372,7 @@ body.chat-screen-active .events-panel {
 .chat-transcript-panel {
   display: grid;
   min-height: calc(100vh - 130px);
-  grid-template-rows: auto minmax(260px, 1fr) auto auto;
+  grid-template-rows: auto minmax(360px, 1fr) auto;
 }
 
 .chat-head-actions {
@@ -592,6 +594,25 @@ body.chat-screen-active .events-panel {
 
 .settings-card.wide {
   grid-column: span 2;
+}
+
+.agents-settings-section {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.settings-section-head {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 4px;
+  border-top: 1px solid var(--line);
+  padding-top: 18px;
+}
+
+.settings-section-head h2 {
+  margin: 0;
 }
 
 .settings-wallet-auth {
@@ -1575,6 +1596,7 @@ pre {
   .auth-actions,
   .input-action,
   .settings-grid,
+  .agents-settings-section,
   .asset-options,
   .analyze-form {
     grid-template-columns: 1fr;
@@ -1590,6 +1612,10 @@ pre {
   }
 
   .settings-wallet-auth {
+    grid-column: auto;
+  }
+
+  .agents-settings-section {
     grid-column: auto;
   }
 

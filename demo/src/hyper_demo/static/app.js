@@ -1,3 +1,9 @@
+const CHAT_HUMAN_APPROVAL_TOOL_NAMES = new Set([
+  "trading_execute_plan",
+  "trading_close_position",
+  "trading_set_protection",
+]);
+
 const state = {
   runtime: null,
   setup: null,
@@ -64,6 +70,7 @@ const state = {
   masterFundingBalances: null,
   chat: {
     resources: null,
+    deployment: null,
     sessions: [],
     events: {},
     capabilities: null,
@@ -338,6 +345,8 @@ function renderRuntime() {
   const syncAssetLists = runtime.sync_asset_lists !== false;
   const syncAssetListsInput = $("#sync-asset-lists");
   if (syncAssetListsInput) syncAssetListsInput.checked = syncAssetLists;
+  const autoApproveInput = $("#agent-auto-approve");
+  if (autoApproveInput) autoApproveInput.checked = runtime.ui_mode === "robot";
   const runtimeAllowedAssets = runtime.allowed_assets?.length ? runtime.allowed_assets : DEFAULT_ASSETS;
   const runtimeWatchlist = runtime.watchlist?.length ? runtime.watchlist : DEFAULT_ASSETS;
   const syncedAssets = uniqueAssets(runtimeAllowedAssets.length ? runtimeAllowedAssets.join(",") : runtimeWatchlist.join(","));
@@ -352,7 +361,7 @@ function renderRuntime() {
   for (const button of document.querySelectorAll(".network-card[data-network]")) {
     button.classList.toggle("active", button.dataset.network === (runtime.network || DEFAULT_NETWORK));
   }
-  document.body.dataset.uiMode = "human";
+  document.body.dataset.uiMode = runtime.ui_mode || "human";
   document.body.dataset.network = runtime.network || DEFAULT_NETWORK;
   const networkStatus = $("#network-status");
   if (networkStatus) {
@@ -787,6 +796,9 @@ function renderScreen() {
     startChatPolling();
   } else {
     stopChatPolling();
+  }
+  if (state.screen === "settings") {
+    loadChatState().catch((error) => console.warn("Managed chat unavailable", error));
   }
 }
 
@@ -2291,6 +2303,7 @@ function renderEvents() {
 async function loadChatState({ renderAfter = true } = {}) {
   const payload = await api("/api/chat/state");
   state.chat.resources = payload.resources;
+  state.chat.deployment = payload.deployment || null;
   state.chat.sessions = payload.sessions || [];
   state.chat.capabilities = payload.capabilities || null;
   if (!state.chat.activeSessionId && state.chat.sessions.length) {
@@ -2322,10 +2335,18 @@ function activeChatEvents() {
 
 function renderChat() {
   if (!$("#chat-screen")) return;
-  renderChatResources();
-  renderChatSessions();
   renderChatTranscript();
-  renderChatInspector();
+  renderAgentSettings();
+}
+
+function renderAgentSettings() {
+  renderChatResources();
+  renderChatDeployment();
+  renderChatSessions();
+  renderVaultStatus();
+  renderPendingChatActions();
+  renderChatPlanActions();
+  renderChatCapabilities();
 }
 
 function renderChatResources() {
@@ -2354,6 +2375,52 @@ function renderChatResources() {
   if (resources.disabled_reason || resources.error) {
     grid.innerHTML += `<p class="chat-warning">${escapeHtml(resources.disabled_reason || resources.error)}</p>`;
   }
+}
+
+function renderChatDeployment() {
+  const deployment = state.chat.deployment || {};
+  const status = $("#chat-deployment-status");
+  if (status) {
+    status.className = `pill ${chatStatusClass(deployment.status)}`;
+    status.textContent = deployment.status || "not created";
+  }
+  const summary = $("#chat-deployment-summary");
+  if (summary) {
+    const upcoming = deployment.upcoming_runs_at || [];
+    summary.innerHTML = [
+      ["Deployment", deployment.anthropic_deployment_id ? shortId(deployment.anthropic_deployment_id) : "not created"],
+      ["Schedule", deployment.cron_expression || "*/30 * * * *"],
+      ["Timezone", deployment.timezone || "Europe/Madrid"],
+      ["Next", upcoming[0] ? new Date(upcoming[0]).toLocaleString() : "--"],
+      ["Last run", deployment.last_run_id ? shortId(deployment.last_run_id) : "--"],
+      ["Session", deployment.last_session_id ? shortId(deployment.last_session_id) : "--"],
+    ]
+      .map(([label, value]) => `<div><span>${label}</span><b>${escapeHtml(String(value))}</b></div>`)
+      .join("");
+    if (deployment.last_error) {
+      summary.innerHTML += `<p class="chat-warning">${escapeHtml(deployment.last_error)}</p>`;
+    }
+  }
+  syncInputValue("#chat-deployment-name", deployment.name || "HyperClaude intraday watch");
+  syncInputValue("#chat-deployment-cron", deployment.cron_expression || "*/30 * * * *");
+  syncInputValue("#chat-deployment-timezone", deployment.timezone || "Europe/Madrid");
+  syncInputValue("#chat-deployment-prompt", deployment.initial_prompt || defaultDeploymentPrompt());
+}
+
+function syncInputValue(selector, value) {
+  const input = $(selector);
+  if (!input || document.activeElement === input) return;
+  input.value = value;
+}
+
+function defaultDeploymentPrompt() {
+  return [
+    "Run the scheduled HyperClaude intraday watch.",
+    "Gather runtime settings, wallet state, open positions, allowed assets, mark prices, and market context.",
+    "Propose or validate short-horizon leveraged trades only when formally valid.",
+    "In human mode, do not execute, close, or modify exchange orders; stop after producing reviewable plans and validation results.",
+    "In robot mode, execution still requires trading_validate_plan valid=true and all host guardrails.",
+  ].join(" ");
 }
 
 function renderChatSessions() {
@@ -2404,13 +2471,6 @@ function renderChatTranscript() {
   list.scrollTop = list.scrollHeight;
 }
 
-function renderChatInspector() {
-  renderVaultStatus();
-  renderPendingChatActions();
-  renderChatPlanActions();
-  renderChatCapabilities();
-}
-
 function renderVaultStatus() {
   const target = $("#chat-vault-status");
   if (!target) return;
@@ -2436,7 +2496,23 @@ function renderVaultStatus() {
 function renderPendingChatActions() {
   const target = $("#chat-pending-actions");
   if (!target) return;
-  const pending = activeChatEvents().filter((event) => event.requires_action);
+  const events = activeChatEvents();
+  const resolvedToolIds = new Set(
+    events
+      .filter((event) => event.type === "user.custom_tool_result")
+      .map((event) => event.payload?.custom_tool_use_id)
+      .filter(Boolean),
+  );
+  const pending = events.filter((event) => {
+    const toolId = event.payload?.id || event.payload?.custom_tool_use_id || "";
+    return (
+      event.requires_action &&
+      event.type === "agent.custom_tool_use" &&
+      CHAT_HUMAN_APPROVAL_TOOL_NAMES.has(event.payload?.name) &&
+      toolId &&
+      !resolvedToolIds.has(toolId)
+    );
+  });
   target.innerHTML = pending.length
     ? pending
         .map((event) => {
@@ -2559,6 +2635,48 @@ async function bootstrapChat() {
     });
     await loadChatState();
     toast("Managed Agents resources rebuilt");
+  } finally {
+    state.chat.isLoading = false;
+    renderChat();
+  }
+}
+
+async function createChatDeployment() {
+  state.chat.isLoading = true;
+  renderChat();
+  try {
+    state.chat.deployment = await api("/api/chat/deployment", {
+      method: "POST",
+      body: JSON.stringify({
+        name: $("#chat-deployment-name")?.value.trim(),
+        cron_expression: $("#chat-deployment-cron")?.value.trim(),
+        timezone: $("#chat-deployment-timezone")?.value.trim(),
+        initial_prompt: $("#chat-deployment-prompt")?.value.trim(),
+      }),
+    });
+    await loadChatState();
+    if (state.chat.deployment?.status === "error") {
+      toast("Deployment failed");
+    } else {
+      toast("Claude deployment created");
+    }
+  } finally {
+    state.chat.isLoading = false;
+    renderChat();
+  }
+}
+
+async function runChatDeployment() {
+  state.chat.isLoading = true;
+  renderChat();
+  try {
+    state.chat.deployment = await api("/api/chat/deployment/run", { method: "POST" });
+    await loadChatState();
+    if (state.chat.deployment?.last_error || state.chat.deployment?.status === "error") {
+      toast("Deployment run failed");
+    } else {
+      toast("Deployment run started");
+    }
   } finally {
     state.chat.isLoading = false;
     renderChat();
@@ -2897,7 +3015,7 @@ async function saveRuntime(partial = {}) {
   }
   const payload = {
     network: state.runtime?.network || DEFAULT_NETWORK,
-    ui_mode: "human",
+    ui_mode: $("#agent-auto-approve")?.checked ? "robot" : "human",
     execution_policy: "auto_testnet_confirm_prodnet",
     watchlist: watchlist.length ? watchlist : DEFAULT_ASSETS,
     allowed_assets: allowedAssets.length ? allowedAssets : DEFAULT_ASSETS,
@@ -3333,6 +3451,8 @@ async function setPositionProtection(asset) {
 async function runAction(action, actionTarget) {
   if (action === "chat-bootstrap") await bootstrapChat();
   if (action === "chat-refresh") await refreshChat();
+  if (action === "chat-create-deployment") await createChatDeployment();
+  if (action === "chat-run-deployment") await runChatDeployment();
   if (action === "chat-new-session") await createChatSession();
   if (action === "chat-send-message") await sendChatMessage();
   if (action === "chat-define-outcome") await defineChatOutcome();

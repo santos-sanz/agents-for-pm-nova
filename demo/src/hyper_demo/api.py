@@ -19,6 +19,7 @@ from hyper_demo.models import (
     Candle,
     ConnectedWallet,
     ManagedAgentOpportunity,
+    ManagedChatDeployment,
     ManagedChatEvent,
     ManagedChatResources,
     ManagedChatSession,
@@ -31,7 +32,12 @@ from hyper_demo.models import (
     RuntimeSettingsUpdate,
     TradePlan,
     TradeSide,
+    UIMode,
     normalize_asset_symbol,
+)
+from hyper_demo.services.formal_validation import (
+    FormalValidationResult,
+    validate_formal_trade_plan,
 )
 from hyper_demo.services.hypertracker import HyperTrackerClient
 from hyper_demo.services.managed_chat import ManagedTradingChatService
@@ -96,6 +102,13 @@ class ChatBootstrapRequest(BaseModel):
 
 class ChatSessionCreateRequest(BaseModel):
     title: str | None = None
+
+
+class ChatDeploymentCreateRequest(BaseModel):
+    name: str | None = None
+    cron_expression: str | None = None
+    timezone: str | None = None
+    initial_prompt: str | None = None
 
 
 class ChatMessageRequest(BaseModel):
@@ -916,6 +929,27 @@ async def api_chat_create_session(
     return await get_chat_service().create_session(request.title)
 
 
+@app.post("/api/chat/deployment", response_model=ManagedChatDeployment)
+async def api_chat_create_deployment(
+    request: ChatDeploymentCreateRequest | None = None,
+) -> ManagedChatDeployment:
+    request = request or ChatDeploymentCreateRequest()
+    try:
+        return await get_chat_service().create_deployment(
+            name=request.name,
+            cron_expression=request.cron_expression,
+            timezone=request.timezone,
+            initial_prompt=request.initial_prompt,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/chat/deployment/run", response_model=ManagedChatDeployment)
+async def api_chat_run_deployment() -> ManagedChatDeployment:
+    return await get_chat_service().run_deployment()
+
+
 @app.get("/api/chat/sessions", response_model=list[ManagedChatSession])
 def api_chat_sessions() -> list[ManagedChatSession]:
     return sorted(
@@ -988,6 +1022,7 @@ async def api_chat_confirm_tool(
             request.tool_use_id,
             request.allow,
             request.deny_message,
+            tool_runner=run_chat_custom_tool,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -1054,15 +1089,26 @@ def run_chat_custom_tool(session: ManagedChatSession, event: dict[str, Any]) -> 
     if name == "trading_create_plan":
         plan = api_create_manual_trade_plan(ManualTradePlanRequest.model_validate(payload))
         return {"plan": plan.model_dump(mode="json")}
+    if name == "trading_validate_plan":
+        plan = _chat_plan_or_blocked(store, str(payload.get("plan_id") or ""))
+        return {"validation": _formal_validation_for_plan(store, runtime, settings, plan).as_dict()}
     if name == "trading_execute_plan":
+        plan = _chat_plan_or_blocked(store, str(payload.get("plan_id") or ""))
+        validation = _formal_validation_for_plan(store, runtime, settings, plan)
+        if not validation.valid:
+            raise ExecutionBlocked(
+                "Formal validation failed: " + "; ".join(validation.errors)
+            )
+        _require_chat_trade_action_approval(runtime, event)
         if not bool(payload.get("confirmed")):
             raise ExecutionBlocked("Tool execution requires confirmed=true.")
         result = api_execute_trade(
-            str(payload.get("plan_id") or ""),
+            plan.id,
             TradeExecutionRequest(confirmed=True),
         )
         return _json_safe(result)
     if name == "trading_close_position":
+        _require_chat_trade_action_approval(runtime, event)
         if not bool(payload.get("confirmed")):
             raise ExecutionBlocked("Position close requires confirmed=true.")
         return _json_safe(
@@ -1072,6 +1118,7 @@ def run_chat_custom_tool(session: ManagedChatSession, event: dict[str, Any]) -> 
             )
         )
     if name == "trading_set_protection":
+        _require_chat_trade_action_approval(runtime, event)
         if not bool(payload.get("confirmed")):
             raise ExecutionBlocked("TP/SL update requires confirmed=true.")
         return _json_safe(
@@ -1107,6 +1154,8 @@ def run_chat_custom_tool(session: ManagedChatSession, event: dict[str, Any]) -> 
                 if key
                 in {
                     "network",
+                    "ui_mode",
+                    "execution_policy",
                     "max_order_usdc",
                     "allowed_assets",
                     "watchlist",
@@ -1127,6 +1176,62 @@ def run_chat_custom_tool(session: ManagedChatSession, event: dict[str, Any]) -> 
         )
         return {"recorded": True, "proposal": _json_safe(payload)}
     raise ExecutionBlocked(f"Unknown or disabled custom tool: {name}.")
+
+
+def _require_chat_trade_action_approval(
+    runtime: RuntimeSettings,
+    event: dict[str, Any],
+) -> None:
+    if runtime.network != RuntimeNetwork.prodnet:
+        return
+    if runtime.ui_mode == UIMode.robot:
+        return
+    if bool(event.get("host_human_approved")):
+        return
+    raise ExecutionBlocked(
+        "Autonomous prodnet trade actions require runtime ui_mode=robot or human approval."
+    )
+
+
+def _chat_plan_or_blocked(store: JsonStore, plan_id: str) -> TradePlan:
+    plan = store.get("plans", plan_id)
+    if not plan:
+        raise ExecutionBlocked("Stored trade plan was not found.")
+    return plan
+
+
+def _formal_validation_for_plan(
+    store: JsonStore,
+    runtime: RuntimeSettings,
+    settings: Settings,
+    plan: TradePlan,
+) -> FormalValidationResult:
+    market = MarketDataClient(settings)
+    mark_price: float | None = None
+    max_leverage = 10.0
+    try:
+        mark = market.mark_price(plan.asset)
+        mark_price = mark.mark_price
+    except Exception:
+        mark_price = None
+    try:
+        max_leverage = float(int(min(10.0, _max_leverage_for_asset(plan.asset, market))))
+    except Exception:
+        max_leverage = 10.0
+    wallet: dict[str, Any] | None = None
+    try:
+        wallet = wallet_state_for_runtime(store, runtime, settings)
+    except (ExecutionBlocked, ValueError):
+        wallet = None
+    return validate_formal_trade_plan(
+        plan,
+        runtime=runtime,
+        allowed_assets=settings.allowed_assets_set,
+        wallet=wallet,
+        mark_price=mark_price,
+        max_leverage=max_leverage,
+        minimum_order_usdc=HYPERLIQUID_MIN_ORDER_USDC,
+    )
 
 
 def _chat_market_snapshot(
