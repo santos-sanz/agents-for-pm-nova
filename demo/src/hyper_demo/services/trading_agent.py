@@ -111,7 +111,7 @@ async def analyze_trade(
         ]
         if item
     )
-    report = await ManagedAgentResearchClient(effective_settings).research(
+    report = await ManagedAgentResearchClient(effective_settings, store).research(
         normalized,
         profile,
         external_context=research_context,

@@ -389,6 +389,17 @@ class ManagedChatCredentialStatus(BaseModel):
     message: str | None = None
 
 
+class ManagedAgentResearchResources(BaseModel):
+    id: str = "managed_agent_research_resources"
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+    status: Literal["ready", "error"] = "ready"
+    environment_id: str | None = None
+    agent_id: str | None = None
+    agent_version: int | None = None
+    error: str | None = None
+
+
 class ManagedChatResources(BaseModel):
     id: str = "managed_chat_resources"
     created_at: datetime = Field(default_factory=utc_now)

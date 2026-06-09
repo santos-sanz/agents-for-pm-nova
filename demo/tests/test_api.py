@@ -22,9 +22,11 @@ from hyper_demo.storage import JsonStore
 
 
 class FakeManagedObject:
-    def __init__(self, item_id: str, version: int | None = None) -> None:
+    def __init__(self, item_id: str, version: int | None = None, **kwargs) -> None:
         self.id = item_id
         self.version = version
+        for key, value in kwargs.items():
+            setattr(self, key, value)
 
 
 class FakeManagedStream:
@@ -109,6 +111,9 @@ class FakeManagedAnthropic:
 
     def update(self, *args, **kwargs):
         return FakeManagedObject("updated")
+
+    def list(self, *args, **kwargs):
+        return FakeManagedObject("list", data=[])
 
 
 class FakeHttpResponse:

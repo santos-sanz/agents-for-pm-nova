@@ -10,6 +10,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from hyper_demo.adapters.anthropic_managed import ManagedAgentResearchClient
 from hyper_demo.adapters.hyperliquid import ExecutionBlocked
 from hyper_demo.api import setup_check
 from hyper_demo.config import get_settings, settings_for_runtime
@@ -46,6 +47,31 @@ def setup_check_command() -> None:
     console.print(table)
     for warning in check.warnings:
         console.print(f"[yellow]warning:[/] {warning}")
+
+
+@app.command("cleanup-managed-agents")
+def cleanup_managed_agents_command(
+    keep: Annotated[
+        int,
+        typer.Option("--keep", min=1, help="Number of newest demo agents/environments to keep."),
+    ] = 1,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run/--apply",
+            help="Preview the resources that would be removed, or apply the cleanup.",
+        ),
+    ] = True,
+) -> None:
+    try:
+        result = ManagedAgentResearchClient(get_settings()).cleanup_duplicate_resources(
+            keep=keep,
+            dry_run=dry_run,
+        )
+    except Exception as exc:
+        console.print(f"[red]blocked:[/] {exc}")
+        raise typer.Exit(code=1) from exc
+    console.print_json(json.dumps(result))
 
 
 @app.command("analyze")

@@ -9,7 +9,6 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
-from uuid import uuid4
 
 from anthropic.lib import files_from_dir
 
@@ -838,25 +837,31 @@ class ManagedTradingChatService:
 
     def _bootstrap_remote(self) -> ManagedChatResources:
         client = self._client()
-        environment = client.beta.environments.create(
-            name="hyperclaude-trading-chat-env",
-            description="Sandbox for autonomous HyperClaude trading chat sessions.",
-            config={
-                "type": "cloud",
-                "networking": {
-                    "type": "limited",
-                    "allowed_hosts": self._allowed_network_hosts(),
-                    "allow_package_managers": True,
-                    "allow_mcp_servers": True,
-                },
-                "packages": {
-                    "type": "packages",
-                    "pip": ["numpy", "pandas", "scipy", "requests"],
-                    "npm": ["typescript"],
-                },
-            },
+        environment = _find_latest_named_resource(
+            client.beta.environments,
+            "hyperclaude-trading-chat-env",
             metadata={"app": "hyperclaude", "component": CHAT_AGENT_RUN_LABEL},
         )
+        if not environment:
+            environment = client.beta.environments.create(
+                name="hyperclaude-trading-chat-env",
+                description="Sandbox for autonomous HyperClaude trading chat sessions.",
+                config={
+                    "type": "cloud",
+                    "networking": {
+                        "type": "limited",
+                        "allowed_hosts": self._allowed_network_hosts(),
+                        "allow_package_managers": True,
+                        "allow_mcp_servers": True,
+                    },
+                    "packages": {
+                        "type": "packages",
+                        "pip": ["numpy", "pandas", "scipy", "requests"],
+                        "npm": ["typescript"],
+                    },
+                },
+                metadata={"app": "hyperclaude", "component": CHAT_AGENT_RUN_LABEL},
+            )
         skill_ids, skill_versions = self._create_skills(client)
         memory_store_ids = self._create_memory_stores(client)
         vault_ids, credentials = self._prepare_vaults(client)
@@ -866,31 +871,43 @@ class ManagedTradingChatService:
 
         subagent_ids: dict[str, str] = {}
         for slug, (name, role) in SUBAGENT_SPECS.items():
-            agent = client.beta.agents.create(
-                name=name,
-                model=self.settings.managed_chat_model,
-                description=role,
-                system=f"{role}\n\n{COORDINATOR_SYSTEM}",
-                tools=tools[:1],
-                skills=skills,
+            agent = _find_latest_named_resource(
+                client.beta.agents,
+                name,
                 metadata={"app": "hyperclaude", "role": slug},
             )
+            if not agent:
+                agent = client.beta.agents.create(
+                    name=name,
+                    model=self.settings.managed_chat_model,
+                    description=role,
+                    system=f"{role}\n\n{COORDINATOR_SYSTEM}",
+                    tools=tools[:1],
+                    skills=skills,
+                    metadata={"app": "hyperclaude", "role": slug},
+                )
             subagent_ids[slug] = _object_id(agent)
 
-        coordinator = client.beta.agents.create(
-            name="HyperClaude Chat Coordinator",
-            model=self.settings.managed_chat_model,
-            description=(
-                "Autonomous Managed Agents trading coordinator with guarded custom tools, "
-                "Vault-backed MCP support, memory, outcomes, and subagents."
-            ),
-            system=COORDINATOR_SYSTEM,
-            tools=tools,
-            mcp_servers=mcp_servers,
-            skills=skills,
-            multiagent={"type": "coordinator", "agents": list(subagent_ids.values())},
+        coordinator = _find_latest_named_resource(
+            client.beta.agents,
+            "HyperClaude Chat Coordinator",
             metadata={"app": "hyperclaude", "role": "coordinator"},
         )
+        if not coordinator:
+            coordinator = client.beta.agents.create(
+                name="HyperClaude Chat Coordinator",
+                model=self.settings.managed_chat_model,
+                description=(
+                    "Autonomous Managed Agents trading coordinator with guarded custom tools, "
+                    "Vault-backed MCP support, memory, outcomes, and subagents."
+                ),
+                system=COORDINATOR_SYSTEM,
+                tools=tools,
+                mcp_servers=mcp_servers,
+                skills=skills,
+                multiagent={"type": "coordinator", "agents": list(subagent_ids.values())},
+                metadata={"app": "hyperclaude", "role": "coordinator"},
+            )
 
         resources = ManagedChatResources(
             status="ready",
@@ -1176,19 +1193,20 @@ class ManagedTradingChatService:
     def _create_skills(self, client: Any) -> tuple[dict[str, str], dict[str, int]]:
         skill_ids: dict[str, str] = {}
         skill_versions: dict[str, int] = {}
-        build_suffix = f"{CHAT_AGENT_RUN_LABEL}-{uuid4().hex[:8]}"
         with tempfile.TemporaryDirectory(prefix="hyperclaude-skills-") as tmp:
             root = Path(tmp)
             for slug, (title, body) in SKILL_SPECS.items():
-                skill_dir = root / slug
-                skill_dir.mkdir()
-                skill_path = skill_dir / "SKILL.md"
-                content = _skill_markdown(slug, body)
-                skill_path.write_text(content, encoding="utf-8")
-                skill = client.beta.skills.create(
-                    display_title=f"{title} ({build_suffix})",
-                    files=files_from_dir(skill_dir),
-                )
+                skill = _find_latest_titled_resource(client.beta.skills, title)
+                if not skill:
+                    skill_dir = root / slug
+                    skill_dir.mkdir()
+                    skill_path = skill_dir / "SKILL.md"
+                    content = _skill_markdown(slug, body)
+                    skill_path.write_text(content, encoding="utf-8")
+                    skill = client.beta.skills.create(
+                        display_title=title,
+                        files=files_from_dir(skill_dir),
+                    )
                 skill_ids[slug] = _object_id(skill)
                 version = _object_version(skill)
                 if version is not None:
@@ -1196,40 +1214,68 @@ class ManagedTradingChatService:
         return skill_ids, skill_versions
 
     def _create_memory_stores(self, client: Any) -> dict[str, str]:
-        canon = client.beta.memory_stores.create(
+        canon, canon_created = self._ensure_memory_store(
+            client,
             name="HyperClaude Trading Canon",
             description=(
                 "Read-only operating canon: guardrails, allowed exchange boundaries, "
                 "and trading safety principles."
             ),
-            metadata={"app": "hyperclaude", "kind": "canon"},
+            kind="canon",
         )
-        learning = client.beta.memory_stores.create(
+        learning, learning_created = self._ensure_memory_store(
+            client,
             name="HyperClaude Conversation Learning",
             description=(
                 "Read-write user preferences, rejected ideas, post-trade lessons, "
                 "and proposed process improvements. Never store secrets."
             ),
-            metadata={"app": "hyperclaude", "kind": "learning"},
+            kind="learning",
         )
         ids = {"canon": _object_id(canon), "learning": _object_id(learning)}
-        self._seed_memory(
-            client,
-            ids["canon"],
-            "/canon/safety.md",
-            SKILL_SPECS["hyperliquid-safety"][1],
-        )
-        self._seed_memory(
-            client,
-            ids["learning"],
-            "/learning/README.md",
-            (
-                "# Conversation Learning\n\n"
-                "Store user preferences, repeated mistakes, rejected setups, and post-trade "
-                "lessons here. Do not store API keys, private keys, cookies, or credentials.\n"
-            ),
-        )
+        if canon_created:
+            self._seed_memory(
+                client,
+                ids["canon"],
+                "/canon/safety.md",
+                SKILL_SPECS["hyperliquid-safety"][1],
+            )
+        if learning_created:
+            self._seed_memory(
+                client,
+                ids["learning"],
+                "/learning/README.md",
+                (
+                    "# Conversation Learning\n\n"
+                    "Store user preferences, repeated mistakes, rejected setups, and post-trade "
+                    "lessons here. Do not store API keys, private keys, cookies, or credentials.\n"
+                ),
+            )
         return ids
+
+    def _ensure_memory_store(
+        self,
+        client: Any,
+        *,
+        name: str,
+        description: str,
+        kind: str,
+    ) -> tuple[Any, bool]:
+        store = _find_latest_named_resource(
+            client.beta.memory_stores,
+            name,
+            metadata={"app": "hyperclaude", "kind": kind},
+        )
+        if store:
+            return store, False
+        return (
+            client.beta.memory_stores.create(
+                name=name,
+                description=description,
+                metadata={"app": "hyperclaude", "kind": kind},
+            ),
+            True,
+        )
 
     def _seed_memory(self, client: Any, store_id: str, path: str, content: str) -> None:
         try:
@@ -1319,6 +1365,13 @@ class ManagedTradingChatService:
         existing = self._existing_managed_vault_id()
         if existing:
             return existing
+        remote = _find_latest_named_resource(
+            client.beta.vaults,
+            "HyperClaude API-Key Tools",
+            metadata={"app": "hyperclaude", "component": CHAT_AGENT_RUN_LABEL},
+        )
+        if remote:
+            return _object_id(remote)
         vault = client.beta.vaults.create(
             display_name="HyperClaude API-Key Tools",
             metadata={"app": "hyperclaude", "component": CHAT_AGENT_RUN_LABEL},
@@ -1652,6 +1705,57 @@ def _object_version(value: Any) -> int | None:
         return int(version)
     except (TypeError, ValueError):
         return None
+
+
+def _find_latest_named_resource(
+    api: Any,
+    name: str,
+    *,
+    metadata: dict[str, str] | None = None,
+) -> Any | None:
+    matches = [
+        item
+        for item in _list_resource_page(api)
+        if _resource_name(item) == name and _metadata_matches(item, metadata or {})
+    ]
+    if not matches:
+        return None
+    return sorted(matches, key=_created_sort_key)[-1]
+
+
+def _find_latest_titled_resource(api: Any, title: str) -> Any | None:
+    matches = [
+        item
+        for item in _list_resource_page(api)
+        if _resource_name(item) == title or _resource_name(item).startswith(f"{title} (")
+    ]
+    if not matches:
+        return None
+    return sorted(matches, key=_created_sort_key)[-1]
+
+
+def _list_resource_page(api: Any) -> list[Any]:
+    page = api.list(limit=100)
+    if hasattr(page, "data"):
+        return list(page.data)
+    return list(page)
+
+
+def _resource_name(item: Any) -> str:
+    for attr in ("name", "display_name", "display_title", "title"):
+        value = getattr(item, attr, None)
+        if value:
+            return str(value)
+    return ""
+
+
+def _metadata_matches(item: Any, expected: dict[str, str]) -> bool:
+    metadata = getattr(item, "metadata", None) or {}
+    return all(str(metadata.get(key) or "") == value for key, value in expected.items())
+
+
+def _created_sort_key(item: Any) -> str:
+    return str(getattr(item, "created_at", "") or "")
 
 
 def _matching_mcp_server(name: str, servers: list[dict[str, Any]]) -> dict[str, Any] | None:
