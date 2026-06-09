@@ -6,7 +6,26 @@ import re
 from typing import Any
 
 from hyper_demo.config import Settings, get_settings
-from hyper_demo.models import InvestorProfile, ResearchReport
+from hyper_demo.models import (
+    InvestorProfile,
+    ManagedAgentResearchResources,
+    ResearchReport,
+    utc_now,
+)
+from hyper_demo.storage import JsonStore
+
+RESEARCH_RESOURCE_ID = "managed_agent_research_resources"
+RESEARCH_ENVIRONMENT_NAME = "hyperliquid-investment-demo-env"
+RESEARCH_AGENT_NAME = "hyperliquid-investment-demo-agent"
+CHAT_ENVIRONMENT_NAME = "hyperclaude-trading-chat-env"
+CHAT_AGENT_NAMES = [
+    "HyperClaude Research Agent",
+    "HyperClaude Risk Sentinel",
+    "HyperClaude Execution Planner",
+    "HyperClaude Outcome Auditor",
+    "HyperClaude Toolsmith",
+    "HyperClaude Chat Coordinator",
+]
 
 SYSTEM_PROMPT = """You are an educational investment analysis agent for a live demo.
 
@@ -29,8 +48,9 @@ sources: string[]
 
 
 class ManagedAgentResearchClient:
-    def __init__(self, settings: Settings | None = None) -> None:
+    def __init__(self, settings: Settings | None = None, store: JsonStore | None = None) -> None:
         self.settings = settings or get_settings()
+        self.store = store or JsonStore(self.settings)
 
     async def research(
         self,
@@ -70,36 +90,11 @@ class ManagedAgentResearchClient:
 
         api_key = self.settings.anthropic_api_key
         client = Anthropic(api_key=api_key.get_secret_value() if api_key else None)
-        environment_id = self.settings.anthropic_environment_id
-        if not environment_id:
-            environment = client.beta.environments.create(
-                name="hyperliquid-investment-demo-env",
-                config={"type": "cloud", "networking": {"type": "unrestricted"}},
-            )
-            environment_id = environment.id
-
-        agent_id = self.settings.anthropic_agent_id
-        if not agent_id:
-            agent = client.beta.agents.create(
-                name="hyperliquid-investment-demo-agent",
-                model=self.settings.anthropic_model,
-                system=SYSTEM_PROMPT,
-                tools=[
-                    {
-                        "type": "agent_toolset_20260401",
-                        "default_config": {"enabled": False},
-                        "configs": [
-                            {"name": "web_search", "enabled": True},
-                            {"name": "web_fetch", "enabled": True},
-                        ],
-                    }
-                ],
-                description=(
-                    "Educational trading operating-system agent for guarded Hyperliquid "
-                    "research, risk, monitoring, and execution review."
-                ),
-            )
-            agent_id = agent.id
+        resources = self._research_resources(client)
+        environment_id = resources.environment_id
+        agent_id = resources.agent_id
+        if not environment_id or not agent_id:
+            raise RuntimeError("Managed Agents research resources are not ready.")
 
         session = client.beta.sessions.create(agent=agent_id, environment_id=environment_id)
         prompt = self._prompt(asset, profile, external_context)
@@ -137,6 +132,135 @@ class ManagedAgentResearchClient:
             agent_session_id=getattr(session, "id", None),
             fallback_used=False,
         )
+
+    def _research_resources(self, client: Any) -> ManagedAgentResearchResources:
+        configured_environment_id = self.settings.anthropic_environment_id
+        configured_agent_id = self.settings.anthropic_agent_id
+        if configured_environment_id and configured_agent_id:
+            return self._save_resources(
+                environment_id=configured_environment_id,
+                agent_id=configured_agent_id,
+            )
+
+        current = self.store.get("managed_agent_research_resources", RESEARCH_RESOURCE_ID)
+        environment_id = configured_environment_id or (current.environment_id if current else None)
+        agent_id = configured_agent_id or (current.agent_id if current else None)
+        agent_version = current.agent_version if current else None
+
+        if not environment_id:
+            environment = self._find_latest_named(
+                client.beta.environments,
+                RESEARCH_ENVIRONMENT_NAME,
+            )
+            if not environment:
+                environment = client.beta.environments.create(
+                    name=RESEARCH_ENVIRONMENT_NAME,
+                    description="Sandbox for the HyperClaude one-shot research agent.",
+                    config={"type": "cloud", "networking": {"type": "unrestricted"}},
+                    metadata={"app": "hyperclaude", "component": "research"},
+                )
+            environment_id = _object_id(environment)
+
+        if not agent_id:
+            agent = self._find_latest_named(client.beta.agents, RESEARCH_AGENT_NAME)
+            if not agent:
+                agent = client.beta.agents.create(
+                    name=RESEARCH_AGENT_NAME,
+                    model=self.settings.anthropic_model,
+                    system=SYSTEM_PROMPT,
+                    tools=[
+                        {
+                            "type": "agent_toolset_20260401",
+                            "default_config": {"enabled": False},
+                            "configs": [
+                                {"name": "web_search", "enabled": True},
+                                {"name": "web_fetch", "enabled": True},
+                            ],
+                        }
+                    ],
+                    description=(
+                        "Educational trading operating-system agent for guarded Hyperliquid "
+                        "research, risk, monitoring, and execution review."
+                    ),
+                    metadata={"app": "hyperclaude", "component": "research"},
+                )
+            agent_id = _object_id(agent)
+            agent_version = _object_version(agent)
+
+        return self._save_resources(
+            environment_id=environment_id,
+            agent_id=agent_id,
+            agent_version=agent_version,
+        )
+
+    def _save_resources(
+        self,
+        *,
+        environment_id: str,
+        agent_id: str,
+        agent_version: int | None = None,
+    ) -> ManagedAgentResearchResources:
+        existing = self.store.get("managed_agent_research_resources", RESEARCH_RESOURCE_ID)
+        resources = ManagedAgentResearchResources(
+            created_at=existing.created_at if existing else utc_now(),
+            updated_at=utc_now(),
+            status="ready",
+            environment_id=environment_id,
+            agent_id=agent_id,
+            agent_version=agent_version,
+        )
+        return self.store.save("managed_agent_research_resources", resources)
+
+    def _find_latest_named(self, api: Any, name: str) -> Any | None:
+        matches = [item for item in _list_all(api) if getattr(item, "name", None) == name]
+        if not matches:
+            return None
+        return sorted(matches, key=_created_sort_key)[-1]
+
+    def cleanup_duplicate_resources(self, keep: int = 1, dry_run: bool = True) -> dict[str, Any]:
+        if keep < 1:
+            raise ValueError("keep must be at least 1.")
+        if not self.settings.has_anthropic_credentials:
+            raise RuntimeError("ANTHROPIC_API_KEY is not configured.")
+
+        from anthropic import Anthropic
+
+        api_key = self.settings.anthropic_api_key
+        client = Anthropic(api_key=api_key.get_secret_value() if api_key else None)
+        all_agents = _list_all(client.beta.agents)
+        all_environments = _list_all(client.beta.environments)
+        research_agents = _duplicates_to_remove(all_agents, RESEARCH_AGENT_NAME, keep)
+        chat_agents = [
+            item
+            for name in CHAT_AGENT_NAMES
+            for item in _duplicates_to_remove(all_agents, name, keep)
+        ]
+        research_environments = _duplicates_to_remove(
+            all_environments,
+            RESEARCH_ENVIRONMENT_NAME,
+            keep,
+        )
+        chat_environments = _duplicates_to_remove(all_environments, CHAT_ENVIRONMENT_NAME, keep)
+        result: dict[str, Any] = {
+            "dry_run": dry_run,
+            "keep": keep,
+            "research_agents": [_object_id(item) for item in research_agents],
+            "chat_agents": [_object_id(item) for item in chat_agents],
+            "research_environments": [_object_id(item) for item in research_environments],
+            "chat_environments": [_object_id(item) for item in chat_environments],
+        }
+        if dry_run:
+            return result
+
+        for agent in [*research_agents, *chat_agents]:
+            client.beta.agents.archive(_object_id(agent))
+        for environment in [*research_environments, *chat_environments]:
+            environment_id = _object_id(environment)
+            try:
+                client.beta.environments.delete(environment_id)
+            except Exception:
+                client.beta.environments.archive(environment_id)
+        return result
 
     def _prompt(
         self,
@@ -262,3 +386,29 @@ def _as_list(value: Any) -> list[str]:
     if isinstance(value, list):
         return [str(item) for item in value]
     return [str(value)]
+
+
+def _object_id(obj: Any) -> str:
+    return str(getattr(obj, "id", "") or "")
+
+
+def _object_version(obj: Any) -> int | None:
+    version = getattr(obj, "version", None)
+    return int(version) if version is not None else None
+
+
+def _created_sort_key(obj: Any) -> str:
+    return str(getattr(obj, "created_at", "") or "")
+
+
+def _list_all(api: Any) -> list[Any]:
+    page = api.list(limit=100)
+    if hasattr(page, "data"):
+        return list(page.data)
+    return list(page)
+
+
+def _duplicates_to_remove(items: list[Any], name: str, keep: int) -> list[Any]:
+    named = [item for item in items if getattr(item, "name", None) == name]
+    sorted_items = sorted(named, key=_created_sort_key, reverse=True)
+    return sorted_items[keep:]

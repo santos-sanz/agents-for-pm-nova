@@ -838,25 +838,31 @@ class ManagedTradingChatService:
 
     def _bootstrap_remote(self) -> ManagedChatResources:
         client = self._client()
-        environment = client.beta.environments.create(
-            name="hyperclaude-trading-chat-env",
-            description="Sandbox for autonomous HyperClaude trading chat sessions.",
-            config={
-                "type": "cloud",
-                "networking": {
-                    "type": "limited",
-                    "allowed_hosts": self._allowed_network_hosts(),
-                    "allow_package_managers": True,
-                    "allow_mcp_servers": True,
-                },
-                "packages": {
-                    "type": "packages",
-                    "pip": ["numpy", "pandas", "scipy", "requests"],
-                    "npm": ["typescript"],
-                },
-            },
+        environment = _find_latest_named_resource(
+            client.beta.environments,
+            "hyperclaude-trading-chat-env",
             metadata={"app": "hyperclaude", "component": CHAT_AGENT_RUN_LABEL},
         )
+        if not environment:
+            environment = client.beta.environments.create(
+                name="hyperclaude-trading-chat-env",
+                description="Sandbox for autonomous HyperClaude trading chat sessions.",
+                config={
+                    "type": "cloud",
+                    "networking": {
+                        "type": "limited",
+                        "allowed_hosts": self._allowed_network_hosts(),
+                        "allow_package_managers": True,
+                        "allow_mcp_servers": True,
+                    },
+                    "packages": {
+                        "type": "packages",
+                        "pip": ["numpy", "pandas", "scipy", "requests"],
+                        "npm": ["typescript"],
+                    },
+                },
+                metadata={"app": "hyperclaude", "component": CHAT_AGENT_RUN_LABEL},
+            )
         skill_ids, skill_versions = self._create_skills(client)
         memory_store_ids = self._create_memory_stores(client)
         vault_ids, credentials = self._prepare_vaults(client)
@@ -866,31 +872,43 @@ class ManagedTradingChatService:
 
         subagent_ids: dict[str, str] = {}
         for slug, (name, role) in SUBAGENT_SPECS.items():
-            agent = client.beta.agents.create(
-                name=name,
-                model=self.settings.managed_chat_model,
-                description=role,
-                system=f"{role}\n\n{COORDINATOR_SYSTEM}",
-                tools=tools[:1],
-                skills=skills,
+            agent = _find_latest_named_resource(
+                client.beta.agents,
+                name,
                 metadata={"app": "hyperclaude", "role": slug},
             )
+            if not agent:
+                agent = client.beta.agents.create(
+                    name=name,
+                    model=self.settings.managed_chat_model,
+                    description=role,
+                    system=f"{role}\n\n{COORDINATOR_SYSTEM}",
+                    tools=tools[:1],
+                    skills=skills,
+                    metadata={"app": "hyperclaude", "role": slug},
+                )
             subagent_ids[slug] = _object_id(agent)
 
-        coordinator = client.beta.agents.create(
-            name="HyperClaude Chat Coordinator",
-            model=self.settings.managed_chat_model,
-            description=(
-                "Autonomous Managed Agents trading coordinator with guarded custom tools, "
-                "Vault-backed MCP support, memory, outcomes, and subagents."
-            ),
-            system=COORDINATOR_SYSTEM,
-            tools=tools,
-            mcp_servers=mcp_servers,
-            skills=skills,
-            multiagent={"type": "coordinator", "agents": list(subagent_ids.values())},
+        coordinator = _find_latest_named_resource(
+            client.beta.agents,
+            "HyperClaude Chat Coordinator",
             metadata={"app": "hyperclaude", "role": "coordinator"},
         )
+        if not coordinator:
+            coordinator = client.beta.agents.create(
+                name="HyperClaude Chat Coordinator",
+                model=self.settings.managed_chat_model,
+                description=(
+                    "Autonomous Managed Agents trading coordinator with guarded custom tools, "
+                    "Vault-backed MCP support, memory, outcomes, and subagents."
+                ),
+                system=COORDINATOR_SYSTEM,
+                tools=tools,
+                mcp_servers=mcp_servers,
+                skills=skills,
+                multiagent={"type": "coordinator", "agents": list(subagent_ids.values())},
+                metadata={"app": "hyperclaude", "role": "coordinator"},
+            )
 
         resources = ManagedChatResources(
             status="ready",
@@ -1652,6 +1670,38 @@ def _object_version(value: Any) -> int | None:
         return int(version)
     except (TypeError, ValueError):
         return None
+
+
+def _find_latest_named_resource(
+    api: Any,
+    name: str,
+    *,
+    metadata: dict[str, str] | None = None,
+) -> Any | None:
+    matches = [
+        item
+        for item in _list_resource_page(api)
+        if getattr(item, "name", None) == name and _metadata_matches(item, metadata or {})
+    ]
+    if not matches:
+        return None
+    return sorted(matches, key=_created_sort_key)[-1]
+
+
+def _list_resource_page(api: Any) -> list[Any]:
+    page = api.list(limit=100)
+    if hasattr(page, "data"):
+        return list(page.data)
+    return list(page)
+
+
+def _metadata_matches(item: Any, expected: dict[str, str]) -> bool:
+    metadata = getattr(item, "metadata", None) or {}
+    return all(str(metadata.get(key) or "") == value for key, value in expected.items())
+
+
+def _created_sort_key(item: Any) -> str:
+    return str(getattr(item, "created_at", "") or "")
 
 
 def _matching_mcp_server(name: str, servers: list[dict[str, Any]]) -> dict[str, Any] | None:
