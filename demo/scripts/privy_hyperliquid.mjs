@@ -1,24 +1,10 @@
 import { PrivyClient } from "@privy-io/node";
 import { createViemAccount } from "@privy-io/node/viem";
 import * as hl from "@nktkas/hyperliquid";
-import { createPublicClient, createWalletClient, encodeFunctionData, http, parseUnits } from "viem";
-import { arbitrum } from "viem/chains";
 
 const command = process.argv[2];
 const ARBITRUM_USDC = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831";
 const HYPERLIQUID_BRIDGE2 = "0x2Df1c51E09aECF9cacB7bc98cB1742757f163dF7";
-const ERC20_ABI = [
-  {
-    type: "function",
-    name: "transfer",
-    stateMutability: "nonpayable",
-    inputs: [
-      { name: "to", type: "address" },
-      { name: "amount", type: "uint256" },
-    ],
-    outputs: [{ name: "", type: "bool" }],
-  },
-];
 
 function readStdin() {
   return new Promise((resolve, reject) => {
@@ -305,40 +291,30 @@ async function depositMaster(input) {
   }
 
   const privy = privyClient();
-  const account = viemAccount(privy, {
-    id: input.masterWalletId,
-    address: input.masterWalletAddress,
+  const transfer = await privy.wallets().transfer(input.masterWalletId, {
+    destination: {
+      address: HYPERLIQUID_BRIDGE2,
+      asset: "usdc",
+      chain: "arbitrum",
+    },
+    source: {
+      amount: String(amount),
+      asset: "usdc",
+      chain: "arbitrum",
+    },
+    amount_type: "exact_input",
+    slippage_bps: 0,
   });
-  const walletClient = createWalletClient({
-    account,
-    chain: arbitrum,
-    transport: http(),
-  });
-  const publicClient = createPublicClient({
-    chain: arbitrum,
-    transport: http(),
-  });
-  const value = parseUnits(String(amount), 6);
-  const hash = await walletClient.sendTransaction({
-    account,
-    chain: arbitrum,
-    to: ARBITRUM_USDC,
-    data: encodeFunctionData({
-      abi: ERC20_ABI,
-      functionName: "transfer",
-      args: [HYPERLIQUID_BRIDGE2, value],
-    }),
-  });
-  const receipt = await publicClient.waitForTransactionReceipt({ hash });
   return {
     network: "prodnet",
-    protocol: "Arbitrum One USDC -> Hyperliquid Bridge2",
+    protocol: "Privy sponsored Arbitrum USDC -> Hyperliquid Bridge2",
     bridgeAddress: HYPERLIQUID_BRIDGE2,
     usdcAddress: ARBITRUM_USDC,
     amountUsdc: amount,
-    hash,
-    status: receipt.status,
-    blockNumber: receipt.blockNumber.toString(),
+    actionId: transfer.id,
+    hash: transfer.transaction_hash || null,
+    status: transfer.status,
+    raw: transfer,
   };
 }
 

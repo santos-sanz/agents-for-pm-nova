@@ -20,12 +20,11 @@ const state = {
     watchlist: [],
   },
   showSensitiveWalletData: false,
-  fundingBalances: null,
+  masterFundingBalances: null,
 };
 
 const DEFAULT_ASSETS = ["BTC", "ETH", "SOL", "HYPE"];
 const AGENT_NAME = "HyperClaude";
-const ARBITRUM_RPC_URL = "https://arb1.arbitrum.io/rpc";
 const ARBITRUM_USDC_ADDRESS = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831";
 
 function $(selector) {
@@ -367,18 +366,14 @@ function renderWalletFundingFlow(wallet, activeAgent) {
     activeAgent.agent_wallet_address,
     redactAddress(activeAgent.agent_wallet_address),
   );
-  const userAddress = sensitiveValue(wallet.address, redactAddress(wallet.address));
   const depositNetwork = depositNetworkLabel(activeAgent.network);
-  const balances = state.fundingBalances?.address === wallet.address ? state.fundingBalances : null;
-  const usdcBalance = balances?.usdc ?? null;
-  const ethBalance = balances?.eth ?? null;
-  const hasUsdcBalance = usdcBalance !== null && usdcBalance !== undefined;
-  const usdcValue = hasUsdcBalance ? Math.min(Number(usdcBalance), 5) : 5;
-  const fundingBalanceText = state.showSensitiveWalletData
-    ? formatFundingBalanceLabel(usdcBalance, ethBalance)
-    : redactFundingBalanceLabel(usdcBalance, ethBalance);
-  const fundingBalanceClass = state.showSensitiveWalletData ? "" : " redacted-value";
-  const usdcMaxAttribute = state.showSensitiveWalletData ? usdcBalance ?? "" : "";
+  const balances = state.masterFundingBalances?.address === activeAgent.master_wallet_address
+    ? state.masterFundingBalances
+    : null;
+  const balanceText = state.showSensitiveWalletData
+    ? formatFundingBalanceLabel(balances?.usdc ?? null, balances?.eth ?? null)
+    : redactFundingBalanceLabel(balances?.usdc ?? null, balances?.eth ?? null);
+  const balanceClass = state.showSensitiveWalletData ? "" : " redacted-value";
   const status = actionRequired || "Master wallet needs a Hyperliquid deposit before agent registration.";
   target.innerHTML = `
     <div class="funding-head">
@@ -390,46 +385,34 @@ function renderWalletFundingFlow(wallet, activeAgent) {
       <section class="funding-step">
         <span class="step-badge">1</span>
         <div>
-          <b>Prepare funds in the user wallet</b>
-          <p>Use the connected Privy wallet as the source wallet when funding Hyperliquid.</p>
-          <div class="address-row">
-            <code class="sensitive-code${sensitiveClass}">${escapeHtml(userAddress)}</code>
-            <button type="button" class="small-button" data-action="copy-wallet-address" data-wallet-target="user">Copy</button>
-          </div>
+          <b>Send funds from the external system</b>
+          <p>Use the external funding source directly. Send native Arbitrum USDC to the Privy master wallet below.</p>
         </div>
       </section>
       <section class="funding-step current">
         <span class="step-badge">2</span>
         <div>
-          <b>Fund the master wallet on Arbitrum</b>
-          <p>Send native USDC from the connected user wallet to the master wallet. The sender pays the Arbitrum transaction gas.</p>
+          <b>External transfer destination</b>
+          <p>This is the only address that should receive the external funding transfer for this setup.</p>
           <div class="network-row">
-            <span>Protocol / network</span>
+            <span>Network</span>
             <b>${escapeHtml(depositNetwork)}</b>
           </div>
           <div class="network-row">
-            <span>User wallet balance</span>
-            <b id="funding-balance-label" class="sensitive-balance${fundingBalanceClass}">${escapeHtml(fundingBalanceText)}</b>
+            <span>Token</span>
+            <b>Native USDC</b>
+          </div>
+          <div class="network-row">
+            <span>USDC contract</span>
+            <code class="sensitive-code${sensitiveClass}">${escapeHtml(sensitiveValue(ARBITRUM_USDC_ADDRESS, redactAddress(ARBITRUM_USDC_ADDRESS)))}</code>
           </div>
           <div class="address-row">
             <code class="sensitive-code${sensitiveClass}">${escapeHtml(masterAddress)}</code>
             <button type="button" class="small-button" data-action="copy-wallet-address" data-wallet-target="master">Copy</button>
           </div>
-          <div class="funding-form">
-            <label>
-              USDC to master
-              <span class="input-action compact-input-action">
-                <input id="funding-usdc-amount" type="number" min="0" max="${escapeHtml(usdcMaxAttribute)}" step="0.01" value="${escapeHtml(formatFundingInputValue(usdcValue))}" />
-                <button type="button" data-action="funding-max-usdc">Max</button>
-              </span>
-            </label>
-            <label class="check-row compact-check">
-              <input id="funding-confirm" type="checkbox" />
-              Confirm wallet funding transactions
-            </label>
-            <div class="button-row funding-actions">
-              <button type="button" data-action="fund-master-usdc">Send USDC</button>
-            </div>
+          <div class="network-row">
+            <span>Master wallet funds</span>
+            <b id="master-funding-balance-label" class="sensitive-balance${balanceClass}">${escapeHtml(balanceText)}</b>
           </div>
         </div>
       </section>
@@ -437,13 +420,21 @@ function renderWalletFundingFlow(wallet, activeAgent) {
         <span class="step-badge">3</span>
         <div>
           <b>Deposit master collateral, then retry</b>
-          <p>After the master wallet has gas and USDC, submit the master wallet deposit to Hyperliquid Bridge2 and retry setup.</p>
+          <p>After the external transfer arrives in the master wallet, submit the master wallet deposit to Hyperliquid Bridge2 and retry setup.</p>
           <div class="address-row">
             <code class="sensitive-code${sensitiveClass}">${escapeHtml(agentAddress)}</code>
           </div>
           <label>
+            USDC to deposit
+            <input id="funding-usdc-amount" type="number" min="5" step="0.000001" value="5" />
+          </label>
+          <label>
             Mainnet phrase
             <input id="funding-phrase" placeholder="CONFIRM MAINNET ORDER" />
+          </label>
+          <label class="check-row compact-check">
+            <input id="funding-confirm" type="checkbox" />
+            Confirm master wallet deposit
           </label>
           <div class="button-row funding-actions">
             <button type="button" data-action="deposit-master-hyperliquid">Deposit master to Hyperliquid</button>
@@ -453,7 +444,7 @@ function renderWalletFundingFlow(wallet, activeAgent) {
       </section>
     </div>
   `;
-  refreshFundingBalances(wallet.address).catch(() => {});
+  refreshMasterFundingBalances(activeAgent.master_wallet_address).catch(() => {});
 }
 
 function renderSensitiveToggle(hasWallet) {
@@ -675,24 +666,18 @@ function redactEmail(email) {
 }
 
 function depositNetworkLabel(network) {
-  if (network === "prodnet") return "Arbitrum One USDC -> Hyperliquid mainnet";
+  if (network === "prodnet") return "Arbitrum One";
   return "Hyperliquid testnet funds";
 }
 
 function formatFundingBalanceLabel(usdc, eth) {
   if (usdc === null || eth === null) return "Loading Arbitrum balances";
-  return `${formatTokenAmount(usdc)} USDC / ${formatTokenAmount(eth, 5)} ETH`;
+  return `${formatTokenAmount(usdc, 6)} USDC / ${formatTokenAmount(eth, 5)} ETH`;
 }
 
 function redactFundingBalanceLabel(usdc, eth) {
   if (usdc === null || eth === null) return "Loading Arbitrum balances";
   return "•••• USDC / •••• ETH";
-}
-
-function formatFundingInputValue(value) {
-  const numeric = Number(value || 0);
-  if (!Number.isFinite(numeric) || numeric <= 0) return "0";
-  return String(Math.floor(numeric * 100) / 100);
 }
 
 function formatTokenAmount(value, decimals = 2) {
@@ -704,90 +689,43 @@ function formatTokenAmount(value, decimals = 2) {
   });
 }
 
-function encodeBalanceOf(address) {
-  const clean = String(address || "").replace(/^0x/, "").toLowerCase();
-  if (!/^[0-9a-f]{40}$/.test(clean)) throw new Error("Wallet address is invalid.");
-  return `0x70a08231${clean.padStart(64, "0")}`;
+function formatFundingInputValue(value) {
+  const numeric = Number(value || 0);
+  if (!Number.isFinite(numeric) || numeric <= 0) return "0";
+  return numeric.toFixed(6).replace(/\.?0+$/, "");
 }
 
-async function arbitrumRpc(method, params) {
-  const response = await fetch(ARBITRUM_RPC_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: Date.now(),
-      method,
-      params,
-    }),
-  });
-  const payload = await response.json();
-  if (payload.error) throw new Error(payload.error.message || "Arbitrum RPC error.");
-  return payload.result;
-}
-
-function formatUnits(raw, decimals) {
-  const value = BigInt(raw || "0x0");
-  const scale = 10n ** BigInt(decimals);
-  const whole = value / scale;
-  const fraction = value % scale;
-  const fractionText = fraction.toString().padStart(decimals, "0").replace(/0+$/, "");
-  return Number(`${whole.toString()}${fractionText ? `.${fractionText}` : ""}`);
-}
-
-async function refreshFundingBalances(address) {
+async function refreshMasterFundingBalances(address) {
   if (!address) return;
-  if (state.fundingBalances?.address === address && !state.fundingBalances.loading) return;
-  state.fundingBalances = { address, loading: true, usdc: null, eth: null };
-  const [ethRaw, usdcRaw] = await Promise.all([
-    arbitrumRpc("eth_getBalance", [address, "latest"]),
-    arbitrumRpc("eth_call", [
-      {
-        to: ARBITRUM_USDC_ADDRESS,
-        data: encodeBalanceOf(address),
-      },
-      "latest",
-    ]),
-  ]);
+  if (state.masterFundingBalances?.address === address && !state.masterFundingBalances.loading) return;
+  state.masterFundingBalances = { address, loading: true, usdc: null, eth: null };
+  const balance = await api(`/api/wallet/arbitrum-balance/${encodeURIComponent(address)}`);
   const balances = {
-    address,
+    address: balance.address,
     loading: false,
-    eth: formatUnits(ethRaw, 18),
-    usdc: formatUnits(usdcRaw, 6),
+    eth: balance.eth,
+    usdc: balance.usdc,
   };
-  state.fundingBalances = balances;
-  updateFundingBalanceDom(balances);
+  state.masterFundingBalances = balances;
+  updateMasterFundingBalanceDom(balances);
 }
 
-function updateFundingBalanceDom(balances) {
-  const label = $("#funding-balance-label");
+function updateMasterFundingBalanceDom(balances) {
+  const label = $("#master-funding-balance-label");
   if (label) {
     label.textContent = state.showSensitiveWalletData
       ? formatFundingBalanceLabel(balances.usdc, balances.eth)
       : redactFundingBalanceLabel(balances.usdc, balances.eth);
     label.classList.toggle("redacted-value", !state.showSensitiveWalletData);
   }
-  const usdcInput = $("#funding-usdc-amount");
-  if (usdcInput) {
-    if (state.showSensitiveWalletData) {
-      usdcInput.max = String(balances.usdc);
-    } else {
-      usdcInput.removeAttribute("max");
+  const depositInput = $("#funding-usdc-amount");
+  if (depositInput && Number(balances.usdc) >= 5) {
+    const current = Number(depositInput.value || 0);
+    if (!current || current === 5 || current > balances.usdc) {
+      depositInput.value = formatFundingInputValue(balances.usdc);
     }
-    const current = Number(usdcInput.value || 0);
-    if (!current || current > balances.usdc) {
-      usdcInput.value = formatFundingInputValue(balances.usdc);
-    }
+    depositInput.max = String(balances.usdc);
   }
-}
-
-function setFundingUsdcMax() {
-  const input = $("#funding-usdc-amount");
-  const max = state.fundingBalances?.usdc;
-  if (!input || max === null || max === undefined) {
-    throw new Error("User wallet USDC balance is still loading.");
-  }
-  input.value = formatFundingInputValue(max);
 }
 
 function walletAddressForTarget(target) {
@@ -841,18 +779,6 @@ function currentMasterAddress() {
   return address;
 }
 
-async function fundMasterUsdc() {
-  requireFundingConfirmation();
-  if (!window.hyperDemoPrivyFunding?.transferUserUsdcToMaster) {
-    throw new Error("Privy wallet funding is not ready yet.");
-  }
-  const hash = await window.hyperDemoPrivyFunding.transferUserUsdcToMaster({
-    masterAddress: currentMasterAddress(),
-    amountUsdc: $("#funding-usdc-amount").value,
-  });
-  toast(`USDC transfer submitted: ${maskHash(hash)}`);
-}
-
 async function depositMasterToHyperliquid() {
   requireFundingConfirmation();
   const result = await api("/api/privy/deposit-master", {
@@ -864,7 +790,8 @@ async function depositMasterToHyperliquid() {
     }),
   });
   await loadState();
-  toast(`Master deposit submitted: ${maskHash(result.hash)}`);
+  const reference = result.hash || result.actionId || result.status || "submitted";
+  toast(`Master deposit submitted: ${maskHash(reference)}`);
 }
 
 function maskHash(hash) {
@@ -1016,8 +943,6 @@ document.addEventListener("click", async (event) => {
     if (action === "toggle-sensitive") toggleSensitiveWalletData();
     if (action === "copy-wallet-address") await copyWalletAddress(actionTarget.dataset.walletTarget);
     if (action === "open-hyperliquid-deposit") openHyperliquidDeposit();
-    if (action === "funding-max-usdc") setFundingUsdcMax();
-    if (action === "fund-master-usdc") await fundMasterUsdc();
     if (action === "deposit-master-hyperliquid") await depositMasterToHyperliquid();
     if (action === "events" || action === "refresh") await loadState();
   } catch (error) {

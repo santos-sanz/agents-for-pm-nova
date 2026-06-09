@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +39,8 @@ from hyper_demo.storage import JsonStore
 
 APP_ROOT = Path(__file__).resolve().parent
 STATIC_ROOT = APP_ROOT / "static"
+ARBITRUM_RPC_URL = "https://arb1.arbitrum.io/rpc"
+ARBITRUM_USDC_ADDRESS = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"
 
 app = FastAPI(title="HyperClaude", version="0.2.0")
 app.mount("/static", StaticFiles(directory=STATIC_ROOT), name="static")
@@ -99,6 +104,13 @@ class ConnectedWalletRequest(BaseModel):
     wallet_id: str | None = None
 
 
+class ArbitrumBalanceResponse(BaseModel):
+    address: str
+    eth: float
+    usdc: float
+    usdc_contract: str
+
+
 def get_store() -> JsonStore:
     return JsonStore(get_settings())
 
@@ -109,6 +121,49 @@ def get_runtime(store: JsonStore | None = None) -> RuntimeSettings:
 
 def privy_agent_wallet_id(network: RuntimeNetwork) -> str:
     return f"privy_agent_wallet_{network.value}"
+
+
+def _validate_evm_address(address: str) -> str:
+    clean = address.removeprefix("0x").lower()
+    if len(clean) != 40 or any(char not in "0123456789abcdef" for char in clean):
+        raise ValueError("Wallet address is invalid.")
+    return f"0x{clean}"
+
+
+def _encode_balance_of(address: str) -> str:
+    clean = _validate_evm_address(address).removeprefix("0x")
+    return f"0x70a08231{clean.rjust(64, '0')}"
+
+
+def _format_units(raw: str, decimals: int) -> float:
+    value = int(raw or "0x0", 16)
+    return value / float(10**decimals)
+
+
+def _arbitrum_rpc(method: str, params: list[Any]) -> str:
+    payload = json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": method,
+            "params": params,
+        }
+    ).encode()
+    request = urllib.request.Request(
+        ARBITRUM_RPC_URL,
+        data=payload,
+        headers={"Content-Type": "application/json", "User-Agent": "HyperClaude-demo"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            body = json.loads(response.read().decode())
+    except (TimeoutError, urllib.error.URLError, ValueError) as exc:
+        raise HTTPException(status_code=502, detail="Arbitrum RPC is unavailable.") from exc
+    if body.get("error"):
+        message = body["error"].get("message") or "Arbitrum RPC error."
+        raise HTTPException(status_code=502, detail=message)
+    return str(body.get("result") or "0x0")
 
 
 def get_privy_agent_wallet(store: JsonStore, runtime: RuntimeSettings) -> Any:
@@ -204,6 +259,32 @@ def get_privy_config() -> PrivyPublicConfig:
         app_id=settings.privy_app_id,
         client_id=settings.privy_client_id,
         configured=settings.has_privy_config,
+    )
+
+
+@app.get("/api/wallet/arbitrum-balance/{address}", response_model=ArbitrumBalanceResponse)
+def get_arbitrum_wallet_balance(address: str) -> ArbitrumBalanceResponse:
+    try:
+        normalized_address = _validate_evm_address(address)
+        usdc_call_data = _encode_balance_of(normalized_address)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    eth_raw = _arbitrum_rpc("eth_getBalance", [normalized_address, "latest"])
+    usdc_raw = _arbitrum_rpc(
+        "eth_call",
+        [
+            {
+                "to": ARBITRUM_USDC_ADDRESS,
+                "data": usdc_call_data,
+            },
+            "latest",
+        ],
+    )
+    return ArbitrumBalanceResponse(
+        address=normalized_address,
+        eth=_format_units(eth_raw, 18),
+        usdc=_format_units(usdc_raw, 6),
+        usdc_contract=ARBITRUM_USDC_ADDRESS,
     )
 
 
