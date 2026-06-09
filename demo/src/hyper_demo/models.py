@@ -98,7 +98,7 @@ class ConnectedWallet(BaseModel):
 class PrivyAgentWallet(BaseModel):
     id: str = "privy_agent_wallet"
     created_at: datetime = Field(default_factory=utc_now)
-    network: RuntimeNetwork = RuntimeNetwork.testnet
+    network: RuntimeNetwork = RuntimeNetwork.prodnet
     master_wallet_id: str
     master_wallet_address: str
     agent_wallet_id: str
@@ -119,7 +119,7 @@ class PrivyAgentWallet(BaseModel):
 class RuntimeSettings(BaseModel):
     id: str = "runtime"
     created_at: datetime = Field(default_factory=utc_now)
-    network: RuntimeNetwork = RuntimeNetwork.testnet
+    network: RuntimeNetwork = RuntimeNetwork.prodnet
     execution_policy: ExecutionPolicy = ExecutionPolicy.auto_testnet_confirm_prodnet
     ui_mode: UIMode = UIMode.human
     watchlist: list[str] = Field(default_factory=lambda: ["BTC", "ETH", "SOL", "HYPE"])
@@ -210,6 +210,16 @@ class ResearchReport(BaseModel):
     fallback_used: bool = False
 
 
+class ManagedAgentOpportunity(BaseModel):
+    title: str
+    horizon: Literal["now", "next", "moonshot"]
+    owner_loop: str
+    tools: list[str]
+    human_gate: str
+    value: str
+    risk: str
+
+
 class ProposalRequest(BaseModel):
     asset: str = Field(default="BTC", min_length=2, max_length=16)
     profile_id: str | None = None
@@ -221,6 +231,81 @@ class ProposalRequest(BaseModel):
         return normalize_asset_symbol(value)
 
 
+class Candle(BaseModel):
+    asset: str
+    interval: Literal["15m", "1h", "4h", "1d"]
+    opened_at: datetime
+    open: float = Field(gt=0)
+    high: float = Field(gt=0)
+    low: float = Field(gt=0)
+    close: float = Field(gt=0)
+    volume: float = Field(default=0.0, ge=0)
+    source: str = "hyperliquid"
+
+    @model_validator(mode="after")
+    def validate_ohlc(self) -> Candle:
+        high = max(self.high, self.open, self.close)
+        low = min(self.low, self.open, self.close)
+        self.high = high
+        self.low = low
+        return self
+
+
+class TimeframeSignal(BaseModel):
+    interval: Literal["15m", "1h", "4h", "1d"]
+    direction: Literal["bullish", "bearish", "neutral"]
+    score: float = Field(ge=-100.0, le=100.0)
+    return_pct: float
+    volatility_pct: float = Field(ge=0.0)
+    rsi: float = Field(ge=0.0, le=100.0)
+    atr_pct: float = Field(ge=0.0)
+    support: float = Field(gt=0)
+    resistance: float = Field(gt=0)
+    reason: str
+
+
+class TradeCandidate(BaseModel):
+    side: TradeSide
+    entry_type: Literal["market", "limit"]
+    timeframe: Literal["15m", "1h", "4h", "1d"]
+    score: float = Field(ge=0.0, le=100.0)
+    confidence: float = Field(ge=0.0, le=1.0)
+    entry_price: float = Field(gt=0)
+    stop_loss: float = Field(gt=0)
+    take_profit: float = Field(gt=0)
+    size_usdc: float = Field(gt=0)
+    max_loss_usdc: float = Field(gt=0)
+    leverage: float = Field(ge=1.0, le=10.0)
+    risk_reward: float = Field(gt=0)
+    rationale: str
+
+    @model_validator(mode="after")
+    def validate_candidate_exits(self) -> TradeCandidate:
+        if self.side == TradeSide.long:
+            if not self.stop_loss < self.entry_price < self.take_profit:
+                raise ValueError("Long candidates require stop_loss < entry_price < take_profit.")
+        if self.side == TradeSide.short:
+            if not self.take_profit < self.entry_price < self.stop_loss:
+                raise ValueError("Short candidates require take_profit < entry_price < stop_loss.")
+        return self
+
+
+class AgentTradeAnalysis(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("analysis"))
+    created_at: datetime = Field(default_factory=utc_now)
+    asset: str
+    network: RuntimeNetwork = RuntimeNetwork.prodnet
+    thesis: str
+    summary: str
+    best_candidate: TradeCandidate
+    candidates: list[TradeCandidate]
+    timeframes: list[TimeframeSignal]
+    candles_by_timeframe: dict[str, list[Candle]]
+    sources: list[str] = Field(default_factory=list)
+    fallback_used: bool = False
+    plan_id: str | None = None
+
+
 class TradePlan(BaseModel):
     id: str = Field(default_factory=lambda: new_id("plan"))
     created_at: datetime = Field(default_factory=utc_now)
@@ -229,9 +314,9 @@ class TradePlan(BaseModel):
     size_usdc: float = Field(gt=0)
     entry_type: Literal["market", "limit"] = "limit"
     entry_price: float = Field(gt=0)
-    stop_loss: float = Field(gt=0)
-    take_profit: float = Field(gt=0)
-    max_loss_usdc: float = Field(gt=0)
+    stop_loss: float | None = Field(default=None, gt=0)
+    take_profit: float | None = Field(default=None, gt=0)
+    max_loss_usdc: float = Field(default=0.0, ge=0)
     leverage: float = Field(default=1.0, ge=1.0, le=10.0)
     profile_id: str | None = None
     research_id: str | None = None
@@ -240,8 +325,9 @@ class TradePlan(BaseModel):
     confidence: float = Field(default=0.62, ge=0.0, le=1.0)
     thesis: str | None = None
     evidence: list[str] = Field(default_factory=list)
+    source: Literal["agent", "manual"] = "agent"
     execution_decision: ExecutionDecision = ExecutionDecision.proposed
-    network: RuntimeNetwork = RuntimeNetwork.testnet
+    network: RuntimeNetwork = RuntimeNetwork.prodnet
     agent_session_id: str | None = None
     raw_agent_output: str | None = None
     execution_message: str | None = None
@@ -251,11 +337,15 @@ class TradePlan(BaseModel):
     @model_validator(mode="after")
     def validate_directional_exits(self) -> TradePlan:
         if self.side == TradeSide.long:
-            if not self.stop_loss < self.entry_price < self.take_profit:
-                raise ValueError("Long plans require stop_loss < entry_price < take_profit.")
+            if self.stop_loss is not None and self.stop_loss >= self.entry_price:
+                raise ValueError("Long plans require stop_loss < entry_price.")
+            if self.take_profit is not None and self.take_profit <= self.entry_price:
+                raise ValueError("Long plans require entry_price < take_profit.")
         if self.side == TradeSide.short:
-            if not self.take_profit < self.entry_price < self.stop_loss:
-                raise ValueError("Short plans require take_profit < entry_price < stop_loss.")
+            if self.stop_loss is not None and self.stop_loss <= self.entry_price:
+                raise ValueError("Short plans require entry_price < stop_loss.")
+            if self.take_profit is not None and self.take_profit >= self.entry_price:
+                raise ValueError("Short plans require take_profit < entry_price.")
         return self
 
 

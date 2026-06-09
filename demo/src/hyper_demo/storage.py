@@ -8,8 +8,9 @@ from typing import Any, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
-from hyper_demo.config import Settings, get_settings
+from hyper_demo.config import Settings, get_settings, runtime_from_settings
 from hyper_demo.models import (
+    AgentTradeAnalysis,
     ConnectedWallet,
     DemoRun,
     InvestorProfile,
@@ -30,6 +31,7 @@ class JsonStore:
 
     collections = {
         "profiles": InvestorProfile,
+        "analysis": AgentTradeAnalysis,
         "research": ResearchReport,
         "plans": TradePlan,
         "orders": OrderRecord,
@@ -107,4 +109,7 @@ class JsonStore:
         return [event for event in self.list("events") if event.run_id == run_id]
 
     def runtime_settings(self) -> RuntimeSettings:
-        return self.get("runtime", "runtime") or self.save("runtime", RuntimeSettings())
+        return self.get("runtime", "runtime") or self.save(
+            "runtime",
+            runtime_from_settings(self.settings),
+        )

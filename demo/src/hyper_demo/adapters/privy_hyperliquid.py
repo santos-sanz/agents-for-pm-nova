@@ -194,11 +194,9 @@ class PrivyHyperliquidAdapter:
             raise ExecutionBlocked("Privy Hyperliquid agent wallet is not registered.")
         if agent.network != plan.network:
             raise ExecutionBlocked("Privy agent wallet network does not match the trade plan.")
-        if not plan.stop_loss or not plan.take_profit:
-            raise ExecutionBlocked("Stop-loss and take-profit are required before execution.")
         asset = normalize_asset_symbol(plan.asset)
         if asset not in self.settings.allowed_assets_set:
-            raise ExecutionBlocked(f"{asset} is not in HYPERLIQUID_ALLOWED_ASSETS.")
+            raise ExecutionBlocked(f"{asset} is not in the runtime allowed assets.")
         if plan.size_usdc > self.settings.hyperliquid_max_order_usdc:
             raise ExecutionBlocked(
                 "Order size exceeds HYPERLIQUID_MAX_ORDER_USDC "

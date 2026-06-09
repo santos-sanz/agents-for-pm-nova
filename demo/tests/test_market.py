@@ -43,6 +43,63 @@ def test_hyperliquid_market_falls_back(monkeypatch) -> None:
     assert price.source == "fallback"
 
 
+def test_candle_snapshot_parses_hyperliquid_payload(monkeypatch) -> None:
+    def fake_urlopen(request, timeout):
+        body = json.loads(request.data.decode("utf-8"))
+        assert body["type"] == "candleSnapshot"
+        assert body["req"]["coin"] == "BTC"
+        assert body["req"]["interval"] == "1h"
+        return FakeResponse(
+            [
+                {
+                    "t": 1_700_000_000_000,
+                    "o": "100",
+                    "h": "105",
+                    "l": "99",
+                    "c": "103",
+                    "v": "42.5",
+                }
+            ]
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    candles = MarketDataClient(Settings()).candles("BTC", "1h", limit=10)
+
+    assert len(candles) == 1
+    assert candles[0].close == 103
+    assert candles[0].source == "hyperliquid"
+
+
+def test_candle_snapshot_falls_back_offline(monkeypatch) -> None:
+    def fake_urlopen(request, timeout):
+        raise urllib.error.URLError("offline")
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    candles = MarketDataClient(Settings()).candles("BTC", "4h", limit=24)
+
+    assert len(candles) == 24
+    assert {candle.source for candle in candles} == {"fallback"}
+    assert candles[-1].close > candles[0].close
+
+
+def test_candle_snapshot_falls_back_when_hip3_market_returns_no_candles(monkeypatch) -> None:
+    def fake_urlopen(request, timeout):
+        body = json.loads(request.data.decode("utf-8"))
+        assert body["type"] == "candleSnapshot"
+        assert body["req"]["coin"] == "xyz:SPCX"
+        return FakeResponse([])
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    candles = MarketDataClient(Settings()).candles("xyz:SPCX", "1h", limit=24)
+
+    assert len(candles) == 24
+    assert candles[0].asset == "xyz:SPCX"
+    assert {candle.source for candle in candles} == {"fallback"}
+
+
 def test_available_assets_includes_hip3_dex_markets(monkeypatch) -> None:
     def fake_urlopen(request, timeout):
         assert request.full_url == "https://api.hyperliquid.xyz/info"

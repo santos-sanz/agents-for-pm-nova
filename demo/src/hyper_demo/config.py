@@ -8,13 +8,18 @@ from urllib.parse import urlparse
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from hyper_demo.models import RuntimeNetwork, RuntimeSettings, normalize_asset_symbol
+from hyper_demo.models import (
+    RuntimeNetwork,
+    RuntimeSettings,
+    normalize_asset_list,
+)
 
 TESTNET_HTTP_HOSTS = {"api.hyperliquid-testnet.xyz"}
 TESTNET_WS_HOSTS = {"api.hyperliquid-testnet.xyz"}
 MAINNET_HTTP_HOSTS = {"api.hyperliquid.xyz"}
 MAINNET_WS_HOSTS = {"api.hyperliquid.xyz"}
 HYPERTRACKER_HTTP_HOSTS = {"ht-api.coinmarketman.com"}
+PERPLEXITY_HTTP_HOSTS = {"api.perplexity.ai"}
 
 
 class Settings(BaseSettings):
@@ -37,16 +42,21 @@ class Settings(BaseSettings):
     hypertracker_base_url: str = Field(
         default="https://ht-api.coinmarketman.com", alias="HYPERTRACKER_BASE_URL"
     )
+    perplexity_api_key: SecretStr | None = Field(default=None, alias="PERPLEXITY_API_KEY")
+    perplexity_base_url: str = Field(
+        default="https://api.perplexity.ai/v1", alias="PERPLEXITY_BASE_URL"
+    )
+    perplexity_model: str = Field(default="perplexity/sonar", alias="PERPLEXITY_MODEL")
     privy_app_id: str | None = Field(default=None, alias="PRIVY_APP_ID")
     privy_client_id: str | None = Field(default=None, alias="PRIVY_CLIENT_ID")
     privy_app_secret: SecretStr | None = Field(default=None, alias="PRIVY_APP_SECRET")
     privy_execution_enabled: bool = Field(default=False, alias="PRIVY_EXECUTION_ENABLED")
 
     hyperliquid_base_url: str = Field(
-        default="https://api.hyperliquid-testnet.xyz", alias="HYPERLIQUID_BASE_URL"
+        default="https://api.hyperliquid.xyz", alias="HYPERLIQUID_BASE_URL"
     )
     hyperliquid_ws_url: str = Field(
-        default="wss://api.hyperliquid-testnet.xyz/ws", alias="HYPERLIQUID_WS_URL"
+        default="wss://api.hyperliquid.xyz/ws", alias="HYPERLIQUID_WS_URL"
     )
     hyperliquid_account_address: str | None = Field(
         default=None, alias="HYPERLIQUID_ACCOUNT_ADDRESS"
@@ -56,7 +66,7 @@ class Settings(BaseSettings):
     )
 
     demo_trading_mode: Literal["testnet", "mainnet_guarded"] = Field(
-        default="testnet", alias="DEMO_TRADING_MODE"
+        default="mainnet_guarded", alias="DEMO_TRADING_MODE"
     )
     demo_require_confirmation: bool = Field(default=True, alias="DEMO_REQUIRE_CONFIRMATION")
     demo_state_dir: Path = Field(default=Path(".demo_state"), alias="DEMO_STATE_DIR")
@@ -76,6 +86,16 @@ class Settings(BaseSettings):
         parsed = urlparse(value.rstrip("/"))
         if parsed.scheme != "https" or parsed.hostname not in HYPERTRACKER_HTTP_HOSTS:
             raise ValueError("Only the known HyperTracker HTTP URL is allowed in this demo.")
+        return parsed.geturl().rstrip("/")
+
+    @field_validator("perplexity_base_url")
+    @classmethod
+    def require_known_perplexity_http(cls, value: str) -> str:
+        parsed = urlparse(value.rstrip("/"))
+        if parsed.scheme != "https" or parsed.hostname not in PERPLEXITY_HTTP_HOSTS:
+            raise ValueError("Only the known Perplexity API URL is allowed in this demo.")
+        if not parsed.path.rstrip("/").endswith("/v1"):
+            raise ValueError("Perplexity base URL must end in /v1.")
         return parsed.geturl().rstrip("/")
 
     @field_validator("hyperliquid_base_url")
@@ -107,10 +127,6 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "Mainnet guarded mode requires Hyperliquid mainnet HTTP and WS URLs."
                 )
-            if not self.hyperliquid_mainnet_enabled:
-                raise ValueError(
-                    "Mainnet guarded mode requires HYPERLIQUID_MAINNET_ENABLED=true."
-                )
         return self
 
     @property
@@ -120,6 +136,16 @@ class Settings(BaseSettings):
     @property
     def has_hypertracker_credentials(self) -> bool:
         key = self.hypertracker_api_key
+        return bool(
+            key
+            and key.get_secret_value()
+            and "replace" not in key.get_secret_value().lower()
+            and "your_" not in key.get_secret_value().lower()
+        )
+
+    @property
+    def has_perplexity_credentials(self) -> bool:
+        key = self.perplexity_api_key
         return bool(
             key
             and key.get_secret_value()
@@ -161,11 +187,28 @@ class Settings(BaseSettings):
 
     @property
     def allowed_assets_set(self) -> set[str]:
-        return {
-            normalize_asset_symbol(asset)
-            for asset in self.hyperliquid_allowed_assets.split(",")
-            if asset.strip()
-        }
+        return set(self.allowed_assets_list)
+
+    @property
+    def allowed_assets_list(self) -> list[str]:
+        return normalize_asset_list(self.hyperliquid_allowed_assets.split(","))
+
+
+def runtime_from_settings(settings: Settings | None = None) -> RuntimeSettings:
+    """Create the first browser runtime from env settings.
+
+    After this bootstrap, the persisted runtime is the source of truth for the
+    browser app's allowlist and watchlist.
+    """
+
+    settings = settings or get_settings()
+    allowed_assets = settings.allowed_assets_list or ["BTC", "ETH", "SOL", "HYPE"]
+    return RuntimeSettings(
+        max_order_usdc=settings.hyperliquid_max_order_usdc,
+        allowed_assets=allowed_assets,
+        watchlist=allowed_assets,
+        sync_asset_lists=True,
+    )
 
 
 def settings_for_runtime(runtime: RuntimeSettings, base: Settings | None = None) -> Settings:

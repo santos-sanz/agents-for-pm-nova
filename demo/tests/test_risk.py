@@ -23,4 +23,4 @@ def test_risk_profile_scores_and_guardrails() -> None:
     profile = build_investor_profile(conservative)
     assert profile.category == "conservative"
     assert profile.recommended_leverage_cap == 1.0
-    assert any("testnet" in guardrail.lower() for guardrail in profile.guardrails)
+    assert any("mainnet" in guardrail.lower() for guardrail in profile.guardrails)

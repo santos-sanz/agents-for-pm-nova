@@ -4,10 +4,11 @@ import json
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from hyper_demo.config import Settings, get_settings
-from hyper_demo.models import normalize_asset_symbol
+from hyper_demo.models import Candle, normalize_asset_symbol
 
 FALLBACK_PRICES = {
     "BTC": 106_000.0,
@@ -17,6 +18,13 @@ FALLBACK_PRICES = {
 }
 
 COMMON_ASSETS = ("BTC", "ETH", "SOL", "HYPE")
+SUPPORTED_CANDLE_INTERVALS = {"15m", "1h", "4h", "1d"}
+INTERVAL_DELTAS = {
+    "15m": timedelta(minutes=15),
+    "1h": timedelta(hours=1),
+    "4h": timedelta(hours=4),
+    "1d": timedelta(days=1),
+}
 
 
 @dataclass(frozen=True)
@@ -146,6 +154,47 @@ class MarketDataClient:
         fallback = FALLBACK_PRICES.get(normalized, 100.0)
         return MarketPrice(asset=normalized, mark_price=fallback, source="fallback")
 
+    def candles(self, asset: str, interval: str, limit: int = 120) -> list[Candle]:
+        if interval not in SUPPORTED_CANDLE_INTERVALS:
+            raise ValueError(f"Unsupported candle interval: {interval}")
+        normalized = normalize_asset_symbol(asset)
+        limit = max(10, min(limit, 500))
+        delta = INTERVAL_DELTAS[interval]
+        end = datetime.now(UTC)
+        start = end - delta * limit
+        payload = json.dumps(
+            {
+                "type": "candleSnapshot",
+                "req": {
+                    "coin": normalized,
+                    "interval": interval,
+                    "startTime": int(start.timestamp() * 1000),
+                    "endTime": int(end.timestamp() * 1000),
+                },
+            }
+        ).encode("utf-8")
+        request = urllib.request.Request(
+            f"{self.settings.hyperliquid_base_url}/info",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=8) as response:
+                data = json.loads(response.read().decode("utf-8"))
+            candles = [
+                _candle_from_payload(normalized, interval, item)
+                for item in data
+                if isinstance(item, dict)
+            ]
+            if candles:
+                self._last_source = "hyperliquid"
+                return candles[-limit:]
+        except (TimeoutError, urllib.error.URLError, ValueError, json.JSONDecodeError):
+            pass
+        self._last_source = "fallback"
+        return fallback_candles(normalized, interval, limit)
+
 
 def asset_icon_url(symbol: str) -> str:
     normalized = normalize_asset_symbol(symbol)
@@ -174,6 +223,54 @@ def split_dex_symbol(value: str) -> tuple[str | None, str]:
         return None, normalized
     dex, symbol = normalized.split(":", 1)
     return dex, symbol
+
+
+def fallback_candles(asset: str, interval: str, limit: int = 120) -> list[Candle]:
+    normalized = normalize_asset_symbol(asset)
+    _, base_symbol = split_dex_symbol(normalized)
+    base = FALLBACK_PRICES.get(normalized, FALLBACK_PRICES.get(base_symbol, 100.0))
+    delta = INTERVAL_DELTAS.get(interval, timedelta(hours=1))
+    start = datetime.now(UTC) - delta * limit
+    candles: list[Candle] = []
+    price = base * 0.965
+    for index in range(limit):
+        trend = 1 + (index / max(limit, 1)) * 0.07
+        wave = ((index % 9) - 4) / 900
+        open_price = price
+        close = base * trend * (1 + wave)
+        spread = max(close * 0.0045, 0.01)
+        high = max(open_price, close) + spread
+        low = max(0.0001, min(open_price, close) - spread)
+        candles.append(
+            Candle(
+                asset=normalized,
+                interval=interval,  # type: ignore[arg-type]
+                opened_at=start + delta * index,
+                open=round(open_price, 6),
+                high=round(high, 6),
+                low=round(low, 6),
+                close=round(close, 6),
+                volume=round(1_000 + index * 13.7, 4),
+                source="fallback",
+            )
+        )
+        price = close
+    return candles
+
+
+def _candle_from_payload(asset: str, interval: str, item: dict[str, Any]) -> Candle:
+    opened_at = datetime.fromtimestamp(float(item.get("t") or item.get("T") or 0) / 1000, UTC)
+    return Candle(
+        asset=asset,
+        interval=interval,  # type: ignore[arg-type]
+        opened_at=opened_at,
+        open=float(item.get("o") or item.get("open")),
+        high=float(item.get("h") or item.get("high")),
+        low=float(item.get("l") or item.get("low")),
+        close=float(item.get("c") or item.get("close")),
+        volume=float(item.get("v") or item.get("volume") or 0),
+        source="hyperliquid",
+    )
 
 
 def _ctx_mark_price(context: dict[str, Any]) -> float | None:

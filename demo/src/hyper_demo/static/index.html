@@ -4,7 +4,8 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>HyperClaude</title>
-    <link rel="stylesheet" href="/static/styles.css?v=hyperclaude-integrated-funding-20260609-5" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%236fa874'/%3E%3Ctext x='32' y='40' text-anchor='middle' font-family='Arial' font-size='24' font-weight='700' fill='%2310110f'%3EHC%3C/text%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="/static/styles.css?v=hyperclaude-trading-ui-20260609-7" />
   </head>
   <body class="trading-screen" data-screen="trading">
     <header class="topbar">
@@ -22,8 +23,9 @@
       <div class="status-strip">
         <span id="claude-status">Claude: checking</span>
         <span id="hypertracker-status">HyperTracker: checking</span>
+        <span id="perplexity-status">Perplexity: checking</span>
         <span id="hyperliquid-status">Hyperliquid: checking</span>
-        <span id="network-status">testnet</span>
+        <span id="network-status">mainnet guarded</span>
         <span id="wallet-status" class="wallet-status">No wallet</span>
       </div>
     </header>
@@ -32,95 +34,81 @@
       <aside class="rail"></aside>
 
       <section class="mainstage">
-        <section class="hero portfolio-hero">
-          <div class="hero-copy">
-            <span class="eyebrow">Agent portfolio</span>
-            <h1 id="portfolio-value">10,180.00 USDC</h1>
-            <p id="portfolio-pnl" class="portfolio-delta neutral">Loading live risk metrics</p>
-            <div class="hero-stats" id="hero-stats">
-              <div>
-                <span>Alpha</span>
-                <b>0.000000</b>
-              </div>
-              <div>
-                <span>Beta</span>
-                <b>0.0000</b>
-              </div>
-              <div>
-                <span>VaR 95</span>
-                <b>0.00 USDC</b>
-              </div>
-            </div>
-          </div>
-          <form id="analyze-form" class="analyze-form">
-            <label>
-              <span>Market</span>
-              <input id="asset-input" placeholder="BTC" value="BTC" />
-            </label>
-            <label>
-              <span>Context</span>
-              <input id="context-input" placeholder="Optional context" />
-            </label>
-            <button class="primary" type="submit">Analyze</button>
-          </form>
-        </section>
+        <section class="trade-workbench">
+          <div id="market-rail" class="market-rail" aria-label="Markets"></div>
 
-        <section class="metrics-strip" id="metrics-strip" aria-label="Portfolio metrics">
-          <article>
-            <span>Exposure</span>
-            <b>0.00</b>
-          </article>
-          <article>
-            <span>Drawdown</span>
-            <b>0.00%</b>
-          </article>
-          <article>
-            <span>Sharpe</span>
-            <b>0.0000</b>
-          </article>
-          <article>
-            <span>BTC corr</span>
-            <b>0.0000</b>
-          </article>
-        </section>
-
-        <section class="analysis-grid">
-          <article class="panel thesis-panel">
-            <div class="panel-head">
-              <div>
-                <span class="eyebrow">Trade idea</span>
-                <h2>Agent read</h2>
+          <section class="dreamcash-board">
+            <article class="market-pane">
+              <div class="market-header">
+                <div class="pair-title">
+                  <span class="favorite-dot">★</span>
+                  <h1 id="active-asset-label">BTC-PERP</h1>
+                </div>
+                <div class="market-stats" id="market-stats">
+                  <div><span>Mark</span><b>--</b></div>
+                  <div><span>Signal</span><b>--</b></div>
+                  <div><span>Confidence</span><b id="confidence">0%</b></div>
+                  <div><span>Network</span><b>mainnet guarded</b></div>
+                </div>
               </div>
-              <span id="decision-pill" class="pill">no proposal</span>
-            </div>
-            <div id="human-summary" class="human-summary empty">
-              <h3>No trade idea yet</h3>
-              <p>Run analysis or a proactive scan to create the first proposal.</p>
-            </div>
-          </article>
 
-          <aside class="panel ticket-panel">
-            <div class="panel-head">
-              <div>
-                <span class="eyebrow">Trade ticket</span>
-                <h2 id="ticket-title">Awaiting plan</h2>
+              <div class="chart-toolbar">
+                <form id="analyze-form" class="trading-search">
+                  <input id="asset-input" aria-label="Asset" placeholder="BTC" value="BTC" autocomplete="off" />
+                  <input id="context-input" aria-label="Context" placeholder="Optional context" />
+                  <button class="primary" type="submit">Analyze</button>
+                </form>
+                <div class="timeframe-tabs" aria-label="Chart timeframe">
+                  <button type="button" class="active" data-timeframe="15m">15m</button>
+                  <button type="button" data-timeframe="1h">1h</button>
+                  <button type="button" data-timeframe="4h">4h</button>
+                  <button type="button" data-timeframe="1d">1d</button>
+                </div>
               </div>
-              <span id="confidence" class="pill">0%</span>
+
+              <div class="chart-shell">
+                <canvas id="candle-chart" width="960" height="520" aria-label="Candlestick chart"></canvas>
+                <div id="chart-empty" class="chart-empty">Run analysis to load candles.</div>
+              </div>
+            </article>
+
+            <aside class="trade-side">
+              <section class="side-card ticket-panel">
+                <div class="ticket-top">
+                  <div>
+                    <span id="decision-pill" class="pill neutral">no proposal</span>
+                    <h2 id="ticket-title">Manual execution</h2>
+                  </div>
+                </div>
+                <div id="best-bet" class="best-bet empty"></div>
+                <div id="ticket" class="ticket"></div>
+                <label class="check-row">
+                  <input id="execute-confirm" type="checkbox" />
+                  Confirm order submission
+                </label>
+                <label class="field">
+                  Mainnet phrase
+                  <input id="mainnet-phrase" placeholder="CONFIRM MAINNET ORDER" />
+                </label>
+                <div class="button-row">
+                  <button class="primary" type="button" data-action="create-manual-plan">Create plan</button>
+                  <button class="danger" data-action="execute">Execute</button>
+                  <button data-action="reject">Reject</button>
+                </div>
+              </section>
+            </aside>
+          </section>
+
+          <section class="bottom-table">
+            <div class="table-tabs">
+              <button type="button" class="active">Agent Signal</button>
+              <button type="button">Candidates</button>
+              <button type="button">Guardrails</button>
             </div>
-            <div id="ticket" class="ticket"></div>
-            <label class="check-row">
-              <input id="execute-confirm" type="checkbox" />
-              Confirm order submission
-            </label>
-            <label class="field">
-              Mainnet phrase
-              <input id="mainnet-phrase" placeholder="CONFIRM MAINNET ORDER" />
-            </label>
-            <div class="button-row">
-              <button class="danger" data-action="execute">Execute</button>
-              <button data-action="reject">Reject</button>
-            </div>
-          </aside>
+            <p id="analysis-status">Enter a Hyperliquid market and run analysis.</p>
+            <div id="timeframe-cards" class="timeframe-cards"></div>
+            <div id="candidate-list" class="candidate-list"></div>
+          </section>
         </section>
 
       </section>
@@ -153,7 +141,7 @@
                 <span class="eyebrow">Environment</span>
                 <h2>Network</h2>
               </div>
-              <span id="settings-network-pill" class="pill">testnet</span>
+              <span id="settings-network-pill" class="pill">mainnet guarded</span>
             </div>
             <div class="network-cards" role="group" aria-label="Network">
               <button id="testnet-button" class="network-card" data-network="testnet">
@@ -191,6 +179,7 @@
                 <button type="button" data-asset-clear="allowed">Clear</button>
               </div>
               <input id="allowed-assets" type="hidden" value="BTC,ETH,SOL,HYPE" />
+              <div id="allowed-assets-chips" class="asset-chips"></div>
               <input id="allowed-asset-search" class="asset-search" placeholder="Search Hyperliquid markets" autocomplete="off" />
               <div id="allowed-asset-options" class="asset-options" aria-label="Allowed asset options"></div>
             </div>
@@ -210,10 +199,11 @@
                 <button type="button" data-asset-clear="watchlist">Clear</button>
               </div>
               <input id="watchlist" type="hidden" value="BTC,ETH,SOL,HYPE" />
+              <div id="watchlist-chips" class="asset-chips"></div>
               <input id="watchlist-asset-search" class="asset-search" placeholder="Search Hyperliquid markets" autocomplete="off" />
               <div id="watchlist-asset-options" class="asset-options" aria-label="Watchlist asset options"></div>
             </div>
-            <small class="muted">Proactive scan selects from this list and auto-executes only on testnet.</small>
+            <small class="muted">Proactive scan selects from this list and only proposes trades on mainnet.</small>
           </section>
 
           <section id="privy-auth-panel" class="auth-panel settings-wallet-auth" aria-labelledby="privy-auth-title">
@@ -271,7 +261,7 @@
     </main>
 
     <div id="toast" role="status" aria-live="polite"></div>
-    <script src="/static/app.js?v=hyperclaude-integrated-funding-20260609-13"></script>
+    <script src="/static/app.js?v=hyperclaude-trading-ui-20260609-16"></script>
     <script type="module" src="/static/privy.js?v=hyperclaude-integrated-funding-20260609-4"></script>
   </body>
 </html>

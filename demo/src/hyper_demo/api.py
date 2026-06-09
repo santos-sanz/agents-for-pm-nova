@@ -4,7 +4,7 @@ import json
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
@@ -15,7 +15,9 @@ from hyper_demo.adapters.hyperliquid import ExecutionBlocked, HyperliquidAdapter
 from hyper_demo.adapters.privy_hyperliquid import PrivyHyperliquidAdapter
 from hyper_demo.config import Settings, get_settings, settings_for_runtime
 from hyper_demo.models import (
+    Candle,
     ConnectedWallet,
+    ManagedAgentOpportunity,
     OrderRecord,
     PortfolioMetrics,
     PositionSnapshot,
@@ -24,6 +26,8 @@ from hyper_demo.models import (
     RuntimeSettings,
     RuntimeSettingsUpdate,
     TradePlan,
+    TradeSide,
+    normalize_asset_symbol,
 )
 from hyper_demo.services.market import MarketDataClient
 from hyper_demo.services.metrics import compute_portfolio_metrics
@@ -56,6 +60,17 @@ class TradeExecutionRequest(BaseModel):
     confirmation_phrase: str | None = None
 
 
+class ManualTradePlanRequest(BaseModel):
+    asset: str
+    side: TradeSide
+    size_usdc: float
+    entry_type: Literal["market", "limit"] = "market"
+    entry_price: float | None = None
+    stop_loss: float | None = None
+    take_profit: float | None = None
+    leverage: float = 1.0
+
+
 class MasterDepositRequest(BaseModel):
     amount_usdc: float
     confirmed: bool = False
@@ -67,6 +82,7 @@ class SetupCheck(BaseModel):
     require_confirmation: bool
     anthropic_configured: bool
     hypertracker_configured: bool
+    perplexity_configured: bool
     hyperliquid_configured: bool
     hyperliquid_base_url: str
     hyperliquid_ws_url: str
@@ -97,6 +113,12 @@ class MarketAssetResponse(BaseModel):
     dex: str | None = None
 
 
+class MarketCandlesResponse(BaseModel):
+    asset: str
+    interval: str
+    candles: list[Candle]
+
+
 class ConnectedWalletRequest(BaseModel):
     address: str
     user_id: str | None = None
@@ -109,6 +131,96 @@ class ArbitrumBalanceResponse(BaseModel):
     eth: float
     usdc: float
     usdc_contract: str
+
+
+def managed_agent_opportunities(
+    runtime: RuntimeSettings,
+    settings: Settings,
+) -> list[ManagedAgentOpportunity]:
+    assets = ", ".join(runtime.watchlist[:5]) or "the configured watchlist"
+    network_label = "mainnet" if runtime.network == RuntimeNetwork.prodnet else "testnet"
+    execution_gate = (
+        "Require wallet confirmation, risk check, and CONFIRM MAINNET ORDER."
+        if runtime.network == RuntimeNetwork.prodnet
+        else "Require demo confirmation before any testnet submission."
+    )
+    research_tools = ["Claude web search", "Claude web fetch", "Hyperliquid candles"]
+    if settings.has_hypertracker_credentials:
+        research_tools.append("HyperTracker positioning")
+    return [
+        ManagedAgentOpportunity(
+            title="Autonomous market war room",
+            horizon="now",
+            owner_loop=(
+                f"Continuously briefs {assets} across catalyst, positioning, "
+                "and chart regimes."
+            ),
+            tools=research_tools,
+            human_gate="Human approves which thesis becomes a trade plan.",
+            value="Turns the demo from one-shot analysis into a living decision desk.",
+            risk="May overweight fresh narratives unless source quality is scored.",
+        ),
+        ManagedAgentOpportunity(
+            title="Risk sentinel for live positions",
+            horizon="now",
+            owner_loop=(
+                "Watches stops, leverage, liquidation distance, funding, "
+                f"and volatility on {network_label}."
+            ),
+            tools=["Hyperliquid positions", "candles", "runtime guardrails", "agent event stream"],
+            human_gate="Human confirms any hedge, reduce-only exit, or stop adjustment.",
+            value="Makes the agent useful after entry, where most trading UX becomes passive.",
+            risk="False alarms can create unnecessary intervention pressure.",
+        ),
+        ManagedAgentOpportunity(
+            title="Portfolio allocator",
+            horizon="next",
+            owner_loop="Ranks the allowed universe, budgets risk, and proposes capital rotation.",
+            tools=["allowed assets", "portfolio metrics", "technical signals", "risk profile"],
+            human_gate="Human approves capital allocation and per-asset max loss.",
+            value="Moves from single-trade advice to portfolio construction.",
+            risk="Correlation and liquidity estimates must stay conservative.",
+        ),
+        ManagedAgentOpportunity(
+            title="Execution quality coach",
+            horizon="next",
+            owner_loop=(
+                "Compares market versus limit entries, slippage, missed fills, "
+                "and TP/SL placement."
+            ),
+            tools=["order history", "candles", "mark price", "agent rationale"],
+            human_gate="Human approves any change to execution style or leverage.",
+            value="Converts every proposed trade into a learning loop for better future plans.",
+            risk="Requires enough historical fills to avoid anecdotal conclusions.",
+        ),
+        ManagedAgentOpportunity(
+            title="Compliance and incident copilot",
+            horizon="moonshot",
+            owner_loop=(
+                "Creates audit trails, explains blocked actions, and drafts "
+                "incident summaries."
+            ),
+            tools=["agent events", "runtime settings", "wallet state", "order records"],
+            human_gate="Human signs off on incident reports and production policy changes.",
+            value="Makes guarded mainnet operation reviewable by non-engineering stakeholders.",
+            risk="Must never hide uncertainty or rewrite historical events.",
+        ),
+        ManagedAgentOpportunity(
+            title="Personal trading operating system",
+            horizon="moonshot",
+            owner_loop=(
+                "Learns the user's rejected ideas, preferred setups, and "
+                "recurring mistakes."
+            ),
+            tools=["rejected plans", "risk profile", "watchlist", "post-trade notes"],
+            human_gate=execution_gate,
+            value=(
+                "Turns Claude Managed Agents into a persistent trading workflow, "
+                "not a chat button."
+            ),
+            risk="Needs strict privacy boundaries and explicit memory controls.",
+        ),
+    ]
 
 
 def get_store() -> JsonStore:
@@ -183,6 +295,8 @@ def setup_check(settings: Settings | None = None) -> SetupCheck:
         warnings.append("ANTHROPIC_API_KEY is missing; research will use fallback output.")
     if not settings.has_hypertracker_credentials:
         warnings.append("HYPERTRACKER_API_KEY is missing; market intelligence enrichment disabled.")
+    if not settings.has_perplexity_credentials:
+        warnings.append("PERPLEXITY_API_KEY is missing; finance_search enrichment disabled.")
     if not settings.has_hyperliquid_credentials and not (
         settings.privy_execution_enabled and settings.has_privy_server_credentials
     ):
@@ -203,6 +317,7 @@ def setup_check(settings: Settings | None = None) -> SetupCheck:
         require_confirmation=settings.demo_require_confirmation,
         anthropic_configured=settings.has_anthropic_credentials,
         hypertracker_configured=settings.has_hypertracker_credentials,
+        perplexity_configured=settings.has_perplexity_credentials,
         hyperliquid_configured=settings.has_hyperliquid_credentials,
         hyperliquid_base_url=settings.hyperliquid_base_url,
         hyperliquid_ws_url=settings.hyperliquid_ws_url,
@@ -225,7 +340,9 @@ def health() -> dict[str, str]:
 
 @app.get("/api/setup-check", response_model=SetupCheck)
 def api_setup_check() -> SetupCheck:
-    return setup_check()
+    store = get_store()
+    runtime = get_runtime(store)
+    return setup_check(settings_for_runtime(runtime))
 
 
 @app.get("/api/state")
@@ -240,6 +357,7 @@ def api_state() -> dict[str, Any]:
         setup.warnings.append(str(exc))
     return {
         "profile": store.latest("profiles"),
+        "analysis": store.latest("analysis"),
         "research": store.latest("research"),
         "plan": store.latest("plans"),
         "order": store.latest("orders"),
@@ -309,6 +427,21 @@ def get_market_assets() -> list[MarketAssetResponse]:
         )
         for asset in assets
     ]
+
+
+@app.get("/api/market/{asset}/candles", response_model=MarketCandlesResponse)
+def get_market_candles(asset: str, interval: str = "1h", limit: int = 120) -> MarketCandlesResponse:
+    try:
+        runtime = get_runtime()
+        settings = settings_for_runtime(runtime)
+        candles = MarketDataClient(settings).candles(asset, interval, limit=limit)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return MarketCandlesResponse(
+        asset=candles[-1].asset if candles else asset,
+        interval=interval,
+        candles=candles,
+    )
 
 
 @app.post("/api/wallet/connected", response_model=ConnectedWallet)
@@ -427,9 +560,10 @@ async def api_agent_analyze(request: AgentAnalyzeRequest):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {
+        "analysis": result.analysis,
         "plan": result.plan,
-        "order_id": result.order_id,
-        "run_id": result.run_id,
+        "order_id": None,
+        "run_id": None,
     }
 
 
@@ -442,15 +576,100 @@ async def api_proactive_scan():
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {
+        "analysis": result.analysis,
         "plan": result.plan,
-        "order_id": result.order_id,
-        "run_id": result.run_id,
+        "order_id": None,
+        "run_id": None,
     }
 
 
 @app.get("/api/agent/events")
 def api_agent_events():
     return get_store().events_for_run(AGENT_RUN_ID)
+
+
+@app.get("/api/agent/opportunities", response_model=list[ManagedAgentOpportunity])
+def api_agent_opportunities() -> list[ManagedAgentOpportunity]:
+    store = get_store()
+    runtime = get_runtime(store)
+    return managed_agent_opportunities(runtime, settings_for_runtime(runtime))
+
+
+def _max_leverage_for_asset(asset: str, market: MarketDataClient) -> float:
+    try:
+        for item in market.available_assets():
+            if normalize_asset_symbol(item.symbol) == asset and item.max_leverage > 0:
+                return float(item.max_leverage)
+    except Exception:
+        return 10.0
+    return 10.0
+
+
+def _manual_max_loss(size_usdc: float, entry_price: float, stop_loss: float | None) -> float:
+    if not stop_loss:
+        return 0.0
+    return round(abs(entry_price - stop_loss) / entry_price * size_usdc, 2)
+
+
+@app.post("/api/trades/manual-plan", response_model=TradePlan)
+def api_create_manual_trade_plan(request: ManualTradePlanRequest) -> TradePlan:
+    store = get_store()
+    runtime = get_runtime(store)
+    settings = settings_for_runtime(runtime)
+    market = MarketDataClient(settings)
+    asset = normalize_asset_symbol(request.asset)
+    if asset not in settings.allowed_assets_set:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{asset} is not in the runtime allowed assets.",
+        )
+    if request.size_usdc <= 0:
+        raise HTTPException(status_code=400, detail="Order size must be greater than zero.")
+    if request.size_usdc > runtime.max_order_usdc:
+        raise HTTPException(status_code=400, detail="Order size exceeds the runtime max order.")
+    max_leverage = min(10.0, _max_leverage_for_asset(asset, market))
+    if request.leverage < 1 or request.leverage > max_leverage:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Leverage must be between 1x and {max_leverage:g}x for {asset}.",
+        )
+    if request.entry_type == "limit" and not request.entry_price:
+        raise HTTPException(status_code=400, detail="Limit orders require an entry price.")
+    entry_price = request.entry_price or market.mark_price(asset).mark_price
+    try:
+        plan = TradePlan(
+            asset=asset,
+            side=request.side,
+            size_usdc=request.size_usdc,
+            entry_type=request.entry_type,
+            entry_price=entry_price,
+            stop_loss=request.stop_loss,
+            take_profit=request.take_profit,
+            max_loss_usdc=_manual_max_loss(request.size_usdc, entry_price, request.stop_loss),
+            leverage=request.leverage,
+            rationale="Manual order created from user inputs.",
+            invalidation_criteria=(
+                ["User-defined stop loss reached."] if request.stop_loss else []
+            ),
+            confidence=0.0,
+            thesis="Manual user-created order. No Claude proposal attached.",
+            evidence=["User input"],
+            source="manual",
+            execution_decision="proposed",
+            network=runtime.network,
+            execution_message="Manual plan created. Execute is required to submit orders.",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    store.save("plans", plan)
+    store.append_event(
+        RunEvent(
+            run_id=AGENT_RUN_ID,
+            message=f"Manual trade plan created for {asset}.",
+            payload=plan.model_dump(mode="json"),
+        )
+    )
+    return plan
 
 
 @app.post("/api/trades/{plan_id}/execute")
