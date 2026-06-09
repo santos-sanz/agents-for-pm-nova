@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 import tempfile
+import urllib.error
+import urllib.request
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -14,16 +16,27 @@ from anthropic.lib import files_from_dir
 from hyper_demo.config import Settings, get_settings
 from hyper_demo.models import (
     ManagedChatCredentialStatus,
+    ManagedChatDeployment,
     ManagedChatEvent,
     ManagedChatResources,
     ManagedChatSession,
+    UIMode,
     utc_now,
 )
 from hyper_demo.storage import JsonStore
 
 CHAT_RESOURCE_ID = "managed_chat_resources"
+CHAT_DEPLOYMENT_ID = "managed_chat_deployment"
 CHAT_AGENT_RUN_LABEL = "managed-chat"
+ANTHROPIC_API_VERSION = "2023-06-01"
+MANAGED_AGENTS_BETA = "managed-agents-2026-04-01"
+ANTHROPIC_API_BASE_URL = "https://api.anthropic.com/v1"
 API_KEY_TOOL_NAMES = {"hypertracker", "perplexity"}
+HUMAN_APPROVAL_CUSTOM_TOOLS = {
+    "trading_execute_plan",
+    "trading_close_position",
+    "trading_set_protection",
+}
 ALLOWED_NETWORK_HOSTS = [
     "api.hyperliquid.xyz",
     "api.hyperliquid-testnet.xyz",
@@ -77,10 +90,27 @@ CUSTOM_TOOLS: list[dict[str, Any]] = [
     },
     {
         "type": "custom",
+        "name": "trading_validate_plan",
+        "description": (
+            "Run the formal autonomous-trade validation checklist against a stored plan. "
+            "Use before calling trading_execute_plan."
+        ),
+        "input_schema": {
+            "type": "object",
+            "required": ["plan_id"],
+            "properties": {
+                "plan_id": {"type": "string"},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "custom",
         "name": "trading_execute_plan",
         "description": (
-            "Submit an already stored trade plan. The backend still requires explicit "
-            "confirmation and all Hyperliquid guardrails to pass."
+            "Submit an already stored trade plan. Prodnet autonomous execution is available "
+            "only when runtime ui_mode is robot and the formal validation checklist passes. "
+            "Human mode requires the normal UI execution flow."
         ),
         "input_schema": {
             "type": "object",
@@ -321,6 +351,28 @@ Use this skill before creating a trade plan.
 - Prefer plans that are easy to explain and easy to cancel.
 """,
     ),
+    "formal-order-validation": (
+        "Formal Autonomous Order Validation",
+        """# Formal Autonomous Order Validation
+
+Use this skill before validating or executing autonomous leveraged intraday trades.
+
+- First create a stored plan with `trading_create_plan`; never execute directly from prose.
+- Run `trading_validate_plan` and only continue when `valid=true`.
+- Autonomous prodnet execution requires runtime `ui_mode=robot`.
+- Prefer trades intended to close within minutes or hours, not multi-day investment theses.
+- Use integer leverage of at least 2x for autonomous intraday trades, while staying below the
+  asset max leverage and runtime limits.
+- Include both stop loss and take profit.
+- Use a notional size above the 10 USDC minimum with a buffer so exchange size rounding does
+  not produce an order below minimum.
+- Reject plans whose required margin exceeds wallet withdrawable USDC.
+- Reject trades with TP/SL on the wrong side of both entry and current mark.
+- Keep planned stop-loss loss small; autonomous trades should fail closed before taking large
+  demo-wallet risk.
+- If validation fails, explain the failed checks and do not retry by increasing risk blindly.
+""",
+    ),
     "self-improvement": (
         "Trading Self Improvement",
         """# Trading Self Improvement
@@ -348,6 +400,9 @@ SKILL_DESCRIPTIONS: dict[str, str] = {
         "Use when collecting and interpreting HyperTracker intelligence through the demo CLI."
     ),
     "trade-validation": "Use before converting a thesis into a bounded trade plan.",
+    "formal-order-validation": (
+        "Use before validating or executing autonomous leveraged intraday trades."
+    ),
     "self-improvement": (
         "Use throughout trading conversations to capture lessons and propose safe improvements."
     ),
@@ -390,6 +445,8 @@ Hard boundaries:
 - Do not invent exchange access or arbitrary URLs.
 - Host-side trading actions are only available through custom tools and existing guardrails.
 - Prodnet execution requires explicit environment enablement and UI confirmation.
+- Prodnet autonomous execution is allowed only when runtime ui_mode is robot and
+  `trading_validate_plan` returns valid=true for the stored plan.
 - Testnet execution must still pass validation, sizing, leverage, margin, and asset allowlist
   checks.
 
@@ -399,7 +456,8 @@ Default workflow:
 2. Delegate research, risk, execution, auditor, or toolsmith work when it improves quality.
 3. Use outcomes/rubrics for high-stakes or uncertain plans.
 4. Create reviewable trade plans before execution.
-5. Record what should be remembered, improved, or rejected for future sessions.
+5. Run Formal Autonomous Order Validation before any autonomous execution.
+6. Record what should be remembered, improved, or rejected for future sessions.
 """
 
 
@@ -425,6 +483,7 @@ class ManagedTradingChatService:
             "resources": resources,
             "sessions": sessions,
             "latest_events": self.store.list("managed_chat_events")[-50:],
+            "deployment": self.deployment(),
             "capabilities": {
                 "managed_agents": self.settings.has_anthropic_credentials,
                 "auto_bootstrap": self.settings.anthropic_chat_auto_bootstrap,
@@ -439,6 +498,12 @@ class ManagedTradingChatService:
             "managed_chat_resources",
             CHAT_RESOURCE_ID,
         ) or self._disabled_resources()
+
+    def deployment(self) -> ManagedChatDeployment:
+        return self.store.get(
+            "managed_chat_deployments",
+            CHAT_DEPLOYMENT_ID,
+        ) or self._default_deployment()
 
     async def bootstrap(self, force: bool = False) -> ManagedChatResources:
         if not force:
@@ -482,6 +547,53 @@ class ManagedTradingChatService:
             )
             return session
         return await asyncio.to_thread(self._create_remote_session, resources, title)
+
+    async def create_deployment(
+        self,
+        name: str | None = None,
+        cron_expression: str | None = None,
+        timezone: str | None = None,
+        initial_prompt: str | None = None,
+    ) -> ManagedChatDeployment:
+        resources = self.resources()
+        deployment = self._deployment_from_inputs(name, cron_expression, timezone, initial_prompt)
+        if resources.status != "ready":
+            deployment.status = "error"
+            deployment.last_error = (
+                resources.disabled_reason or resources.error or "Resources not ready."
+            )
+            return self.store.save("managed_chat_deployments", deployment)
+        if not self.settings.has_anthropic_credentials:
+            deployment.status = "error"
+            deployment.last_error = "ANTHROPIC_API_KEY is missing."
+            return self.store.save("managed_chat_deployments", deployment)
+        try:
+            return await asyncio.to_thread(self._create_remote_deployment, resources, deployment)
+        except Exception as exc:  # pragma: no cover - beta API failures are environment-specific.
+            deployment.status = "error"
+            deployment.last_error = str(exc)
+            deployment.updated_at = utc_now()
+            return self.store.save("managed_chat_deployments", deployment)
+
+    async def run_deployment(self) -> ManagedChatDeployment:
+        deployment = self.deployment()
+        if not deployment.anthropic_deployment_id:
+            deployment.status = "error"
+            deployment.last_error = "Create the Claude deployment before running it."
+            deployment.updated_at = utc_now()
+            return self.store.save("managed_chat_deployments", deployment)
+        if not self.settings.has_anthropic_credentials:
+            deployment.status = "error"
+            deployment.last_error = "ANTHROPIC_API_KEY is missing."
+            deployment.updated_at = utc_now()
+            return self.store.save("managed_chat_deployments", deployment)
+        try:
+            return await asyncio.to_thread(self._run_remote_deployment, deployment)
+        except Exception as exc:  # pragma: no cover - beta API failures are environment-specific.
+            deployment.status = "error"
+            deployment.last_error = str(exc)
+            deployment.updated_at = utc_now()
+            return self.store.save("managed_chat_deployments", deployment)
 
     async def send_message(
         self,
@@ -549,8 +661,62 @@ class ManagedTradingChatService:
         tool_use_id: str,
         allow: bool,
         deny_message: str | None = None,
+        tool_runner: ToolRunner | None = None,
     ) -> ManagedChatSession:
         session = self._session_or_404(session_id)
+        pending_custom_tool = self._pending_custom_tool_event(session_id, tool_use_id)
+        if pending_custom_tool:
+            pending_custom_tool.requires_action = False
+            self.store.save("managed_chat_events", pending_custom_tool)
+            if not session.claude_session_id:
+                self.append_event(
+                    session.id,
+                    "user.tool_confirmation",
+                    "Tool confirmation recorded locally.",
+                    role="user",
+                    payload={"tool_use_id": tool_use_id, "result": "allow" if allow else "deny"},
+                )
+                return session
+            client = self._client()
+            if not allow:
+                result = {"error": deny_message or "Trade execution denied by human operator."}
+                self._send_custom_tool_result(
+                    client,
+                    session,
+                    pending_custom_tool.payload,
+                    result,
+                    is_error=True,
+                )
+                session.status = "idle"
+                session.updated_at = utc_now()
+                self.store.save("managed_chat_sessions", session)
+                return session
+            if not tool_runner:
+                self._send_custom_tool_result(
+                    client,
+                    session,
+                    pending_custom_tool.payload,
+                    {"error": "No backend tool runner is available for this approval."},
+                    is_error=True,
+                )
+                session.status = "error"
+                session.last_error = "No backend tool runner is available for this approval."
+                session.updated_at = utc_now()
+                self.store.save("managed_chat_sessions", session)
+                return session
+            approved_event = dict(pending_custom_tool.payload)
+            payload = approved_event.get("input")
+            if not isinstance(payload, dict):
+                payload = {}
+            payload = dict(payload)
+            payload["confirmed"] = True
+            approved_event["input"] = payload
+            approved_event["host_human_approved"] = True
+            self._handle_custom_tool(client, session, approved_event, tool_runner)
+            session.status = "idle"
+            session.updated_at = utc_now()
+            self.store.save("managed_chat_sessions", session)
+            return session
         if not session.claude_session_id:
             self.append_event(
                 session.id,
@@ -616,6 +782,20 @@ class ManagedTradingChatService:
             for event in self.store.list("managed_chat_events")
             if event.session_id == session_id
         ]
+
+    def _pending_custom_tool_event(
+        self,
+        session_id: str,
+        tool_use_id: str,
+    ) -> ManagedChatEvent | None:
+        for event in self.events(session_id):
+            if not event.requires_action or event.type != "agent.custom_tool_use":
+                continue
+            payload = event.payload
+            candidate_id = str(payload.get("id") or payload.get("custom_tool_use_id") or "")
+            if candidate_id == tool_use_id:
+                return event
+        return None
 
     def append_event(
         self,
@@ -746,6 +926,89 @@ class ManagedTradingChatService:
         )
         return record
 
+    def _create_remote_deployment(
+        self,
+        resources: ManagedChatResources,
+        deployment: ManagedChatDeployment,
+    ) -> ManagedChatDeployment:
+        payload = {
+            "name": deployment.name,
+            "agent": resources.coordinator_agent_id or "",
+            "environment_id": resources.environment_id or "",
+            "initial_events": [_user_message_event(deployment.initial_prompt)],
+            "schedule": {
+                "type": "cron",
+                "expression": deployment.cron_expression,
+                "timezone": deployment.timezone,
+            },
+            "resources": self._session_resources(resources),
+            "vault_ids": resources.vault_ids,
+            "metadata": {"app": "hyperclaude", "component": CHAT_AGENT_RUN_LABEL},
+        }
+        result = self._anthropic_json_request("POST", "/deployments", payload)
+        deployment.anthropic_deployment_id = str(result.get("id") or "")
+        deployment.status = _deployment_status(result)
+        deployment.paused_reason = result.get("paused_reason")
+        deployment.agent_id = resources.coordinator_agent_id
+        deployment.environment_id = resources.environment_id
+        deployment.upcoming_runs_at = _upcoming_runs(result)
+        deployment.raw_response = _safe_payload(result)
+        deployment.last_error = None
+        deployment.updated_at = utc_now()
+        return self.store.save("managed_chat_deployments", deployment)
+
+    def _run_remote_deployment(
+        self,
+        deployment: ManagedChatDeployment,
+    ) -> ManagedChatDeployment:
+        result = self._anthropic_json_request(
+            "POST",
+            f"/deployments/{deployment.anthropic_deployment_id}/run",
+            {},
+        )
+        deployment.last_run_id = str(result.get("id") or deployment.last_run_id or "")
+        deployment.last_session_id = str(
+            result.get("session_id") or deployment.last_session_id or ""
+        )
+        deployment.raw_response = _safe_payload(result)
+        deployment.last_error = _deployment_run_error(result)
+        deployment.updated_at = utc_now()
+        return self.store.save("managed_chat_deployments", deployment)
+
+    def _anthropic_json_request(
+        self,
+        method: str,
+        path: str,
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        api_key = self.settings.anthropic_api_key
+        if not api_key:
+            raise RuntimeError("ANTHROPIC_API_KEY is missing.")
+        body = json.dumps(payload or {}).encode("utf-8")
+        request = urllib.request.Request(
+            f"{ANTHROPIC_API_BASE_URL}{path}",
+            data=body,
+            method=method,
+            headers={
+                "anthropic-version": ANTHROPIC_API_VERSION,
+                "anthropic-beta": MANAGED_AGENTS_BETA,
+                "x-api-key": api_key.get_secret_value(),
+                "content-type": "application/json",
+            },
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                data = response.read().decode("utf-8")
+        except urllib.error.HTTPError as exc:
+            error_body = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"Anthropic deployment API error {exc.code}: {error_body}") from exc
+        except urllib.error.URLError as exc:
+            raise RuntimeError(f"Anthropic deployment API unavailable: {exc.reason}") from exc
+        parsed = json.loads(data) if data else {}
+        if not isinstance(parsed, dict):
+            raise RuntimeError("Anthropic deployment API returned an unexpected payload.")
+        return parsed
+
     def _send_remote_message(
         self,
         session: ManagedChatSession,
@@ -802,15 +1065,13 @@ class ManagedTradingChatService:
         stream: Any,
         tool_runner: ToolRunner | None,
     ) -> None:
+        pending_local_action = False
         for raw_event in stream:
             event = _event_dict(raw_event)
             event_type = event.get("type", "unknown")
             text = _event_text(event)
-            requires_action = event_type in {
-                "agent.custom_tool_use",
-                "agent.tool_use",
-                "agent.mcp_tool_use",
-            }
+            requires_action = self._custom_tool_requires_human_approval(event_type, event)
+            pending_local_action = pending_local_action or requires_action
             self.append_event(
                 session.id,
                 event_type,
@@ -820,13 +1081,13 @@ class ManagedTradingChatService:
                 payload=event,
                 requires_action=requires_action,
             )
-            if event_type == "agent.custom_tool_use" and tool_runner:
+            if event_type == "agent.custom_tool_use" and tool_runner and not requires_action:
                 self._handle_custom_tool(client, session, event, tool_runner)
             if event_type == "session.status_running":
                 session.status = "running"
             if event_type == "session.status_idle":
-                session.status = "waiting_action" if _requires_action(event) else "idle"
-                if not _requires_action(event):
+                session.status = "waiting_action" if pending_local_action else "idle"
+                if not _requires_action(event) or not pending_local_action:
                     break
             if event_type == "session.status_terminated":
                 session.status = "terminated"
@@ -837,6 +1098,17 @@ class ManagedTradingChatService:
                 break
         self.store.save("managed_chat_sessions", session)
 
+    def _custom_tool_requires_human_approval(
+        self,
+        event_type: str,
+        event: dict[str, Any],
+    ) -> bool:
+        if event_type != "agent.custom_tool_use":
+            return False
+        if str(event.get("name") or "") not in HUMAN_APPROVAL_CUSTOM_TOOLS:
+            return False
+        return self.store.runtime_settings().ui_mode == UIMode.human
+
     def _handle_custom_tool(
         self,
         client: Any,
@@ -844,13 +1116,24 @@ class ManagedTradingChatService:
         event: dict[str, Any],
         tool_runner: ToolRunner,
     ) -> None:
-        tool_use_id = str(event.get("id") or event.get("custom_tool_use_id") or "")
         try:
             result = tool_runner(session, event)
             is_error = False
         except Exception as exc:
             result = {"error": str(exc)}
             is_error = True
+        self._send_custom_tool_result(client, session, event, result, is_error=is_error)
+
+    def _send_custom_tool_result(
+        self,
+        client: Any,
+        session: ManagedChatSession,
+        event: dict[str, Any],
+        result: dict[str, Any],
+        *,
+        is_error: bool,
+    ) -> None:
+        tool_use_id = str(event.get("id") or event.get("custom_tool_use_id") or "")
         text = json.dumps(_safe_payload(result), indent=2)
         self.append_event(
             session.id,
@@ -1150,6 +1433,40 @@ class ManagedTradingChatService:
             )
         return attached
 
+    def _default_deployment(self) -> ManagedChatDeployment:
+        return ManagedChatDeployment(
+            id=CHAT_DEPLOYMENT_ID,
+            name="HyperClaude intraday watch",
+            cron_expression="*/30 * * * *",
+            timezone="Europe/Madrid",
+            initial_prompt=_default_deployment_prompt(),
+        )
+
+    def _deployment_from_inputs(
+        self,
+        name: str | None,
+        cron_expression: str | None,
+        timezone: str | None,
+        initial_prompt: str | None,
+    ) -> ManagedChatDeployment:
+        existing = self.deployment()
+        deployment = ManagedChatDeployment(
+            id=CHAT_DEPLOYMENT_ID,
+            name=(name or existing.name).strip(),
+            cron_expression=(cron_expression or existing.cron_expression).strip(),
+            timezone=(timezone or existing.timezone).strip(),
+            initial_prompt=(initial_prompt or existing.initial_prompt).strip(),
+        )
+        if not deployment.name:
+            raise ValueError("Deployment name is required.")
+        if not _valid_cron_expression(deployment.cron_expression):
+            raise ValueError("Deployment cron expression must have five POSIX fields.")
+        if not deployment.timezone or "/" not in deployment.timezone:
+            raise ValueError("Deployment timezone must be an IANA timezone such as Europe/Madrid.")
+        if not deployment.initial_prompt:
+            raise ValueError("Deployment initial prompt is required.")
+        return deployment
+
     def _client(self) -> Any:
         if self.client_factory:
             return self.client_factory()
@@ -1251,6 +1568,55 @@ def _safe_payload(value: Any) -> Any:
     if isinstance(value, list):
         return [_safe_payload(item) for item in value]
     return value
+
+
+def _user_message_event(text: str) -> dict[str, Any]:
+    return {
+        "type": "user.message",
+        "content": [{"type": "text", "text": text}],
+    }
+
+
+def _default_deployment_prompt() -> str:
+    return (
+        "Run the scheduled HyperClaude intraday watch. Gather runtime settings, wallet state, "
+        "open positions, allowed assets, mark prices, and market context. Propose or validate "
+        "short-horizon leveraged trades only when formally valid. In human mode, do not execute, "
+        "close, or modify exchange orders; stop after producing reviewable plans and validation "
+        "results. In robot mode, execution still requires trading_validate_plan valid=true and all "
+        "host guardrails."
+    )
+
+
+def _valid_cron_expression(value: str) -> bool:
+    return len([part for part in value.split() if part]) == 5
+
+
+def _deployment_status(payload: dict[str, Any]) -> str:
+    raw_status = str(payload.get("status") or "").lower()
+    if raw_status in {"active", "paused", "archived", "error"}:
+        return raw_status
+    if payload.get("paused_reason"):
+        return "paused"
+    return "active" if payload.get("id") else "error"
+
+
+def _upcoming_runs(payload: dict[str, Any]) -> list[str]:
+    schedule = payload.get("schedule")
+    if not isinstance(schedule, dict):
+        return []
+    runs = schedule.get("upcoming_runs_at")
+    if not isinstance(runs, list):
+        return []
+    return [str(item) for item in runs]
+
+
+def _deployment_run_error(payload: dict[str, Any]) -> str | None:
+    error = payload.get("error")
+    if not isinstance(error, dict):
+        return None
+    message = error.get("message") or error.get("type")
+    return str(message) if message else "Deployment run failed."
 
 
 def _object_id(value: Any) -> str:

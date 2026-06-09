@@ -409,6 +409,26 @@ class ManagedChatResources(BaseModel):
     error: str | None = None
 
 
+class ManagedChatDeployment(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("chat_deployment"))
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+    anthropic_deployment_id: str | None = None
+    name: str
+    status: Literal["not_created", "active", "paused", "archived", "error"] = "not_created"
+    paused_reason: dict[str, Any] | None = None
+    agent_id: str | None = None
+    environment_id: str | None = None
+    cron_expression: str
+    timezone: str = "Europe/Madrid"
+    initial_prompt: str
+    upcoming_runs_at: list[str] = Field(default_factory=list)
+    last_run_id: str | None = None
+    last_session_id: str | None = None
+    last_error: str | None = None
+    raw_response: dict[str, Any] = Field(default_factory=dict)
+
+
 class ManagedChatSession(BaseModel):
     id: str = Field(default_factory=lambda: new_id("chat_session"))
     created_at: datetime = Field(default_factory=utc_now)

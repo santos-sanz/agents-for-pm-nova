@@ -158,6 +158,13 @@
                 <small>Allowed assets and watchlist stay identical.</small>
               </span>
             </label>
+            <label class="switch-row">
+              <input id="agent-auto-approve" type="checkbox" />
+              <span>
+                <b>Agent auto-approval</b>
+                <small>Robot mode lets validated agent plans execute without the UI button.</small>
+              </span>
+            </label>
             <div class="asset-picker" data-asset-picker="allowed">
               <div class="picker-title">
                 <span>Allowed assets</span>
@@ -241,13 +248,13 @@
             <button class="primary" data-action="privy-setup-agent">Initialize agent</button>
           </section>
 
-        </div>
-      </section>
+          <section class="agents-settings-section">
+            <div class="settings-section-head">
+              <span class="eyebrow">Agents</span>
+              <h2>Managed agent operations</h2>
+            </div>
 
-      <section id="chat-screen" class="chat-screen" hidden>
-        <div class="chat-grid">
-          <aside class="chat-sidebar">
-            <section class="panel chat-status-panel">
+            <section class="panel settings-card chat-status-panel">
               <div class="panel-head">
                 <div>
                   <span class="eyebrow">Managed Agents</span>
@@ -262,7 +269,38 @@
               </div>
             </section>
 
-            <section class="panel chat-sessions-panel">
+            <section class="panel settings-card chat-deployment-panel">
+              <div class="panel-head">
+                <div>
+                  <span class="eyebrow">Claude Platform</span>
+                  <h2>Deployment</h2>
+                </div>
+                <span id="chat-deployment-status" class="pill neutral">not created</span>
+              </div>
+              <div id="chat-deployment-summary" class="chat-resource-grid"></div>
+              <label class="field">
+                Name
+                <input id="chat-deployment-name" type="text" value="HyperClaude intraday watch" />
+              </label>
+              <label class="field">
+                Cron
+                <input id="chat-deployment-cron" type="text" value="*/30 * * * *" />
+              </label>
+              <label class="field">
+                Timezone
+                <input id="chat-deployment-timezone" type="text" value="Europe/Madrid" />
+              </label>
+              <label class="field">
+                Initial prompt
+                <textarea id="chat-deployment-prompt" rows="5"></textarea>
+              </label>
+              <div class="button-row">
+                <button type="button" data-action="chat-create-deployment">Deploy</button>
+                <button type="button" data-action="chat-run-deployment">Run now</button>
+              </div>
+            </section>
+
+            <section class="panel settings-card chat-sessions-panel">
               <div class="panel-head">
                 <div>
                   <span class="eyebrow">Conversations</span>
@@ -272,8 +310,53 @@
               </div>
               <div id="chat-session-list" class="chat-session-list"></div>
             </section>
-          </aside>
 
+            <section class="panel settings-card">
+              <div class="panel-head">
+                <div>
+                  <span class="eyebrow">Vaults</span>
+                  <h2>Credentials</h2>
+                </div>
+              </div>
+              <div id="chat-vault-status" class="vault-status"></div>
+            </section>
+
+            <section class="panel settings-card">
+              <div class="panel-head">
+                <div>
+                  <span class="eyebrow">Actions</span>
+                  <h2>Pending</h2>
+                </div>
+              </div>
+              <div id="chat-pending-actions" class="chat-pending-actions"></div>
+            </section>
+
+            <section class="panel settings-card">
+              <div class="panel-head">
+                <div>
+                  <span class="eyebrow">Trading</span>
+                  <h2>Latest plans</h2>
+                </div>
+              </div>
+              <div id="chat-plan-actions" class="chat-plan-actions"></div>
+            </section>
+
+            <section class="panel settings-card">
+              <div class="panel-head">
+                <div>
+                  <span class="eyebrow">Capabilities</span>
+                  <h2>Tools & memory</h2>
+                </div>
+              </div>
+              <div id="chat-capabilities" class="chat-capabilities"></div>
+            </section>
+          </section>
+
+        </div>
+      </section>
+
+      <section id="chat-screen" class="chat-screen" hidden>
+        <div class="chat-grid">
           <section class="panel chat-transcript-panel">
             <div class="panel-head">
               <div>
@@ -281,6 +364,7 @@
                 <h1 id="chat-session-title">Chat</h1>
               </div>
               <div class="chat-head-actions">
+                <button type="button" data-action="chat-new-session">New session</button>
                 <button type="button" data-action="chat-interrupt">Interrupt</button>
                 <button type="button" data-action="chat-archive">Archive</button>
               </div>
@@ -293,75 +377,14 @@
               </label>
               <button class="primary" type="button" data-action="chat-send-message">Send</button>
             </div>
-            <div class="chat-outcome-box">
-              <div>
-                <span class="eyebrow">Outcome mode</span>
-                <h2>Self-evaluate before action</h2>
-              </div>
-              <label class="field">
-                Outcome
-                <textarea id="chat-outcome-description" rows="2" placeholder="Produce the highest-quality BTC plan with explicit risk and evidence scoring."></textarea>
-              </label>
-              <label class="field">
-                Rubric
-                <textarea id="chat-outcome-rubric" rows="3" placeholder="Grade source quality, risk control, execution validity, and clarity. Reject if evidence is stale or guardrails fail."></textarea>
-              </label>
-              <label class="field compact-field">
-                Iterations
-                <input id="chat-outcome-iterations" type="number" min="1" max="20" value="5" />
-              </label>
-              <button type="button" data-action="chat-define-outcome">Run outcome loop</button>
-            </div>
           </section>
-
-          <aside class="chat-inspector">
-            <section class="panel">
-              <div class="panel-head">
-                <div>
-                  <span class="eyebrow">Vaults</span>
-                  <h2>Credentials</h2>
-                </div>
-              </div>
-              <div id="chat-vault-status" class="vault-status"></div>
-            </section>
-
-            <section class="panel">
-              <div class="panel-head">
-                <div>
-                  <span class="eyebrow">Actions</span>
-                  <h2>Pending</h2>
-                </div>
-              </div>
-              <div id="chat-pending-actions" class="chat-pending-actions"></div>
-            </section>
-
-            <section class="panel">
-              <div class="panel-head">
-                <div>
-                  <span class="eyebrow">Trading</span>
-                  <h2>Latest plans</h2>
-                </div>
-              </div>
-              <div id="chat-plan-actions" class="chat-plan-actions"></div>
-            </section>
-
-            <section class="panel">
-              <div class="panel-head">
-                <div>
-                  <span class="eyebrow">Capabilities</span>
-                  <h2>Tools & memory</h2>
-                </div>
-              </div>
-              <div id="chat-capabilities" class="chat-capabilities"></div>
-            </section>
-          </aside>
         </div>
       </section>
     </main>
 
     <div id="toast" role="status" aria-live="polite"></div>
     <script src="/vendor/lightweight-charts/lightweight-charts.standalone.production.js"></script>
-    <script src="/static/app.js?v=hyperclaude-managed-chat-20260609-2"></script>
+    <script src="/static/app.js?v=hyperclaude-managed-chat-20260609-4"></script>
     <script type="module" src="/static/privy.js?v=hyperclaude-integrated-funding-20260609-4"></script>
   </body>
 </html>

@@ -4,6 +4,8 @@ from fastapi.testclient import TestClient
 
 from hyper_demo.api import app, run_chat_custom_tool
 from hyper_demo.models import (
+    ManagedChatDeployment,
+    ManagedChatResources,
     ManagedChatSession,
     OrderRecord,
     PrivyAgentWallet,
@@ -106,6 +108,20 @@ class FakeManagedAnthropic:
 
     def update(self, *args, **kwargs):
         return FakeManagedObject("updated")
+
+
+class FakeHttpResponse:
+    def __init__(self, payload: dict) -> None:
+        self.payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def read(self):
+        return json.dumps(self.payload).encode("utf-8")
 
 
 def test_agent_analyze_creates_trade_proposal(tmp_path, monkeypatch) -> None:
@@ -344,6 +360,151 @@ def test_chat_bootstrap_without_anthropic_key_is_disabled(tmp_path, monkeypatch)
     assert session.json()["status"] == "disabled"
 
 
+def test_chat_state_includes_default_deployment(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+    client = TestClient(app)
+
+    response = client.get("/api/chat/state")
+
+    assert response.status_code == 200
+    deployment = response.json()["deployment"]
+    assert deployment["id"] == "managed_chat_deployment"
+    assert deployment["status"] == "not_created"
+    assert deployment["cron_expression"] == "*/30 * * * *"
+    assert deployment["timezone"] == "Europe/Madrid"
+    assert "human mode" in deployment["initial_prompt"]
+
+
+def test_chat_create_deployment_posts_anthropic_payload(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-token")
+    store = JsonStore()
+    store.save(
+        "managed_chat_resources",
+        ManagedChatResources(
+            status="ready",
+            environment_id="env_chat",
+            coordinator_agent_id="agent_chat",
+            memory_store_ids={"canon": "mem_canon", "learning": "mem_learning"},
+            vault_ids=["vault_chat"],
+        ),
+    )
+    captured = {}
+
+    def fake_urlopen(request, timeout):
+        captured["url"] = request.full_url
+        captured["timeout"] = timeout
+        captured["headers"] = dict(request.header_items())
+        captured["body"] = json.loads(request.data.decode("utf-8"))
+        return FakeHttpResponse(
+            {
+                "id": "depl_chat",
+                "status": "active",
+                "paused_reason": None,
+                "schedule": {
+                    "type": "cron",
+                    "expression": "*/15 * * * *",
+                    "timezone": "Europe/Madrid",
+                    "upcoming_runs_at": ["2026-06-09T22:15:00Z"],
+                },
+            }
+        )
+
+    monkeypatch.setattr("hyper_demo.services.managed_chat.urllib.request.urlopen", fake_urlopen)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/chat/deployment",
+        json={
+            "name": "HyperClaude intraday watch",
+            "cron_expression": "*/15 * * * *",
+            "timezone": "Europe/Madrid",
+            "initial_prompt": "Run a safe scheduled watch and do not execute in human mode.",
+        },
+    )
+
+    assert response.status_code == 200, response.json()
+    payload = response.json()
+    assert payload["anthropic_deployment_id"] == "depl_chat"
+    assert payload["status"] == "active"
+    assert payload["upcoming_runs_at"] == ["2026-06-09T22:15:00Z"]
+    assert captured["url"] == "https://api.anthropic.com/v1/deployments"
+    assert captured["timeout"] == 30
+    headers = {key.lower(): value for key, value in captured["headers"].items()}
+    assert headers["anthropic-beta"] == "managed-agents-2026-04-01"
+    assert headers["x-api-key"] == "anthropic-token"
+    body = captured["body"]
+    assert body["agent"] == "agent_chat"
+    assert body["environment_id"] == "env_chat"
+    assert body["vault_ids"] == ["vault_chat"]
+    assert body["schedule"] == {
+        "type": "cron",
+        "expression": "*/15 * * * *",
+        "timezone": "Europe/Madrid",
+    }
+    assert body["initial_events"][0]["type"] == "user.message"
+    assert body["resources"] == [
+        {
+            "type": "memory_store",
+            "memory_store_id": "mem_canon",
+            "access": "read_only",
+            "instructions": "Use as immutable trading safety canon.",
+        },
+        {
+            "type": "memory_store",
+            "memory_store_id": "mem_learning",
+            "access": "read_write",
+            "instructions": (
+                "Store non-secret user preferences, rejected setups, post-trade lessons, "
+                "and process improvements."
+            ),
+        },
+    ]
+
+
+def test_chat_run_deployment_posts_run_endpoint(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-token")
+    store = JsonStore()
+    store.save(
+        "managed_chat_deployments",
+        ManagedChatDeployment(
+            id="managed_chat_deployment",
+            name="HyperClaude intraday watch",
+            status="active",
+            anthropic_deployment_id="depl_chat",
+            cron_expression="*/30 * * * *",
+            timezone="Europe/Madrid",
+            initial_prompt="Watch only.",
+        ),
+    )
+    captured = {}
+
+    def fake_urlopen(request, timeout):
+        captured["url"] = request.full_url
+        captured["body"] = json.loads(request.data.decode("utf-8"))
+        return FakeHttpResponse(
+            {
+                "id": "drun_chat",
+                "deployment_id": "depl_chat",
+                "session_id": "sesn_chat",
+            }
+        )
+
+    monkeypatch.setattr("hyper_demo.services.managed_chat.urllib.request.urlopen", fake_urlopen)
+    client = TestClient(app)
+
+    response = client.post("/api/chat/deployment/run")
+
+    assert response.status_code == 200, response.json()
+    payload = response.json()
+    assert payload["last_run_id"] == "drun_chat"
+    assert payload["last_session_id"] == "sesn_chat"
+    assert captured["url"] == "https://api.anthropic.com/v1/deployments/depl_chat/run"
+    assert captured["body"] == {}
+
+
 def test_chat_bootstrap_creates_managed_resources_and_vaults(tmp_path, monkeypatch) -> None:
     fake = FakeManagedAnthropic()
     monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
@@ -375,6 +536,7 @@ def test_chat_bootstrap_creates_managed_resources_and_vaults(tmp_path, monkeypat
         "source-quality",
         "hypertracker-cli",
         "trade-validation",
+        "formal-order-validation",
         "self-improvement",
     }
     assert set(payload["memory_store_ids"]) == {"canon", "learning"}
@@ -417,7 +579,7 @@ def test_chat_bootstrap_creates_managed_resources_and_vaults(tmp_path, monkeypat
     assert "trading_close_position" in payload["custom_tools"]
     assert "hypertracker-secret" not in dumped
     assert "perplexity-secret" not in dumped
-    assert len(fake.created_skills) == 5
+    assert len(fake.created_skills) == 6
     skill_uploads = {
         files[0][0].split("/")[0]: files[0][1]
         for created_skill in fake.created_skills
@@ -585,6 +747,7 @@ def test_chat_custom_tool_creates_valid_plan_without_leaking_secrets(
     events = client.get(f"/api/chat/sessions/{session['id']}/events").json()
     event_dump = json.dumps(events)
     assert any(event["type"] == "user.custom_tool_result" for event in events)
+    assert not any(event["requires_action"] for event in events)
     assert "hypertracker-secret" not in event_dump
     sent_events = [
         event
@@ -608,6 +771,359 @@ def test_chat_market_snapshot_serializes_dataclass_price(tmp_path, monkeypatch) 
     assert "market_error" not in payload
     assert payload["mark_price"]["asset"] == "BTC"
     assert payload["mark_price"]["mark_price"] > 0
+
+
+def test_chat_formal_validation_blocks_unbuffered_minimum_order(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("PRIVY_EXECUTION_ENABLED", "true")
+    monkeypatch.setenv("PRIVY_APP_ID", "app")
+    monkeypatch.setenv("PRIVY_APP_SECRET", "secret")
+    store = JsonStore()
+    store.save("runtime", RuntimeSettings(network="prodnet"))
+    store.save(
+        "privy_agent_wallet",
+        PrivyAgentWallet(
+            id="privy_agent_wallet_prodnet",
+            network="prodnet",
+            master_wallet_id="master-id",
+            master_wallet_address="0x0000000000000000000000000000000000000000",
+            agent_wallet_id="agent-id",
+            agent_wallet_address="0x0000000000000000000000000000000000000001",
+            registered=True,
+        ),
+    )
+    plan = TradePlan(
+        asset="ETH",
+        side="long",
+        size_usdc=10,
+        entry_type="market",
+        entry_price=100,
+        stop_loss=98,
+        take_profit=104,
+        leverage=2,
+        rationale="test",
+        invalidation_criteria=[],
+        network="prodnet",
+    )
+    store.save("plans", plan)
+
+    def fake_wallet_state(self, agent):
+        return {"withdrawable_usdc": 10.5, "open_positions": []}
+
+    def fake_mark(self, asset):
+        return MarketPrice(asset=asset, mark_price=100, source="test")
+
+    monkeypatch.setattr("hyper_demo.api.PrivyHyperliquidAdapter.wallet_state", fake_wallet_state)
+    monkeypatch.setattr("hyper_demo.api.MarketDataClient.mark_price", fake_mark)
+
+    payload = run_chat_custom_tool(
+        ManagedChatSession(title="Validator"),
+        {"name": "trading_validate_plan", "input": {"plan_id": plan.id}},
+    )
+
+    assert payload["validation"]["valid"] is False
+    assert any("10.25 USDC" in item for item in payload["validation"]["errors"])
+
+
+def test_chat_autonomous_execution_requires_robot_mode(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("HYPERLIQUID_MAINNET_ENABLED", "true")
+    monkeypatch.setenv("PRIVY_EXECUTION_ENABLED", "true")
+    monkeypatch.setenv("PRIVY_APP_ID", "app")
+    monkeypatch.setenv("PRIVY_APP_SECRET", "secret")
+    store = JsonStore()
+    store.save("runtime", RuntimeSettings(network="prodnet"))
+    store.save(
+        "privy_agent_wallet",
+        PrivyAgentWallet(
+            id="privy_agent_wallet_prodnet",
+            network="prodnet",
+            master_wallet_id="master-id",
+            master_wallet_address="0x0000000000000000000000000000000000000000",
+            agent_wallet_id="agent-id",
+            agent_wallet_address="0x0000000000000000000000000000000000000001",
+            registered=True,
+        ),
+    )
+    plan = TradePlan(
+        asset="ETH",
+        side="long",
+        size_usdc=12,
+        entry_type="market",
+        entry_price=100,
+        stop_loss=98,
+        take_profit=104,
+        leverage=2,
+        rationale="test",
+        invalidation_criteria=[],
+        network="prodnet",
+    )
+    store.save("plans", plan)
+
+    def fake_wallet_state(self, agent):
+        return {"withdrawable_usdc": 10, "open_positions": []}
+
+    def fake_mark(self, asset):
+        return MarketPrice(asset=asset, mark_price=100, source="test")
+
+    monkeypatch.setattr("hyper_demo.api.PrivyHyperliquidAdapter.wallet_state", fake_wallet_state)
+    monkeypatch.setattr("hyper_demo.api.MarketDataClient.mark_price", fake_mark)
+
+    try:
+        run_chat_custom_tool(
+            ManagedChatSession(title="Executor"),
+            {
+                "name": "trading_execute_plan",
+                "input": {"plan_id": plan.id, "confirmed": True},
+            },
+        )
+    except Exception as exc:
+        assert "ui_mode=robot" in str(exc)
+    else:
+        raise AssertionError("human mode must block autonomous prodnet execution")
+
+
+def test_chat_trade_action_tools_require_robot_mode_or_human_approval(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    store = JsonStore()
+    store.save("runtime", RuntimeSettings(network="prodnet", ui_mode="human"))
+
+    try:
+        run_chat_custom_tool(
+            ManagedChatSession(title="Closer"),
+            {
+                "name": "trading_close_position",
+                "input": {"asset": "BTC", "confirmed": True},
+            },
+        )
+    except Exception as exc:
+        assert "human approval" in str(exc)
+    else:
+        raise AssertionError("human mode must block autonomous prodnet close actions")
+
+
+def test_chat_human_mode_only_requires_action_for_trade_execution(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    fake = FakeManagedAnthropic()
+    fake.events.stream_events = [
+        {
+            "id": "custom_tool_1",
+            "type": "agent.custom_tool_use",
+            "name": "trading_execute_plan",
+            "input": {"plan_id": "plan_pending", "confirmed": True},
+        },
+        {"type": "session.status_idle", "stop_reason": {"type": "requires_action"}},
+    ]
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-token")
+    monkeypatch.setattr(ManagedTradingChatService, "_client", lambda self: fake)
+    store = JsonStore()
+    store.save("runtime", RuntimeSettings(network="prodnet", ui_mode="human"))
+    client = TestClient(app)
+    assert client.post("/api/chat/bootstrap", json={"force": True}).status_code == 200
+    session = client.post("/api/chat/sessions", json={"title": "Pending execution"}).json()
+
+    response = client.post(
+        f"/api/chat/sessions/{session['id']}/messages",
+        json={"message": "Execute the selected trade."},
+    )
+
+    assert response.status_code == 200, response.json()
+    assert response.json()["status"] == "waiting_action"
+    events = client.get(f"/api/chat/sessions/{session['id']}/events").json()
+    pending = [event for event in events if event["requires_action"]]
+    assert len(pending) == 1
+    assert pending[0]["type"] == "agent.custom_tool_use"
+    assert pending[0]["payload"]["name"] == "trading_execute_plan"
+    assert not any(event["type"] == "user.custom_tool_result" for event in events)
+
+
+def test_chat_human_approval_executes_pending_trade_once(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    fake = FakeManagedAnthropic()
+    fake.events.stream_events = [
+        {
+            "id": "custom_tool_1",
+            "type": "agent.custom_tool_use",
+            "name": "trading_execute_plan",
+            "input": {"plan_id": "plan_human", "confirmed": False},
+        },
+        {"type": "session.status_idle", "stop_reason": {"type": "requires_action"}},
+    ]
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-token")
+    monkeypatch.setenv("HYPERLIQUID_MAINNET_ENABLED", "true")
+    monkeypatch.setenv("PRIVY_EXECUTION_ENABLED", "true")
+    monkeypatch.setenv("PRIVY_APP_ID", "app")
+    monkeypatch.setenv("PRIVY_APP_SECRET", "secret")
+    monkeypatch.setattr(ManagedTradingChatService, "_client", lambda self: fake)
+    store = JsonStore()
+    store.save("runtime", RuntimeSettings(network="prodnet", ui_mode="human"))
+    store.save(
+        "privy_agent_wallet",
+        PrivyAgentWallet(
+            id="privy_agent_wallet_prodnet",
+            network="prodnet",
+            master_wallet_id="master-id",
+            master_wallet_address="0x0000000000000000000000000000000000000000",
+            agent_wallet_id="agent-id",
+            agent_wallet_address="0x0000000000000000000000000000000000000001",
+            registered=True,
+        ),
+    )
+    plan = TradePlan(
+        id="plan_human",
+        asset="ETH",
+        side="long",
+        size_usdc=12,
+        entry_type="market",
+        entry_price=100,
+        stop_loss=98,
+        take_profit=104,
+        leverage=2,
+        rationale="test",
+        invalidation_criteria=[],
+        network="prodnet",
+    )
+    store.save("plans", plan)
+
+    def fake_wallet_state(self, agent):
+        return {"withdrawable_usdc": 10, "open_positions": []}
+
+    def fake_mark(self, asset):
+        return MarketPrice(asset=asset, mark_price=100, source="test")
+
+    executions = []
+
+    def fake_execute(self, submitted_plan, runtime_agent, confirmed, confirmation_phrase=None):
+        executions.append(submitted_plan.id)
+        assert confirmed is True
+        return OrderRecord(
+            plan_id=submitted_plan.id,
+            exchange="hyperliquid-mainnet",
+            asset=submitted_plan.asset,
+            side=submitted_plan.side,
+            size_usdc=submitted_plan.size_usdc,
+            entry_order_id="entry-human",
+            status="submitted",
+            message="Submitted after human approval.",
+        )
+
+    monkeypatch.setattr("hyper_demo.api.PrivyHyperliquidAdapter.wallet_state", fake_wallet_state)
+    monkeypatch.setattr("hyper_demo.api.MarketDataClient.mark_price", fake_mark)
+    monkeypatch.setattr(
+        "hyper_demo.services.trading_agent.PrivyHyperliquidAdapter.execute_plan",
+        fake_execute,
+    )
+    client = TestClient(app)
+    assert client.post("/api/chat/bootstrap", json={"force": True}).status_code == 200
+    session = client.post("/api/chat/sessions", json={"title": "Human approval"}).json()
+    response = client.post(
+        f"/api/chat/sessions/{session['id']}/messages",
+        json={"message": "Execute the selected trade."},
+    )
+    assert response.status_code == 200, response.json()
+
+    approval = client.post(
+        f"/api/chat/sessions/{session['id']}/tool-confirmations",
+        json={"tool_use_id": "custom_tool_1", "allow": True},
+    )
+
+    assert approval.status_code == 200, approval.json()
+    assert executions == ["plan_human"]
+    events = client.get(f"/api/chat/sessions/{session['id']}/events").json()
+    assert not any(event["requires_action"] for event in events)
+    result = [event for event in events if event["type"] == "user.custom_tool_result"][-1]
+    assert result["payload"]["is_error"] is False
+    assert result["payload"]["custom_tool_use_id"] == "custom_tool_1"
+
+
+def test_chat_autonomous_execution_runs_in_robot_mode_after_validation(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("HYPERLIQUID_MAINNET_ENABLED", "true")
+    monkeypatch.setenv("PRIVY_EXECUTION_ENABLED", "true")
+    monkeypatch.setenv("PRIVY_APP_ID", "app")
+    monkeypatch.setenv("PRIVY_APP_SECRET", "secret")
+    store = JsonStore()
+    store.save("runtime", RuntimeSettings(network="prodnet", ui_mode="robot"))
+    store.save(
+        "privy_agent_wallet",
+        PrivyAgentWallet(
+            id="privy_agent_wallet_prodnet",
+            network="prodnet",
+            master_wallet_id="master-id",
+            master_wallet_address="0x0000000000000000000000000000000000000000",
+            agent_wallet_id="agent-id",
+            agent_wallet_address="0x0000000000000000000000000000000000000001",
+            registered=True,
+        ),
+    )
+    plan = TradePlan(
+        asset="ETH",
+        side="long",
+        size_usdc=12,
+        entry_type="market",
+        entry_price=100,
+        stop_loss=98,
+        take_profit=104,
+        leverage=2,
+        rationale="test",
+        invalidation_criteria=[],
+        network="prodnet",
+    )
+    store.save("plans", plan)
+
+    def fake_wallet_state(self, agent):
+        return {"withdrawable_usdc": 10, "open_positions": []}
+
+    def fake_mark(self, asset):
+        return MarketPrice(asset=asset, mark_price=100, source="test")
+
+    def fake_execute(self, submitted_plan, runtime_agent, confirmed, confirmation_phrase=None):
+        assert submitted_plan.id == plan.id
+        assert confirmed is True
+        assert runtime_agent.agent_wallet_id == "agent-id"
+        return OrderRecord(
+            plan_id=submitted_plan.id,
+            exchange="hyperliquid-mainnet",
+            asset=submitted_plan.asset,
+            side=submitted_plan.side,
+            size_usdc=submitted_plan.size_usdc,
+            entry_order_id="entry-robot",
+            status="submitted",
+            message="Submitted by robot mode.",
+        )
+
+    monkeypatch.setattr("hyper_demo.api.PrivyHyperliquidAdapter.wallet_state", fake_wallet_state)
+    monkeypatch.setattr("hyper_demo.api.MarketDataClient.mark_price", fake_mark)
+    monkeypatch.setattr(
+        "hyper_demo.services.trading_agent.PrivyHyperliquidAdapter.execute_plan",
+        fake_execute,
+    )
+
+    payload = run_chat_custom_tool(
+        ManagedChatSession(title="Executor"),
+        {
+            "name": "trading_execute_plan",
+            "input": {"plan_id": plan.id, "confirmed": True},
+        },
+    )
+
+    assert payload["plan"]["status"] == "executed"
+    assert payload["order_id"] is not None
 
 
 def test_setup_check_reflects_hypertracker_status(tmp_path, monkeypatch) -> None:
