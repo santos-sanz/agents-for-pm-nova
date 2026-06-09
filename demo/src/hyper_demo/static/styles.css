@@ -993,6 +993,18 @@ body[data-asset-sync="on"] .sync-watchlist-card {
   font-weight: 700;
 }
 
+.funding-warning {
+  width: fit-content;
+  border: 1px solid rgba(228, 171, 71, 0.45);
+  border-radius: 8px;
+  background: rgba(228, 171, 71, 0.14);
+  color: #f1d394;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
 .sensitive-balance.redacted-value {
   color: transparent;
   text-shadow:
