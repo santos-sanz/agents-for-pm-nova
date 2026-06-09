@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import asdict
 from typing import Annotated
 
 import typer
@@ -12,6 +13,7 @@ from rich.table import Table
 from hyper_demo.adapters.hyperliquid import ExecutionBlocked
 from hyper_demo.api import setup_check
 from hyper_demo.config import get_settings, settings_for_runtime
+from hyper_demo.services.hypertracker import HyperTrackerClient
 from hyper_demo.services.metrics import compute_portfolio_metrics
 from hyper_demo.services.trading_agent import (
     analyze_trade,
@@ -65,6 +67,14 @@ def scan_command() -> None:
     result = asyncio.run(run_proactive_scan(runtime, store))
     console.print(Panel(result.plan.rationale, title=f"Proactive Trade Idea {result.plan.id}"))
     console.print_json(result.plan.model_dump_json(indent=2))
+
+
+@app.command("hypertracker")
+def hypertracker_command(
+    asset: Annotated[str, typer.Option("--asset")] = "BTC",
+) -> None:
+    intelligence = HyperTrackerClient(get_settings()).intelligence_for_asset(asset)
+    console.print_json(json.dumps(asdict(intelligence)))
 
 
 @app.command("execute")

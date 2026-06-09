@@ -3,11 +3,12 @@ from __future__ import annotations
 import json
 import urllib.error
 import urllib.request
+from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -18,6 +19,9 @@ from hyper_demo.models import (
     Candle,
     ConnectedWallet,
     ManagedAgentOpportunity,
+    ManagedChatEvent,
+    ManagedChatResources,
+    ManagedChatSession,
     OrderRecord,
     PortfolioMetrics,
     PositionSnapshot,
@@ -29,9 +33,13 @@ from hyper_demo.models import (
     TradeSide,
     normalize_asset_symbol,
 )
+from hyper_demo.services.hypertracker import HyperTrackerClient
+from hyper_demo.services.managed_chat import ManagedTradingChatService
 from hyper_demo.services.market import MarketDataClient
 from hyper_demo.services.metrics import compute_portfolio_metrics
 from hyper_demo.services.monitoring import HyperliquidWebsocketMonitor
+from hyper_demo.services.perplexity import PerplexityFinanceClient
+from hyper_demo.services.perplexity_mcp import PerplexityMcpServer
 from hyper_demo.services.trading_agent import (
     AGENT_RUN_ID,
     analyze_trade,
@@ -80,6 +88,30 @@ class PositionProtectionRequest(BaseModel):
     take_profit: float | None = None
     stop_loss: float | None = None
     confirmed: bool = False
+
+
+class ChatBootstrapRequest(BaseModel):
+    force: bool = False
+
+
+class ChatSessionCreateRequest(BaseModel):
+    title: str | None = None
+
+
+class ChatMessageRequest(BaseModel):
+    message: str
+
+
+class ChatOutcomeRequest(BaseModel):
+    description: str
+    rubric: str
+    max_iterations: int | None = None
+
+
+class ChatToolConfirmationRequest(BaseModel):
+    tool_use_id: str
+    allow: bool = False
+    deny_message: str | None = None
 
 
 class ManualTradePlanRequest(BaseModel):
@@ -250,6 +282,10 @@ def get_store() -> JsonStore:
 
 def get_runtime(store: JsonStore | None = None) -> RuntimeSettings:
     return (store or get_store()).runtime_settings()
+
+
+def get_chat_service(store: JsonStore | None = None) -> ManagedTradingChatService:
+    return ManagedTradingChatService(get_settings(), store or get_store())
 
 
 def privy_agent_wallet_id(network: RuntimeNetwork) -> str:
@@ -426,6 +462,28 @@ def setup_check(settings: Settings | None = None) -> SetupCheck:
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.post("/mcp/perplexity", response_model=None)
+async def perplexity_mcp(
+    request: Request,
+    authorization: str | None = Header(default=None),
+) -> Response:
+    try:
+        payload = await request.json()
+    except json.JSONDecodeError:
+        return JSONResponse(
+            {
+                "jsonrpc": "2.0",
+                "id": None,
+                "error": {"code": -32700, "message": "Invalid JSON body."},
+            },
+            status_code=400,
+        )
+    body, status_code = PerplexityMcpServer().handle_http(payload, authorization)
+    if body is None:
+        return Response(status_code=status_code)
+    return JSONResponse(body, status_code=status_code)
 
 
 @app.get("/api/setup-check", response_model=SetupCheck)
@@ -822,6 +880,135 @@ def api_agent_opportunities() -> list[ManagedAgentOpportunity]:
     return managed_agent_opportunities(runtime, settings_for_runtime(runtime))
 
 
+@app.post("/api/chat/bootstrap", response_model=ManagedChatResources)
+async def api_chat_bootstrap(
+    request: ChatBootstrapRequest | None = None,
+) -> ManagedChatResources:
+    request = request or ChatBootstrapRequest()
+    return await get_chat_service().bootstrap(force=request.force)
+
+
+@app.get("/api/chat/state")
+async def api_chat_state() -> dict[str, Any]:
+    store = get_store()
+    settings = get_settings()
+    service = get_chat_service(store)
+    persisted_resources = store.get("managed_chat_resources", "managed_chat_resources")
+    resources = persisted_resources or service.resources()
+    if (
+        settings.anthropic_chat_auto_bootstrap
+        and settings.has_anthropic_credentials
+        and resources.status != "ready"
+        and (
+            persisted_resources is None
+            or resources.disabled_reason == "Managed Agents resources have not been bootstrapped."
+        )
+    ):
+        await service.bootstrap(force=False)
+    return service.state()
+
+
+@app.post("/api/chat/sessions", response_model=ManagedChatSession)
+async def api_chat_create_session(
+    request: ChatSessionCreateRequest | None = None,
+) -> ManagedChatSession:
+    request = request or ChatSessionCreateRequest()
+    return await get_chat_service().create_session(request.title)
+
+
+@app.get("/api/chat/sessions", response_model=list[ManagedChatSession])
+def api_chat_sessions() -> list[ManagedChatSession]:
+    return sorted(
+        get_store().list("managed_chat_sessions"),
+        key=lambda item: item.created_at,
+        reverse=True,
+    )
+
+
+@app.get("/api/chat/sessions/{session_id}")
+def api_chat_session(session_id: str) -> dict[str, Any]:
+    store = get_store()
+    session = store.get("managed_chat_sessions", session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Chat session not found.")
+    return {
+        "session": session,
+        "events": get_chat_service(store).events(session_id),
+    }
+
+
+@app.post("/api/chat/sessions/{session_id}/messages", response_model=ManagedChatSession)
+async def api_chat_send_message(
+    session_id: str,
+    request: ChatMessageRequest,
+) -> ManagedChatSession:
+    try:
+        return await get_chat_service().send_message(
+            session_id,
+            request.message,
+            tool_runner=run_chat_custom_tool,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/chat/sessions/{session_id}/events", response_model=list[ManagedChatEvent])
+def api_chat_events(session_id: str) -> list[ManagedChatEvent]:
+    try:
+        return get_chat_service().events(session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/chat/sessions/{session_id}/outcomes", response_model=ManagedChatSession)
+async def api_chat_define_outcome(
+    session_id: str,
+    request: ChatOutcomeRequest,
+) -> ManagedChatSession:
+    try:
+        return await get_chat_service().define_outcome(
+            session_id,
+            request.description,
+            request.rubric,
+            request.max_iterations,
+            tool_runner=run_chat_custom_tool,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/chat/sessions/{session_id}/tool-confirmations", response_model=ManagedChatSession)
+async def api_chat_confirm_tool(
+    session_id: str,
+    request: ChatToolConfirmationRequest,
+) -> ManagedChatSession:
+    try:
+        return await get_chat_service().confirm_tool(
+            session_id,
+            request.tool_use_id,
+            request.allow,
+            request.deny_message,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/chat/sessions/{session_id}/interrupt", response_model=ManagedChatSession)
+def api_chat_interrupt(session_id: str) -> ManagedChatSession:
+    try:
+        return get_chat_service().interrupt(session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/chat/sessions/{session_id}/archive", response_model=ManagedChatSession)
+def api_chat_archive(session_id: str) -> ManagedChatSession:
+    try:
+        return get_chat_service().archive(session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 def _max_leverage_for_asset(asset: str, market: MarketDataClient) -> float:
     try:
         for item in market.available_assets():
@@ -849,6 +1036,166 @@ def _available_usdc_for_agent_input(
     except (TypeError, ValueError):
         return float(runtime.max_order_usdc)
     return max(0.0, min(float(runtime.max_order_usdc), available))
+
+
+def run_chat_custom_tool(session: ManagedChatSession, event: dict[str, Any]) -> dict[str, Any]:
+    name = str(event.get("name") or "")
+    payload = event.get("input")
+    if payload is None:
+        payload = event.get("arguments")
+    if not isinstance(payload, dict):
+        payload = {}
+    store = get_store()
+    runtime = get_runtime(store)
+    settings = settings_for_runtime(runtime)
+
+    if name == "trading_market_snapshot":
+        return _chat_market_snapshot(store, runtime, settings, payload)
+    if name == "trading_create_plan":
+        plan = api_create_manual_trade_plan(ManualTradePlanRequest.model_validate(payload))
+        return {"plan": plan.model_dump(mode="json")}
+    if name == "trading_execute_plan":
+        if not bool(payload.get("confirmed")):
+            raise ExecutionBlocked("Tool execution requires confirmed=true.")
+        result = api_execute_trade(
+            str(payload.get("plan_id") or ""),
+            TradeExecutionRequest(confirmed=True),
+        )
+        return _json_safe(result)
+    if name == "trading_close_position":
+        if not bool(payload.get("confirmed")):
+            raise ExecutionBlocked("Position close requires confirmed=true.")
+        return _json_safe(
+            close_position(
+                str(payload.get("asset") or ""),
+                ClosePositionRequest(confirmed=True),
+            )
+        )
+    if name == "trading_set_protection":
+        if not bool(payload.get("confirmed")):
+            raise ExecutionBlocked("TP/SL update requires confirmed=true.")
+        return _json_safe(
+            set_position_protection(
+                str(payload.get("asset") or ""),
+                PositionProtectionRequest(
+                    confirmed=True,
+                    take_profit=payload.get("take_profit"),
+                    stop_loss=payload.get("stop_loss"),
+                ),
+            )
+        )
+    if name == "trading_hypertracker_intelligence":
+        intelligence = HyperTrackerClient(settings).intelligence_for_asset(
+            str(payload.get("asset") or "BTC")
+        )
+        return intelligence.__dict__
+    if name == "trading_perplexity_context":
+        context = PerplexityFinanceClient(settings).context_for_asset(
+            str(payload.get("asset") or "BTC")
+        )
+        return context.__dict__
+    if name == "trading_runtime_get_settings":
+        return {
+            "runtime": runtime.model_dump(mode="json"),
+            "setup": setup_check(settings).model_dump(mode="json"),
+        }
+    if name == "trading_runtime_update_settings":
+        update = RuntimeSettingsUpdate.model_validate(
+            {
+                key: value
+                for key, value in payload.items()
+                if key
+                in {
+                    "network",
+                    "max_order_usdc",
+                    "allowed_assets",
+                    "watchlist",
+                    "sync_asset_lists",
+                }
+            }
+        )
+        updated = update_runtime_settings(update)
+        return {"runtime": updated.model_dump(mode="json")}
+    if name in {"trading_skill_proposal", "trading_tool_proposal", "trading_memory_note"}:
+        service = get_chat_service(store)
+        service.append_event(
+            session.id,
+            name,
+            str(payload.get("title") or payload.get("name") or payload.get("note") or name),
+            role="agent",
+            payload=payload,
+        )
+        return {"recorded": True, "proposal": _json_safe(payload)}
+    raise ExecutionBlocked(f"Unknown or disabled custom tool: {name}.")
+
+
+def _chat_market_snapshot(
+    store: JsonStore,
+    runtime: RuntimeSettings,
+    settings: Settings,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    default_asset = runtime.watchlist[0] if runtime.watchlist else "BTC"
+    asset = normalize_asset_symbol(str(payload.get("asset") or default_asset))
+    interval = str(payload.get("interval") or "1h")
+    snapshot: dict[str, Any] = {
+        "runtime": runtime.model_dump(mode="json"),
+        "setup": setup_check(settings).model_dump(mode="json"),
+        "asset": asset,
+    }
+    try:
+        snapshot["wallet"] = _public_wallet_snapshot(
+            wallet_state_for_runtime(store, runtime, settings)
+        )
+    except (ExecutionBlocked, ValueError) as exc:
+        snapshot["wallet_error"] = str(exc)
+    try:
+        snapshot["orders"] = _json_safe(get_orders_state())
+    except Exception as exc:
+        snapshot["orders_error"] = str(exc)
+    try:
+        snapshot["portfolio_metrics"] = get_portfolio_metrics().model_dump(mode="json")
+    except Exception as exc:
+        snapshot["portfolio_error"] = str(exc)
+    try:
+        market = MarketDataClient(settings)
+        snapshot["mark_price"] = _json_safe(market.mark_price(asset))
+        snapshot["candles"] = [
+            candle.model_dump(mode="json") for candle in market.candles(asset, interval, limit=80)
+        ]
+    except Exception as exc:
+        snapshot["market_error"] = str(exc)
+    return snapshot
+
+
+def _public_wallet_snapshot(wallet: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "account_address": _mask_address(wallet.get("account_address")),
+        "agent_address": _mask_address(wallet.get("agent_address")),
+        "withdrawable_usdc": wallet.get("withdrawable_usdc"),
+        "total_margin_used_usdc": wallet.get("total_margin_used_usdc"),
+        "open_positions": wallet.get("open_positions") or [],
+        "open_orders": wallet.get("open_orders") or [],
+    }
+
+
+def _json_safe(value: Any) -> Any:
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json")
+    if is_dataclass(value) and not isinstance(value, type):
+        return _json_safe(asdict(value))
+    if isinstance(value, dict):
+        return {
+            key: _json_safe(item)
+            for key, item in value.items()
+            if "secret" not in key.lower()
+            and "private" not in key.lower()
+            and "api_key" not in key.lower()
+            and key.lower() not in {"token", "authorization", "cookie"}
+        }
+    if isinstance(value, list):
+        return [_json_safe(item) for item in value]
+    return value
 
 
 def _live_proposal_prices(

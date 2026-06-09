@@ -236,6 +236,12 @@ body.settings-screen-active .events-panel {
   display: none;
 }
 
+body.chat-screen-active .rail,
+body.chat-screen-active .mainstage,
+body.chat-screen-active .events-panel {
+  display: none;
+}
+
 .rail,
 .mainstage,
 .events-panel {
@@ -338,6 +344,210 @@ body.settings-screen-active .events-panel {
 
 .settings-screen[hidden] {
   display: none;
+}
+
+.chat-screen {
+  grid-column: 1 / -1;
+}
+
+.chat-screen[hidden] {
+  display: none;
+}
+
+.chat-grid {
+  display: grid;
+  grid-template-columns: minmax(250px, 300px) minmax(0, 1fr) minmax(280px, 340px);
+  gap: 16px;
+  align-items: start;
+}
+
+.chat-sidebar,
+.chat-inspector {
+  display: grid;
+  gap: 16px;
+}
+
+.chat-transcript-panel {
+  display: grid;
+  min-height: calc(100vh - 130px);
+  grid-template-rows: auto minmax(260px, 1fr) auto auto;
+}
+
+.chat-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.chat-resource-grid,
+.capability-list {
+  display: grid;
+  gap: 8px;
+}
+
+.chat-resource-grid div,
+.capability-list div,
+.kv.mini div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: baseline;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 8px;
+}
+
+.chat-resource-grid span,
+.capability-list span,
+.kv.mini span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.chat-session-list,
+.chat-events-list,
+.vault-status,
+.chat-pending-actions,
+.chat-plan-actions,
+.chat-capabilities {
+  display: grid;
+  gap: 10px;
+}
+
+.chat-session-item {
+  display: grid;
+  height: auto;
+  min-height: 58px;
+  justify-items: start;
+  gap: 4px;
+  border-color: var(--line);
+  background: var(--surface-2);
+  text-align: left;
+  padding: 10px 12px;
+}
+
+.chat-session-item small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.chat-events-list {
+  min-height: 280px;
+  max-height: 52vh;
+  overflow: auto;
+  padding: 4px;
+}
+
+.chat-event {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+  padding: 12px;
+}
+
+.chat-event.user {
+  border-color: rgba(var(--green-rgb), 0.36);
+}
+
+.chat-event.tool {
+  border-color: rgba(74, 144, 226, 0.38);
+}
+
+.chat-event.error {
+  border-color: rgba(var(--orange-rgb), 0.55);
+}
+
+.chat-event-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.chat-event p,
+.vault-row p,
+.pending-action p,
+.chat-plan-card p,
+.chat-warning {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.chat-event pre {
+  min-height: 0;
+  max-height: 190px;
+  box-shadow: none;
+}
+
+.chat-composer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+
+.chat-composer textarea,
+.chat-outcome-box textarea {
+  min-height: 0;
+}
+
+.chat-outcome-box {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+  padding: 14px;
+}
+
+.compact-field {
+  max-width: 150px;
+}
+
+.vault-row,
+.pending-action,
+.chat-plan-card {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+  padding: 12px;
+}
+
+.vault-row {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+}
+
+.tool-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.tool-chip-list span {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 11px;
+  padding: 6px 9px;
+}
+
+.chat-empty-state {
+  border: 1px dashed var(--line-strong);
+  border-radius: 8px;
+  color: var(--muted);
+  padding: 14px;
 }
 
 .settings-hero {
@@ -1308,7 +1518,8 @@ pre {
   .cockpit,
   .hero,
   .auth-panel,
-  .analysis-grid {
+  .analysis-grid,
+  .chat-grid {
     grid-template-columns: 1fr;
   }
 
@@ -1360,6 +1571,7 @@ pre {
   .summary-grid,
   .metrics-strip,
   .button-row,
+  .chat-composer,
   .auth-actions,
   .input-action,
   .settings-grid,

@@ -31,6 +31,20 @@ def test_cli_scan_creates_proactive_trade_idea(tmp_path, monkeypatch) -> None:
     assert "Proactive Trade Idea" in result.output
 
 
+def test_cli_hypertracker_reports_unavailable_without_key(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("HYPERTRACKER_API_KEY", "")
+    runner = CliRunner()
+
+    result = runner.invoke(app, ["hypertracker", "--asset", "btc"])
+
+    assert result.exit_code == 0
+    assert '"asset": "BTC"' in result.output
+    assert '"available": false' in result.output
+    assert "API key is not configured" in result.output
+    assert "HYPERTRACKER_API_KEY" not in result.output
+
+
 def test_cli_removed_legacy_commands(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
     runner = CliRunner()

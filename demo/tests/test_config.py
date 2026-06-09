@@ -73,6 +73,35 @@ def test_perplexity_credentials_ignore_empty_and_placeholders() -> None:
     assert Settings(PERPLEXITY_API_KEY="token").has_perplexity_credentials
 
 
+def test_managed_chat_mcp_servers_include_tool_url_shortcuts() -> None:
+    settings = Settings(
+        HYPERTRACKER_MCP_SERVER_URL="https://mcp.example.com/hypertracker",
+        PERPLEXITY_MCP_SERVER_URL="https://mcp.example.com/perplexity",
+    )
+
+    assert settings.managed_chat_mcp_servers == [
+        {
+            "name": "hypertracker",
+            "type": "url",
+            "url": "https://mcp.example.com/hypertracker",
+        },
+        {
+            "name": "perplexity",
+            "type": "url",
+            "url": "https://mcp.example.com/perplexity",
+        },
+    ]
+
+
+def test_managed_chat_mcp_servers_reject_non_https_json_urls() -> None:
+    settings = Settings(
+        ANTHROPIC_CHAT_MCP_SERVERS='[{"name": "perplexity", "url": "http://mcp.example.com"}]',
+    )
+
+    with pytest.raises(ValueError, match="MCP server URLs must be HTTPS"):
+        _ = settings.managed_chat_mcp_servers
+
+
 def test_settings_accept_mainnet_guarded_without_enable_flag() -> None:
     settings = Settings(
         DEMO_TRADING_MODE="mainnet_guarded",
