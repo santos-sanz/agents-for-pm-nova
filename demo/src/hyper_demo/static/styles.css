@@ -4211,9 +4211,46 @@ body.trading-screen #ticket .mode-switch button.active {
 
 body.trading-screen #ticket .auto-order-section,
 body.trading-screen #ticket .auto-prefs,
-body.trading-screen #ticket .auto-proposals {
+body.trading-screen #ticket .auto-proposals,
+body.trading-screen #ticket .auto-agent-results,
+body.trading-screen #ticket .auto-plan-stack {
   display: grid;
   gap: 10px;
+}
+
+body.trading-screen #ticket .auto-order-section > .mode-switch,
+body.trading-screen #ticket .auto-agent-intro,
+body.trading-screen #ticket .auto-prefs,
+body.trading-screen #ticket .auto-status,
+body.trading-screen #ticket .auto-action-row,
+body.trading-screen #ticket .auto-agent-results,
+body.trading-screen #ticket .auto-legacy-proposals,
+body.trading-screen #ticket .order-error {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
+body.trading-screen #ticket .auto-agent-intro {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 10px;
+}
+
+body.trading-screen #ticket .auto-agent-intro b {
+  color: var(--page-ink);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+body.trading-screen #ticket .auto-agent-intro span {
+  color: var(--body);
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.35;
 }
 
 body.trading-screen #ticket .auto-prefs {
@@ -4280,7 +4317,7 @@ body.trading-screen #ticket .auto-status {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
-  align-items: baseline;
+  align-items: center;
   border-top: 1px solid var(--hairline);
   padding-top: 10px;
 }
@@ -4288,6 +4325,122 @@ body.trading-screen #ticket .auto-status {
 body.trading-screen #ticket .auto-status b {
   color: var(--page-ink);
   font-size: 13px;
+}
+
+body.trading-screen #ticket .auto-action-row {
+  display: grid;
+  grid-template-columns: minmax(96px, 1fr) minmax(120px, 1.2fr) minmax(82px, 0.8fr);
+  gap: 10px;
+  align-items: stretch;
+}
+
+body.trading-screen #ticket .auto-action-row button {
+  min-width: 0;
+  min-height: 40px;
+  white-space: nowrap;
+}
+
+body.trading-screen #ticket .auto-agent-results {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) !important;
+  min-width: 0;
+  width: 100%;
+}
+
+body.trading-screen #ticket .auto-agent-results,
+body.trading-screen #ticket .auto-plan-stack {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+body.trading-screen #ticket .auto-agent-trace,
+body.trading-screen #ticket .auto-agent-events,
+body.trading-screen #ticket .auto-agent-event {
+  display: none !important;
+}
+
+body.trading-screen #ticket .auto-plan-stack,
+body.trading-screen #ticket .auto-plan-card {
+  width: 100%;
+}
+
+body.trading-screen #ticket .auto-plan-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 10px;
+  min-width: 0;
+}
+
+body.trading-screen #ticket .auto-plan-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+body.trading-screen #ticket .auto-plan-card-head b,
+body.trading-screen #ticket .auto-plan-card strong {
+  color: var(--page-ink);
+  font-size: 13px;
+  font-weight: 900;
+  line-height: 1.25;
+}
+
+body.trading-screen #ticket .auto-plan-metrics {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+}
+
+body.trading-screen #ticket .auto-plan-metrics span {
+  display: grid;
+  grid-template-columns: 86px minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+  border-top: 1px solid var(--hairline);
+  padding-top: 6px;
+}
+
+body.trading-screen #ticket .auto-plan-metrics small {
+  color: var(--body);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 900;
+  line-height: 1.35;
+  text-transform: uppercase;
+}
+
+body.trading-screen #ticket .auto-plan-metrics b,
+body.trading-screen #ticket .auto-plan-card p {
+  color: var(--page-ink);
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.4;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+body.trading-screen #ticket .auto-plan-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(118px, 1.1fr);
+  gap: 8px;
+}
+
+body.trading-screen #ticket .auto-plan-actions button {
+  min-width: 0;
+  min-height: 38px;
+  white-space: nowrap;
+}
+
+body.trading-screen #ticket .auto-legacy-proposals summary {
+  cursor: pointer;
+  color: var(--body);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
 }
 
 body.trading-screen #ticket .auto-proposal {
@@ -4574,9 +4727,7 @@ body.trading-screen .ticket-panel .button-row {
 }
 
 body.trading-screen .ticket-panel.auto-mode .button-row {
-  position: static;
-  border-top: 0;
-  padding-top: 0;
+  display: none;
 }
 
 @media (max-width: 760px) {

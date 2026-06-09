@@ -108,9 +108,9 @@ CUSTOM_TOOLS: list[dict[str, Any]] = [
         "type": "custom",
         "name": "trading_execute_plan",
         "description": (
-            "Submit an already stored trade plan. Prodnet autonomous execution is available "
-            "only when runtime ui_mode is robot and the formal validation checklist passes. "
-            "Human mode requires the normal UI execution flow."
+            "Submit an already stored trade plan. Testnet execution is available only after "
+            "the formal validation checklist passes. Prodnet execution also requires explicit "
+            "host human approval; runtime ui_mode=robot is not a bypass."
         ),
         "input_schema": {
             "type": "object",
@@ -191,8 +191,9 @@ CUSTOM_TOOLS: list[dict[str, Any]] = [
         "type": "custom",
         "name": "trading_memory_note",
         "description": (
-            "Record a non-secret note for the local audit trail. Durable Claude memory "
-            "should still be written by the agent to the read-write memory store."
+            "Record a non-secret lesson, post-trade observation, rejected idea, or process "
+            "improvement for the local audit trail. Durable Claude memory should still be "
+            "written by the agent to the read-write memory store."
         ),
         "input_schema": {
             "type": "object",
@@ -365,7 +366,7 @@ Use this skill before validating or executing autonomous leveraged intraday trad
 
 - First create a stored plan with `trading_create_plan`; never execute directly from prose.
 - Run `trading_validate_plan` and only continue when `valid=true`.
-- Autonomous prodnet execution requires runtime `ui_mode=robot`.
+- Prodnet execution requires explicit host human approval; `ui_mode=robot` is not enough.
 - Prefer trades intended to close within minutes or hours, not multi-day investment theses.
 - Use integer leverage of at least 2x for autonomous intraday trades, while staying below the
   asset max leverage and runtime limits.
@@ -456,8 +457,8 @@ Hard boundaries:
 - Always respond in English, even when the user writes in another language.
 - Host-side trading actions are only available through custom tools and existing guardrails.
 - Prodnet execution requires explicit environment enablement and UI confirmation.
-- Prodnet autonomous execution is allowed only when runtime ui_mode is robot and
-  `trading_validate_plan` returns valid=true for the stored plan.
+- Prodnet execution, close actions, and protection changes require explicit host human approval;
+  runtime `ui_mode=robot` is not a bypass.
 - For trades below 10x leverage, do not attach stop loss by default. Prefer take profit,
   explicit invalidation criteria, small notional size, and active monitoring. Stop loss is
   reserved for 10x+ leverage, explicit user instruction, or necessary hard-exit risk control.
@@ -471,7 +472,9 @@ Default workflow:
 3. Use outcomes/rubrics for high-stakes or uncertain plans.
 4. Create reviewable trade plans before execution.
 5. Run Formal Autonomous Order Validation before any autonomous execution.
-6. Record what should be remembered, improved, or rejected for future sessions.
+6. After each run, use `trading_memory_note` and the learning memory store to record non-secret
+   lessons from accurate calls, failed validations, rejected orders, exchange errors, and missed
+   assumptions.
 """
 
 
@@ -1595,10 +1598,11 @@ def _default_deployment_prompt() -> str:
     return (
         "Run the scheduled HyperClaude intraday watch. Gather runtime settings, wallet state, "
         "open positions, allowed assets, mark prices, and market context. Propose or validate "
-        "short-horizon leveraged trades only when formally valid. In human mode, do not execute, "
-        "close, or modify exchange orders; stop after producing reviewable plans and validation "
-        "results. In robot mode, execution still requires trading_validate_plan valid=true and all "
-        "host guardrails."
+        "short-horizon leveraged trades only when formally valid. On testnet, execute only after "
+        "trading_validate_plan returns valid=true and all host guardrails pass. On prodnet, do not "
+        "execute, close, or modify exchange orders without explicit host human approval. Record "
+        "non-secret lessons from accurate calls, failed validations, rejected orders, exchange "
+        "errors, and missed assumptions."
     )
 
 

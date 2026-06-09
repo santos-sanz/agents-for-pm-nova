@@ -84,7 +84,55 @@ DEMO_REQUIRE_CONFIRMATION=true
 
 The browser requires the confirmation checkbox before prodnet execution.
 
-## 6. Validation
+## 6. Cloud Deployment Access
+
+Give the Claude deployment only server-side environment variables and scoped
+wallet access. Do not paste private keys into prompts, chat messages, browser
+local storage, or source files.
+
+For autonomous scheduled trading, use testnet:
+
+```bash
+ANTHROPIC_API_KEY=...
+ANTHROPIC_MODEL=claude-haiku-4-5-20251001
+ANTHROPIC_CHAT_AUTO_BOOTSTRAP=true
+DEMO_TRADING_MODE=testnet
+DEMO_REQUIRE_CONFIRMATION=true
+HYPERLIQUID_BASE_URL=https://api.hyperliquid-testnet.xyz
+HYPERLIQUID_WS_URL=wss://api.hyperliquid-testnet.xyz/ws
+HYPERLIQUID_ACCOUNT_ADDRESS=0x_your_testnet_account
+HYPERLIQUID_API_WALLET_PRIVATE_KEY=0x_your_testnet_api_wallet_private_key
+HYPERLIQUID_MAX_ORDER_USDC=25
+HYPERLIQUID_ALLOWED_ASSETS=BTC,ETH,SOL,HYPE
+HYPERLIQUID_MAINNET_ENABLED=false
+```
+
+If using Privy server wallets instead of a raw Hyperliquid API wallet, set:
+
+```bash
+PRIVY_APP_ID=...
+PRIVY_APP_SECRET=...
+PRIVY_EXECUTION_ENABLED=true
+```
+
+Then initialize the agent wallet from the browser UI or via
+`POST /api/privy/agent-wallet` for the selected network. The deployment can use
+the stored agent wallet record after it exists.
+
+Prodnet may be configured for guarded live demos only:
+
+```bash
+DEMO_TRADING_MODE=mainnet_guarded
+HYPERLIQUID_MAINNET_ENABLED=true
+DEMO_REQUIRE_CONFIRMATION=true
+HYPERLIQUID_MAX_ORDER_USDC=25
+```
+
+In prodnet, Managed Chat tools can create and validate plans, read wallet state,
+and prepare pending tool actions, but exchange-changing actions require explicit
+host human approval. `ui_mode=robot` is not a bypass for prodnet execution.
+
+## 7. Validation
 
 ```bash
 uv run pytest

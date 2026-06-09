@@ -45,8 +45,14 @@ const state = {
   ordersTab: "positions",
   orderMode: "manual",
   autoPrefs: {
-    risk_appetite: "balanced",
-    close_window: "1h",
+    risk_appetite: "",
+    close_window: "",
+  },
+  autoChat: {
+    session: null,
+    events: [],
+    plans: [],
+    lastAsset: "",
   },
   positionProtection: {},
   manualOrder: {
@@ -1292,17 +1298,15 @@ function configureTicketButtons(mode, { previewOnly = false, preflightBlocked = 
   const [left, main, right] = buttons;
   if (!left || !main || !right) return;
   if (mode === "auto") {
-    const hasProposal = Boolean(selectedCandidate());
-    const selectedIssue = proposalIssue(selectedCandidate());
     left.dataset.action = "auto-analyze";
-    left.textContent = state.isAnalyzing ? "Analyzing..." : "Analyze";
-    left.disabled = state.isAnalyzing;
-    main.dataset.action = "approve-auto-proposal";
-    main.textContent = state.isSubmittingOrder ? "Submitting..." : "Approve & place order";
-    main.disabled = state.isAnalyzing || state.isSubmittingOrder || !hasProposal || Boolean(selectedIssue);
+    left.textContent = state.isAnalyzing ? "Agent running..." : "Run agent";
+    left.disabled = state.isAnalyzing || !autoPrefsComplete();
+    main.dataset.action = "open-auto-chat";
+    main.textContent = "Open in Chat";
+    main.disabled = !state.autoChat.session?.id;
     right.dataset.action = "reject-auto-proposal";
-    right.textContent = "Reject";
-    right.disabled = state.isAnalyzing && !hasProposal;
+    right.textContent = "Clear";
+    right.disabled = state.isAnalyzing || (!state.autoChat.session && !state.autoChat.events.length);
     return;
   }
   left.dataset.action = "create-manual-plan";
@@ -1314,6 +1318,10 @@ function configureTicketButtons(mode, { previewOnly = false, preflightBlocked = 
   right.dataset.action = "reject";
   right.textContent = "Clear";
   right.disabled = !activePlan();
+}
+
+function autoPrefsComplete() {
+  return Boolean(state.autoPrefs.risk_appetite && state.autoPrefs.close_window);
 }
 
 function orderModeSwitchMarkup() {
@@ -1403,21 +1411,82 @@ function liveProposal(candidate, asset = currentChartAsset()) {
   };
 }
 
+function autoPlanById(planId) {
+  return (state.autoChat.plans || []).find((plan) => plan.id === planId) || null;
+}
+
+function autoChatResultsMarkup() {
+  const plans = state.autoChat.plans || [];
+  if (!plans.length) {
+    return `<div class="empty-assets">
+      ${autoPrefsComplete()
+        ? "Run the agent to generate several intraday trade proposals."
+        : "Choose Risk appetite and Close window, then run the agent."}
+    </div>`;
+  }
+  return `
+    ${
+      plans.length
+        ? `<div class="auto-plan-stack">
+            ${plans
+              .map((plan, index) => {
+                const side = String(plan.side || "--").toUpperCase();
+                const stopPolicy = plan.stop_loss
+                  ? `SL ${compactPrice(plan.stop_loss)}`
+                  : "No SL · monitored invalidation";
+                return `
+                  <article class="auto-plan-card">
+                    <div class="auto-plan-card-head">
+                      <span class="pill ${decisionClass(plan.execution_decision || "proposed")}">Plan ${index + 1}</span>
+                      <b>${escapeHtml(displayPerpLabel(plan.asset || currentChartAsset()))}</b>
+                    </div>
+                    <strong>${escapeHtml(side)} · ${number(plan.leverage || 0, 0)}x · ${money(plan.size_usdc || 0)}</strong>
+                    <div class="auto-plan-metrics">
+                      <span><small>Entry</small><b>${escapeHtml(plan.entry_type || "market")} ${compactPrice(plan.entry_price)}</b></span>
+                      <span><small>Take profit</small><b>${compactPrice(plan.take_profit)}</b></span>
+                      <span><small>Risk policy</small><b>${escapeHtml(stopPolicy)}</b></span>
+                    </div>
+                    <p>${escapeHtml(plan.rationale || plan.thesis || "Agent-created trade plan ready for review.")}</p>
+                    <div class="auto-plan-actions">
+                      <button type="button" data-action="review-auto-plan" data-plan-id="${escapeHtml(plan.id || "")}">Review</button>
+                      <button type="button" class="danger" data-action="execute-auto-plan" data-plan-id="${escapeHtml(plan.id || "")}">Approve & place</button>
+                    </div>
+                  </article>
+                `;
+              })
+              .join("")}
+          </div>`
+        : ""
+    }
+  `;
+}
+
 function renderAutoOrderSection(ticketAsset) {
-  const analysis = activeAnalysis();
   const candidates = activeCandidates().slice(0, 5);
   const selected = selectedCandidate();
   const selectedIssue = proposalIssue(selected);
   const riskOptions = ["conservative", "balanced", "aggressive"];
   const closeOptions = ["15m", "1h", "4h", "1d"];
+  const prefsReady = autoPrefsComplete();
+  const autoStatus = state.isAnalyzing
+    ? "Agent running"
+    : state.autoChat.session
+      ? "Agent proposals ready"
+      : prefsReady
+        ? "Ready to run agent"
+        : "Choose preferences";
   return `
     <section class="manual-order-section auto-order-section">
       ${orderModeSwitchMarkup()}
+      <div class="auto-agent-intro">
+        <b>Managed Chat agent</b>
+        <span>Generate several intraday trade proposals using wallet, allowed assets, positions, marks, and guardrails.</span>
+      </div>
       <div class="auto-prefs" aria-label="Auto preferences">
         <div class="auto-pref-group risk-pref">
           <div class="auto-pref-label">
             <span>Risk appetite</span>
-            <small>${escapeHtml(state.autoPrefs.risk_appetite)}</small>
+            <small>${escapeHtml(state.autoPrefs.risk_appetite || "required")}</small>
           </div>
           <div class="trade-segment" aria-label="Risk appetite">
             ${riskOptions
@@ -1434,7 +1503,7 @@ function renderAutoOrderSection(ticketAsset) {
         <div class="auto-pref-group close-pref">
           <div class="auto-pref-label">
             <span>Close window</span>
-            <small>${escapeHtml(state.autoPrefs.close_window)}</small>
+            <small>${escapeHtml(state.autoPrefs.close_window || "required")}</small>
           </div>
           <div class="trade-segment" aria-label="Close window">
             ${closeOptions
@@ -1450,10 +1519,29 @@ function renderAutoOrderSection(ticketAsset) {
         </div>
       </div>
       <div class="auto-status">
-        <span>${state.isAnalyzing ? "Analyzing" : analysis ? "Proposals ready" : "Auto mode ready"}</span>
+        <span>${escapeHtml(autoStatus)}</span>
         <b>${escapeHtml(displayPerpLabel(ticketAsset))}</b>
       </div>
-      <div class="auto-proposals">
+      <div class="auto-action-row">
+        <button type="button" data-action="auto-analyze" ${state.isAnalyzing || !prefsReady ? "disabled" : ""}>
+          ${state.isAnalyzing ? "Agent running..." : "Run agent"}
+        </button>
+        <button type="button" data-action="open-auto-chat" ${state.autoChat.session?.id ? "" : "disabled"}>
+          Open in Chat
+        </button>
+        <button
+          type="button"
+          data-action="reject-auto-proposal"
+          ${state.isAnalyzing || (!state.autoChat.session && !state.autoChat.events.length) ? "disabled" : ""}
+        >
+          Clear
+        </button>
+      </div>
+      <div class="auto-agent-results">
+        ${autoChatResultsMarkup()}
+      </div>
+      <details class="auto-legacy-proposals" ${candidates.length ? "" : "hidden"}>
+        <summary>Technical candidates</summary>
         ${
           candidates.length
             ? candidates
@@ -1474,9 +1562,9 @@ function renderAutoOrderSection(ticketAsset) {
                 .join("")
             : `<div class="empty-assets">${state.isAnalyzing ? "Building proposals." : "Switch to Auto or press Analyze to get proposals."}</div>`
         }
-      </div>
+      </details>
       ${
-        selectedIssue
+        candidates.length && selectedIssue
           ? `<div class="order-error" role="alert"><span>Proposal needs review</span><b>${escapeHtml(selectedIssue)}</b></div>`
           : ""
       }
@@ -2492,8 +2580,9 @@ function defaultDeploymentPrompt() {
     "Run the scheduled HyperClaude intraday watch.",
     "Gather runtime settings, wallet state, open positions, allowed assets, mark prices, and market context.",
     "Propose or validate short-horizon leveraged trades only when formally valid.",
-    "In human mode, do not execute, close, or modify exchange orders; stop after producing reviewable plans and validation results.",
-    "In robot mode, execution still requires trading_validate_plan valid=true and all host guardrails.",
+    "On testnet, execute only after trading_validate_plan returns valid=true and all host guardrails pass.",
+    "On prodnet, do not execute, close, or modify exchange orders without explicit host human approval.",
+    "Record non-secret lessons from accurate calls, failed validations, rejected orders, exchange errors, and missed assumptions.",
   ].join(" ");
 }
 
@@ -3330,30 +3419,45 @@ function autoContext(asset) {
 
 async function analyzeAutoProposals() {
   if (state.isAnalyzing) return;
+  if (!autoPrefsComplete()) {
+    throw new Error("Choose Risk appetite and Close window before running Auto.");
+  }
   const asset = currentChartAsset();
   state.orderMode = "auto";
   state.analysis = null;
   state.plan = null;
   state.order = null;
+  state.autoChat = { session: null, events: [], plans: [], lastAsset: asset };
   state.selectedCandidateIndex = 0;
   state.lastOrderError = "";
   try {
     await loadChartCandles(asset, state.activeTimeframe);
     state.isAnalyzing = true;
     renderTradingView();
-    const result = await api("/api/agent/analyze", {
+    const result = await api("/api/agent/chat-auto", {
       method: "POST",
       body: JSON.stringify({
         asset,
-        context: autoContext(asset),
         risk_appetite: state.autoPrefs.risk_appetite,
         close_window: state.autoPrefs.close_window,
         available_usdc: orderAvailableUsdc(),
         max_leverage: assetMaxLeverage(asset),
       }),
     });
-    state.analysis = result.analysis;
-    state.plan = result.plan;
+    state.autoChat = {
+      session: result.session || null,
+      events: result.events || [],
+      plans: result.plans || [],
+      lastAsset: asset,
+    };
+    if (result.session?.id) {
+      state.chat.activeSessionId = result.session.id;
+      state.chat.events[result.session.id] = result.events || [];
+      if (!state.chat.sessions.some((session) => session.id === result.session.id)) {
+        state.chat.sessions = [result.session, ...state.chat.sessions];
+      }
+    }
+    state.plan = result.plan || null;
     state.selectedCandidateIndex = 0;
     if (result.analysis?.candles_by_timeframe) {
       state.marketCandles[result.analysis.asset] = {
@@ -3363,11 +3467,40 @@ async function analyzeAutoProposals() {
     }
     await loadState();
     state.orderMode = "auto";
-    toast("Auto proposals ready");
+    toast("Agent proposals ready");
   } finally {
     state.isAnalyzing = false;
     renderTradingView();
   }
+}
+
+async function openAutoChat() {
+  const sessionId = state.autoChat.session?.id;
+  if (!sessionId) throw new Error("Run the Auto agent first.");
+  state.chat.activeSessionId = sessionId;
+  state.chat.events[sessionId] = state.autoChat.events || [];
+  state.screen = "chat";
+  renderScreen();
+  await loadChatEvents(sessionId);
+  startChatPolling();
+}
+
+async function reviewAutoPlan(actionTarget) {
+  const planId = actionTarget?.dataset.planId || "";
+  const plan = autoPlanById(planId);
+  if (!plan) throw new Error("Trade plan was not found.");
+  state.plan = plan;
+  state.order = null;
+  renderTradingView();
+  toast("Trade plan loaded for review");
+}
+
+async function executeAutoPlan(actionTarget) {
+  const planId = actionTarget?.dataset.planId || "";
+  const plan = autoPlanById(planId);
+  if (!plan) throw new Error("Trade plan was not found.");
+  state.plan = plan;
+  await executeTrade({ confirmed: true });
 }
 
 async function approveAutoProposal() {
@@ -3384,8 +3517,7 @@ async function approveAutoProposal() {
     });
     state.plan = result.plan;
     state.analysis = result.analysis || state.analysis;
-    await executeTrade({ confirmed: true });
-    toast("Auto proposal approved");
+    toast("Auto proposal ready for review");
   } finally {
     state.isSubmittingOrder = false;
     renderTradingView();
@@ -3396,9 +3528,10 @@ async function rejectAutoProposal() {
   state.lastOrderError = "";
   state.plan = null;
   state.analysis = null;
+  state.autoChat = { session: null, events: [], plans: [], lastAsset: "" };
   state.selectedCandidateIndex = 0;
   renderTradingView();
-  toast("Auto proposals rejected");
+  toast("Auto proposals cleared");
 }
 
 async function scan() {
@@ -3729,6 +3862,9 @@ async function runAction(action, actionTarget) {
   if (action === "create-manual-plan") await createManualPlan();
   if (action === "submit-manual-order") await submitManualOrder();
   if (action === "auto-analyze") await analyzeAutoProposals();
+  if (action === "open-auto-chat") await openAutoChat();
+  if (action === "review-auto-plan") await reviewAutoPlan(actionTarget);
+  if (action === "execute-auto-plan") await executeAutoPlan(actionTarget);
   if (action === "approve-auto-proposal") await approveAutoProposal();
   if (action === "reject-auto-proposal") await rejectAutoProposal();
   if (action === "execute") await executeTrade();
@@ -3751,6 +3887,9 @@ function handleActionError(action, error) {
       "create-manual-plan",
       "submit-manual-order",
       "auto-analyze",
+      "open-auto-chat",
+      "review-auto-plan",
+      "execute-auto-plan",
       "approve-auto-proposal",
       "execute",
       "close-position",
@@ -3820,13 +3959,6 @@ document.addEventListener("click", async (event) => {
     state.orderMode = orderMode.dataset.orderMode || "manual";
     state.lastOrderError = "";
     renderTradingView();
-    if (state.orderMode === "auto" && !activeCandidates().length) {
-      try {
-        await analyzeAutoProposals();
-      } catch (error) {
-        handleActionError("auto-analyze", error);
-      }
-    }
     return;
   }
   const autoPref = event.target.closest("[data-auto-pref]");
@@ -3834,6 +3966,7 @@ document.addEventListener("click", async (event) => {
     state.autoPrefs[autoPref.dataset.autoPref] = autoPref.dataset.value;
     state.analysis = null;
     state.plan = null;
+    state.autoChat = { session: null, events: [], plans: [], lastAsset: "" };
     state.selectedCandidateIndex = 0;
     renderTradingView();
     return;
