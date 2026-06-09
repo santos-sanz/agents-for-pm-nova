@@ -1,9 +1,15 @@
 from fastapi.testclient import TestClient
 
 from hyper_demo.api import app
-from hyper_demo.models import OrderRecord, PrivyAgentWallet, RuntimeSettings, TradePlan
+from hyper_demo.models import (
+    OrderRecord,
+    PrivyAgentWallet,
+    ResearchReport,
+    RuntimeSettings,
+    TradePlan,
+)
 from hyper_demo.services.hypertracker import MarketIntelligence
-from hyper_demo.services.market import MarketAsset
+from hyper_demo.services.market import MarketAsset, MarketPrice
 from hyper_demo.services.perplexity import FinanceContext
 from hyper_demo.storage import JsonStore
 
@@ -15,7 +21,7 @@ def test_agent_analyze_creates_trade_proposal(tmp_path, monkeypatch) -> None:
 
     response = client.post("/api/agent/analyze", json={"asset": "BTC"})
 
-    assert response.status_code == 200
+    assert response.status_code == 200, response.json()
     plan = response.json()["plan"]
     analysis = response.json()["analysis"]
     assert plan["asset"] == "BTC"
@@ -26,9 +32,82 @@ def test_agent_analyze_creates_trade_proposal(tmp_path, monkeypatch) -> None:
     assert analysis["asset"] == "BTC"
     assert analysis["best_candidate"]["side"] in {"long", "short"}
     assert len(analysis["timeframes"]) == 4
+    assert all(float(item["leverage"]).is_integer() for item in analysis["candidates"])
     events = client.get("/api/agent/events")
     assert events.status_code == 200
+    event_payloads = [event.get("payload", {}) for event in events.json()]
+    analysis_context = next(
+        payload.get("context", "") for payload in event_payloads if "context" in payload
+    )
+    assert "Available trading input=" in analysis_context
+    assert "BTC max supported leverage=" in analysis_context
     assert len(events.json()) >= 2
+
+
+def test_agent_proposal_can_be_approved_as_valid_plan(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+    client = TestClient(app)
+
+    analysis_response = client.post(
+        "/api/agent/analyze",
+        json={
+            "asset": "BTC",
+            "risk_appetite": "balanced",
+            "close_window": "1h",
+        },
+    )
+    assert analysis_response.status_code == 200
+
+    proposals = analysis_response.json()["analysis"]["candidates"]
+    response = None
+    for index in range(len(proposals)):
+        response = client.post(f"/api/agent/proposals/{index}/approve")
+        if response.status_code == 200:
+            break
+
+    assert response is not None
+    assert response.status_code == 200, response.json()
+    payload = response.json()
+    assert payload["plan"]["source"] == "agent"
+    assert payload["plan"]["id"] == payload["analysis"]["plan_id"]
+    assert float(payload["plan"]["leverage"]).is_integer()
+
+
+def test_agent_market_proposal_approval_uses_live_entry_price(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+    client = TestClient(app)
+
+    analysis_response = client.post("/api/agent/analyze", json={"asset": "BTC"})
+    assert analysis_response.status_code == 200
+    proposals = analysis_response.json()["analysis"]["candidates"]
+    market_index, market_proposal = next(
+        (index, proposal)
+        for index, proposal in enumerate(proposals)
+        if proposal["entry_type"] == "market"
+    )
+    stale_entry = float(market_proposal["entry_price"])
+    live_mark = stale_entry * 1.03
+
+    def fake_mark(self, asset):
+        return MarketPrice(asset=asset, mark_price=live_mark, source="test")
+
+    monkeypatch.setattr("hyper_demo.api.MarketDataClient.mark_price", fake_mark)
+
+    response = client.post(f"/api/agent/proposals/{market_index}/approve")
+
+    assert response.status_code == 200, response.json()
+    plan = response.json()["plan"]
+    assert plan["entry_type"] == "market"
+    assert plan["entry_price"] == round(live_mark, 6)
+    assert plan["entry_price"] != stale_entry
+    if plan["side"] == "long":
+        assert plan["take_profit"] > plan["entry_price"]
+        assert plan["stop_loss"] < plan["entry_price"]
+    else:
+        assert plan["take_profit"] < plan["entry_price"]
+        assert plan["stop_loss"] > plan["entry_price"]
 
 
 def test_agent_analyze_adds_hypertracker_evidence(tmp_path, monkeypatch) -> None:
@@ -75,17 +154,49 @@ def test_agent_analyze_adds_perplexity_finance_context(tmp_path, monkeypatch) ->
             available=True,
         )
 
+    captured = {}
+
+    async def fake_research(self, asset, profile=None, external_context=None):
+        captured["external_context"] = external_context
+        return ResearchReport(
+            asset=asset,
+            profile_id=profile.id if profile else None,
+            thesis="Captured research input.",
+            evidence=["Captured base evidence."],
+            risks=[],
+            assumptions=[],
+            why_not_invest=[],
+            sources=[],
+            fallback_used=False,
+        )
+
     monkeypatch.setattr(
         "hyper_demo.services.trading_agent.PerplexityFinanceClient.context_for_asset",
         fake_context,
     )
+    monkeypatch.setattr(
+        "hyper_demo.services.trading_agent.ManagedAgentResearchClient.research",
+        fake_research,
+    )
     client = TestClient(app)
 
-    response = client.post("/api/agent/analyze", json={"asset": "BTC"})
+    response = client.post(
+        "/api/agent/analyze",
+        json={
+            "asset": "BTC",
+            "context": "User wants auto proposals constrained by account inputs.",
+            "available_usdc": 42,
+            "max_leverage": 3,
+        },
+    )
 
     assert response.status_code == 200
     plan = response.json()["plan"]
     assert any("Perplexity finance brief" in item for item in plan["evidence"])
+    assert "User wants auto proposals" in captured["external_context"]
+    assert "Available trading input=" in captured["external_context"]
+    assert "BTC max supported leverage=" in captured["external_context"]
+    assert "Perplexity finance_search context" in captured["external_context"]
     events = client.get("/api/agent/events").json()
     assert any("Perplexity finance_search context added" in event["message"] for event in events)
 
@@ -248,6 +359,13 @@ def test_manual_market_plan_can_be_created_without_agent_proposal(tmp_path, monk
 
 def test_manual_limit_plan_accepts_optional_exits(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+
+    def fake_mark(self, asset):
+        from hyper_demo.services.market import MarketPrice
+
+        return MarketPrice(asset=asset, mark_price=61000.0, source="test")
+
+    monkeypatch.setattr("hyper_demo.api.MarketDataClient.mark_price", fake_mark)
     client = TestClient(app)
 
     response = client.post(
@@ -256,22 +374,191 @@ def test_manual_limit_plan_accepts_optional_exits(tmp_path, monkeypatch) -> None
             "asset": "BTC",
             "side": "short",
             "entry_type": "limit",
-            "entry_price": 100,
-            "stop_loss": 104,
-            "take_profit": 92,
+            "entry_price": 62000,
+            "stop_loss": 63240,
+            "take_profit": 60760,
             "size_usdc": 50,
-            "leverage": 1.5,
+            "leverage": 2,
         },
     )
 
     assert response.status_code == 200
     plan = response.json()
     assert plan["side"] == "short"
-    assert plan["entry_price"] == 100
-    assert plan["stop_loss"] == 104
-    assert plan["take_profit"] == 92
-    assert plan["max_loss_usdc"] == 2
+    assert plan["entry_price"] == 62000
+    assert plan["stop_loss"] == 63240
+    assert plan["take_profit"] == 60760
+    assert plan["max_loss_usdc"] == 1
     assert plan["source"] == "manual"
+
+
+def test_manual_plan_rejects_fractional_leverage(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/trades/manual-plan",
+        json={
+            "asset": "BTC",
+            "side": "short",
+            "entry_type": "market",
+            "size_usdc": 25,
+            "leverage": 2.5,
+        },
+    )
+
+    assert response.status_code == 400
+    assert "whole number" in response.json()["detail"]
+
+
+def test_manual_plan_rejects_trigger_that_would_execute_immediately(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+
+    def fake_mark(self, asset):
+        from hyper_demo.services.market import MarketPrice
+
+        return MarketPrice(asset=asset, mark_price=62000.0, source="test")
+
+    monkeypatch.setattr("hyper_demo.api.MarketDataClient.mark_price", fake_mark)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/trades/manual-plan",
+        json={
+            "asset": "BTC",
+            "side": "short",
+            "entry_type": "limit",
+            "entry_price": 65000,
+            "take_profit": 63000,
+            "size_usdc": 25,
+            "leverage": 2,
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Take Profit would be invalid for this Short" in response.json()["detail"]
+
+
+def test_manual_plan_rejects_stop_loss_beyond_liquidation(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+
+    def fake_mark(self, asset):
+        from hyper_demo.services.market import MarketPrice
+
+        return MarketPrice(asset=asset, mark_price=100.0, source="test")
+
+    monkeypatch.setattr("hyper_demo.api.MarketDataClient.mark_price", fake_mark)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/trades/manual-plan",
+        json={
+            "asset": "BTC",
+            "side": "short",
+            "entry_type": "market",
+            "stop_loss": 151,
+            "size_usdc": 25,
+            "leverage": 2,
+        },
+    )
+
+    assert response.status_code == 400
+    assert "beyond the estimated liquidation price" in response.json()["detail"]
+
+
+def test_manual_limit_plan_rejects_price_far_from_reference(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/trades/manual-plan",
+        json={
+            "asset": "BTC",
+            "side": "long",
+            "entry_type": "limit",
+            "entry_price": 1,
+            "size_usdc": 25,
+            "leverage": 1,
+        },
+    )
+
+    assert response.status_code == 400
+    assert "95% away" in response.json()["detail"]
+
+
+def test_manual_plan_rejects_order_below_hyperliquid_minimum(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/trades/manual-plan",
+        json={
+            "asset": "BTC",
+            "side": "short",
+            "entry_type": "market",
+            "size_usdc": 5,
+            "leverage": 2,
+        },
+    )
+
+    assert response.status_code == 400
+    assert "minimum order value of 10 USDC" in response.json()["detail"]
+
+
+def test_manual_plan_rejects_size_above_wallet_available(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("PRIVY_EXECUTION_ENABLED", "true")
+    monkeypatch.setenv("PRIVY_APP_ID", "app")
+    monkeypatch.setenv("PRIVY_APP_SECRET", "secret")
+    store = JsonStore()
+    store.save("runtime", RuntimeSettings(network="prodnet"))
+    store.save(
+        "privy_agent_wallet",
+        PrivyAgentWallet(
+            id="privy_agent_wallet_prodnet",
+            network="prodnet",
+            master_wallet_id="master-id",
+            master_wallet_address="0x0000000000000000000000000000000000000000",
+            agent_wallet_id="agent-id",
+            agent_wallet_address="0x0000000000000000000000000000000000000001",
+            registered=True,
+        ),
+    )
+
+    def fake_wallet_state(self, agent):
+        return {
+            "account_address": agent.master_wallet_address,
+            "agent_address": agent.agent_wallet_address,
+            "withdrawable_usdc": 5,
+        }
+
+    monkeypatch.setattr(
+        "hyper_demo.api.PrivyHyperliquidAdapter.wallet_state",
+        fake_wallet_state,
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/trades/manual-plan",
+        json={
+            "asset": "BTC",
+            "side": "long",
+            "entry_type": "market",
+            "size_usdc": 12,
+            "leverage": 2,
+        },
+    )
+
+    assert response.status_code == 400
+    assert "withdrawable balance" in response.json()["detail"]
+    events = client.get("/api/agent/events").json()
+    assert any(
+        "Order margin exceeds wallet withdrawable balance" in item["message"]
+        for item in events
+    )
 
 
 def test_manual_spcx_short_market_plan_with_one_percent_tp(
@@ -315,6 +602,54 @@ def test_manual_spcx_short_market_plan_with_one_percent_tp(
     assert plan["stop_loss"] is None
     assert plan["take_profit"] == 153.45
     assert plan["leverage"] == 3
+
+
+def test_manual_submit_creates_and_executes_in_one_request(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+
+    def fake_mark(self, asset):
+        from hyper_demo.services.market import MarketPrice
+
+        return MarketPrice(asset=asset, mark_price=62000.0, source="test")
+
+    def fake_execute(self, plan, confirmed, confirmation_phrase=None):
+        assert confirmed is True
+        assert confirmation_phrase is None
+        return OrderRecord(
+            plan_id=plan.id,
+            exchange="hyperliquid-testnet",
+            asset=plan.asset,
+            side=plan.side,
+            size_usdc=plan.size_usdc,
+            entry_order_id="entry-fast",
+            message="fast submitted",
+        )
+
+    monkeypatch.setattr("hyper_demo.api.MarketDataClient.mark_price", fake_mark)
+    monkeypatch.setattr(
+        "hyper_demo.services.trading_agent.HyperliquidAdapter.execute_plan",
+        fake_execute,
+    )
+    client = TestClient(app)
+    runtime = client.post("/api/settings/runtime", json={"network": "testnet"})
+    assert runtime.status_code == 200
+
+    response = client.post(
+        "/api/trades/manual-submit",
+        json={
+            "asset": "BTC",
+            "side": "long",
+            "entry_type": "market",
+            "size_usdc": 12,
+            "leverage": 2,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["plan"]["status"] == "executed"
+    assert payload["order"]["entry_order_id"] == "entry-fast"
+    assert payload["order_id"] == payload["order"]["id"]
 
 
 def test_manual_plan_rejects_leverage_above_asset_max(tmp_path, monkeypatch) -> None:
@@ -645,6 +980,262 @@ def test_privy_execution_uses_privy_adapter(tmp_path, monkeypatch) -> None:
 
     assert response.status_code == 200
     assert response.json()["plan"]["execution_message"] == "privy submitted"
+
+
+def test_orders_endpoint_includes_wallet_positions_and_history(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("PRIVY_EXECUTION_ENABLED", "true")
+    monkeypatch.setenv("PRIVY_APP_ID", "app")
+    monkeypatch.setenv("PRIVY_APP_SECRET", "secret")
+    store = JsonStore()
+    store.save("runtime", RuntimeSettings(network="prodnet"))
+    agent = PrivyAgentWallet(
+        id="privy_agent_wallet_prodnet",
+        master_wallet_id="master-id",
+        master_wallet_address="0x0000000000000000000000000000000000000000",
+        agent_wallet_id="agent-id",
+        agent_wallet_address="0x0000000000000000000000000000000000000001",
+        network="prodnet",
+        registered=True,
+    )
+    store.save("privy_agent_wallet", agent)
+    store.save(
+        "orders",
+        OrderRecord(
+            plan_id="plan-id",
+            exchange="hyperliquid-mainnet",
+            asset="BTC",
+            side="long",
+            size_usdc=10,
+            message="submitted",
+        ),
+    )
+
+    def fake_wallet_state(self, runtime_agent):
+        return {
+            "account_address": runtime_agent.master_wallet_address,
+            "agent_address": runtime_agent.agent_wallet_address,
+            "withdrawable_usdc": 5,
+            "total_margin_used_usdc": 5,
+            "open_positions": [{"position": {"coin": "BTC", "szi": "0.00017"}}],
+            "open_orders": [],
+        }
+
+    monkeypatch.setattr("hyper_demo.api.PrivyHyperliquidAdapter.wallet_state", fake_wallet_state)
+    client = TestClient(app)
+
+    response = client.get("/api/orders")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["positions"][0]["position"]["coin"] == "BTC"
+    assert payload["orders"][0]["asset"] == "BTC"
+    assert payload["wallet"]["withdrawable_usdc"] == 5
+
+
+def test_close_position_uses_reduce_only_privy_adapter(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("PRIVY_EXECUTION_ENABLED", "true")
+    monkeypatch.setenv("PRIVY_APP_ID", "app")
+    monkeypatch.setenv("PRIVY_APP_SECRET", "secret")
+    store = JsonStore()
+    store.save("runtime", RuntimeSettings(network="prodnet"))
+    agent = PrivyAgentWallet(
+        id="privy_agent_wallet_prodnet",
+        master_wallet_id="master-id",
+        master_wallet_address="0x0000000000000000000000000000000000000000",
+        agent_wallet_id="agent-id",
+        agent_wallet_address="0x0000000000000000000000000000000000000001",
+        network="prodnet",
+        registered=True,
+    )
+    store.save("privy_agent_wallet", agent)
+    captured = {}
+
+    def fake_wallet_state(self, runtime_agent):
+        return {
+            "open_positions": [
+                {
+                    "position": {
+                        "coin": "BTC",
+                        "szi": "0.00017",
+                        "positionValue": "10.5",
+                    }
+                }
+            ],
+            "open_orders": [],
+        }
+
+    def fake_close_position(self, **kwargs):
+        captured.update(kwargs)
+        return OrderRecord(
+            plan_id="manual_position_close",
+            exchange="hyperliquid-mainnet",
+            asset=kwargs["asset"],
+            side="short",
+            size_usdc=kwargs["position_value_usdc"],
+            entry_order_id="close-oid",
+            message="close submitted",
+        )
+
+    monkeypatch.setattr("hyper_demo.api.PrivyHyperliquidAdapter.wallet_state", fake_wallet_state)
+    monkeypatch.setattr(
+        "hyper_demo.api.PrivyHyperliquidAdapter.close_position",
+        fake_close_position,
+    )
+    client = TestClient(app)
+
+    response = client.post("/api/positions/BTC/close", json={"confirmed": True})
+
+    assert response.status_code == 200
+    assert captured["asset"] == "BTC"
+    assert captured["size"] == 0.00017
+    assert captured["side"] == "long"
+    assert response.json()["order"]["entry_order_id"] == "close-oid"
+
+
+def test_set_position_protection_updates_plan_and_order(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("PRIVY_EXECUTION_ENABLED", "true")
+    monkeypatch.setenv("PRIVY_APP_ID", "app")
+    monkeypatch.setenv("PRIVY_APP_SECRET", "secret")
+    store = JsonStore()
+    store.save("runtime", RuntimeSettings(network="prodnet"))
+    agent = PrivyAgentWallet(
+        id="privy_agent_wallet_prodnet",
+        master_wallet_id="master-id",
+        master_wallet_address="0x0000000000000000000000000000000000000000",
+        agent_wallet_id="agent-id",
+        agent_wallet_address="0x0000000000000000000000000000000000000001",
+        network="prodnet",
+        registered=True,
+    )
+    store.save("privy_agent_wallet", agent)
+    plan = store.save(
+        "plans",
+        TradePlan(
+            asset="BTC",
+            side="long",
+            size_usdc=10,
+            entry_type="market",
+            entry_price=61792,
+            rationale="manual",
+            invalidation_criteria=[],
+            source="manual",
+            network="prodnet",
+            status="executed",
+        ),
+    )
+    order = store.save(
+        "orders",
+        OrderRecord(
+            plan_id=plan.id,
+            exchange="hyperliquid-mainnet",
+            asset="BTC",
+            side="long",
+            size_usdc=10,
+            entry_order_id="entry-oid",
+            message="submitted",
+        ),
+    )
+    captured = {}
+
+    def fake_wallet_state(self, runtime_agent):
+        return {
+            "open_positions": [
+                {
+                    "position": {
+                        "coin": "BTC",
+                        "szi": "0.00017",
+                        "entryPx": "61792",
+                        "markPx": "62000",
+                        "positionValue": "10.54",
+                    }
+                }
+            ],
+            "open_orders": [],
+        }
+
+    def fake_set_position_protection(self, **kwargs):
+        captured.update(kwargs)
+        return {
+            "stopOrderId": "stop-oid",
+            "takeProfitOrderId": "tp-oid",
+            "stopLoss": {"status": "ok"},
+            "takeProfit": {"status": "ok"},
+        }
+
+    monkeypatch.setattr("hyper_demo.api.PrivyHyperliquidAdapter.wallet_state", fake_wallet_state)
+    monkeypatch.setattr(
+        "hyper_demo.api.PrivyHyperliquidAdapter.set_position_protection",
+        fake_set_position_protection,
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/positions/BTC/protection",
+        json={"confirmed": True, "take_profit": 63000, "stop_loss": 60000},
+    )
+
+    assert response.status_code == 200
+    assert captured["asset"] == "BTC"
+    assert captured["size"] == 0.00017
+    assert captured["side"] == "long"
+    assert captured["take_profit"] == 63000
+    assert captured["stop_loss"] == 60000
+    updated_plan = store.get("plans", plan.id)
+    assert updated_plan.take_profit == 63000
+    assert updated_plan.stop_loss == 60000
+    updated_order = store.get("orders", order.id)
+    assert updated_order.take_profit_order_id == "tp-oid"
+    assert updated_order.stop_order_id == "stop-oid"
+
+
+def test_set_position_protection_rejects_wrong_side_levels(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("PRIVY_EXECUTION_ENABLED", "true")
+    monkeypatch.setenv("PRIVY_APP_ID", "app")
+    monkeypatch.setenv("PRIVY_APP_SECRET", "secret")
+    store = JsonStore()
+    store.save("runtime", RuntimeSettings(network="prodnet"))
+    store.save(
+        "privy_agent_wallet",
+        PrivyAgentWallet(
+            id="privy_agent_wallet_prodnet",
+            master_wallet_id="master-id",
+            master_wallet_address="0x0000000000000000000000000000000000000000",
+            agent_wallet_id="agent-id",
+            agent_wallet_address="0x0000000000000000000000000000000000000001",
+            network="prodnet",
+            registered=True,
+        ),
+    )
+
+    def fake_wallet_state(self, runtime_agent):
+        return {
+            "open_positions": [
+                {
+                    "position": {
+                        "coin": "BTC",
+                        "szi": "0.00017",
+                        "entryPx": "61792",
+                        "markPx": "62000",
+                    }
+                }
+            ],
+            "open_orders": [],
+        }
+
+    monkeypatch.setattr("hyper_demo.api.PrivyHyperliquidAdapter.wallet_state", fake_wallet_state)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/positions/BTC/protection",
+        json={"confirmed": True, "take_profit": 61000},
+    )
+
+    assert response.status_code == 400
+    assert "Long take profit must be above entry and current price" in response.json()["detail"]
 
 
 def test_metrics_endpoint(tmp_path, monkeypatch) -> None:

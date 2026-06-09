@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>HyperClaude</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%236fa874'/%3E%3Ctext x='32' y='40' text-anchor='middle' font-family='Arial' font-size='24' font-weight='700' fill='%2310110f'%3EHC%3C/text%3E%3C/svg%3E" />
-    <link rel="stylesheet" href="/static/styles.css?v=hyperclaude-trading-ui-20260609-17" />
+    <link rel="stylesheet" href="/static/styles.css?v=hyperclaude-trading-ui-20260609-43" />
   </head>
   <body class="trading-screen" data-screen="trading">
     <header class="topbar">
@@ -73,32 +73,25 @@
                 </div>
                 <div id="best-bet" class="best-bet empty"></div>
                 <div id="ticket" class="ticket"></div>
-                <label class="check-row">
-                  <input id="execute-confirm" type="checkbox" />
-                  Confirm order submission
-                </label>
                 <div class="button-row">
-                  <button type="button" data-action="create-manual-plan">Review</button>
-                  <button class="danger" data-action="submit-manual-order">Submit order</button>
-                  <button data-action="reject">Reject</button>
+                  <button type="button" data-action="create-manual-plan">Preview</button>
+                  <button class="danger" data-action="submit-manual-order">Place order</button>
+                  <button data-action="reject">Clear</button>
                 </div>
               </section>
             </aside>
           </section>
 
           <section class="bottom-table">
-            <div class="table-tabs">
-              <button type="button" class="active">AI Assist</button>
-              <button type="button">Candidates</button>
-              <button type="button">Guardrails</button>
+            <div class="orders-head">
+              <div>
+                <span class="eyebrow">Execution</span>
+                <h2>Orders & positions</h2>
+                <small id="orders-scope" class="orders-scope">All markets</small>
+              </div>
+              <button type="button" data-action="refresh-orders">Refresh</button>
             </div>
-            <form id="analyze-form" class="ai-assist-form">
-              <input id="context-input" aria-label="Context" placeholder="Optional AI context" />
-              <button class="primary" type="submit">AI assist</button>
-            </form>
-            <p id="analysis-status">Enter a Hyperliquid market and run analysis.</p>
-            <div id="timeframe-cards" class="timeframe-cards"></div>
-            <div id="candidate-list" class="candidate-list"></div>
+            <div id="orders-panel" class="orders-panel"></div>
           </section>
         </section>
 
@@ -253,7 +246,7 @@
 
     <div id="toast" role="status" aria-live="polite"></div>
     <script src="/vendor/lightweight-charts/lightweight-charts.standalone.production.js"></script>
-    <script src="/static/app.js?v=hyperclaude-trading-ui-20260609-23"></script>
+    <script src="/static/app.js?v=hyperclaude-trading-ui-20260609-61"></script>
     <script type="module" src="/static/privy.js?v=hyperclaude-integrated-funding-20260609-4"></script>
   </body>
 </html>

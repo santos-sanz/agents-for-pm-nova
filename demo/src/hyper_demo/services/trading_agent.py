@@ -67,6 +67,8 @@ async def analyze_trade(
     store: JsonStore,
     context: str | None = None,
     base_settings: Settings | None = None,
+    risk_appetite: str = "balanced",
+    close_window: str = "1h",
 ) -> AgentTradeResult:
     effective_settings = settings_for_runtime(runtime, base_settings)
     normalized = normalize_asset_symbol(asset)
@@ -101,10 +103,18 @@ async def analyze_trade(
             level="warning",
             payload={"asset": normalized, "assumptions": finance_context.assumptions},
         )
+    research_context = "\n\n".join(
+        item
+        for item in [
+            context,
+            finance_context_prompt(finance_context),
+        ]
+        if item
+    )
     report = await ManagedAgentResearchClient(effective_settings).research(
         normalized,
         profile,
-        external_context=finance_context_prompt(finance_context),
+        external_context=research_context,
     )
     report = enrich_research_with_finance_context(report, finance_context)
     intelligence = HyperTrackerClient(effective_settings).intelligence_for_asset(normalized)
@@ -123,6 +133,8 @@ async def analyze_trade(
         profile,
         report,
         market,
+        risk_appetite=risk_appetite,
+        close_window=close_window,
     )
     plan = trade_plan_from_candidate(
         normalized,
@@ -193,6 +205,8 @@ async def run_proactive_scan(
         store,
         context="Proactive scan selected this asset from the configured watchlist.",
         base_settings=base_settings,
+        risk_appetite="balanced",
+        close_window="4h",
     )
 
 

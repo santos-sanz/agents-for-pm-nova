@@ -23,6 +23,39 @@ TIMEFRAME_LIMITS = {
     "1d": 60,
 }
 
+RISK_SETTINGS = {
+    "conservative": {"stop_scale": 0.75, "max_rr": 1.8, "min_score": 48.0},
+    "balanced": {"stop_scale": 0.95, "max_rr": 2.25, "min_score": 42.0},
+    "aggressive": {"stop_scale": 1.15, "max_rr": 2.85, "min_score": 36.0},
+}
+
+CLOSE_WINDOW_SETTINGS = {
+    "15m": {
+        "preferred": {"15m"},
+        "usable": {"15m", "1h"},
+        "max_stop_pct": 1.25,
+        "max_take_pct": 2.25,
+    },
+    "1h": {
+        "preferred": {"15m", "1h"},
+        "usable": {"15m", "1h", "4h"},
+        "max_stop_pct": 2.0,
+        "max_take_pct": 4.0,
+    },
+    "4h": {
+        "preferred": {"1h", "4h"},
+        "usable": {"1h", "4h", "1d"},
+        "max_stop_pct": 3.25,
+        "max_take_pct": 7.0,
+    },
+    "1d": {
+        "preferred": {"4h", "1d"},
+        "usable": {"1h", "4h", "1d"},
+        "max_stop_pct": 5.0,
+        "max_take_pct": 11.0,
+    },
+}
+
 
 def build_agent_trade_analysis(
     asset: str,
@@ -30,6 +63,9 @@ def build_agent_trade_analysis(
     profile: InvestorProfile,
     report: ResearchReport,
     market: MarketDataClient,
+    *,
+    risk_appetite: str = "balanced",
+    close_window: str = "1h",
 ) -> AgentTradeAnalysis:
     candles_by_timeframe = {
         interval: market.candles(asset, interval, limit)
@@ -47,6 +83,8 @@ def build_agent_trade_analysis(
         signals=signals,
         candles_by_timeframe=candles_by_timeframe,
         max_leverage=max_leverage,
+        risk_appetite=risk_appetite,
+        close_window=close_window,
     )
     best = candidates[0]
     directional_score = _directional_consensus(signals)
@@ -128,31 +166,57 @@ def build_trade_candidates(
     signals: list[TimeframeSignal],
     candles_by_timeframe: dict[str, list[Candle]],
     max_leverage: int,
+    risk_appetite: str = "balanced",
+    close_window: str = "1h",
 ) -> list[TradeCandidate]:
     qualitative_side = infer_side(report)
+    risk_settings = RISK_SETTINGS.get(risk_appetite, RISK_SETTINGS["balanced"])
+    window_settings = CLOSE_WINDOW_SETTINGS.get(close_window, CLOSE_WINDOW_SETTINGS["1h"])
     candidates: list[TradeCandidate] = []
     for signal in signals:
+        if signal.interval not in window_settings["usable"]:
+            continue
         candles = candles_by_timeframe[signal.interval]
         current = candles[-1].close
         for side in (TradeSide.long, TradeSide.short):
             side_score = signal.score if side == TradeSide.long else -signal.score
             qualitative = 8 if side == qualitative_side else -6
-            timeframe_bonus = {"15m": 1, "1h": 4, "4h": 7, "1d": 5}[signal.interval]
+            timeframe_bonus = _timeframe_fit_bonus(signal.interval, window_settings)
             base_score = max(
                 0.0,
                 min(100.0, 50 + side_score * 0.38 + qualitative + timeframe_bonus),
             )
+            if base_score < float(risk_settings["min_score"]):
+                continue
             for entry_type in ("market", "limit"):
                 score = base_score + (3 if entry_type == "limit" and signal.atr_pct >= 0.35 else 0)
                 entry_price = _entry_price(current, signal, side, entry_type)
-                stop_pct = max(0.85, min(6.5, signal.atr_pct * 1.45 or 1.25))
-                risk_reward = round(max(1.25, min(3.2, 1.35 + score / 80)), 2)
-                stop_loss, take_profit = _exits(entry_price, side, stop_pct, risk_reward)
+                stop_pct = _bounded_stop_pct(signal, risk_settings, window_settings)
+                risk_reward = round(
+                    max(1.15, min(float(risk_settings["max_rr"]), 1.2 + score / 95)),
+                    2,
+                )
+                stop_loss, take_profit, realized_stop_pct = _exits(
+                    entry_price,
+                    current,
+                    side,
+                    stop_pct,
+                    risk_reward,
+                    float(window_settings["max_take_pct"]),
+                )
+                if not _candidate_levels_are_actionable(
+                    side,
+                    current,
+                    entry_price,
+                    stop_loss,
+                    take_profit,
+                ):
+                    continue
                 size_usdc = round(
                     min(runtime.max_order_usdc, profile.max_position_notional_usdc),
                     2,
                 )
-                max_loss_usdc = round(size_usdc * stop_pct / 100, 2)
+                max_loss_usdc = round(size_usdc * realized_stop_pct / 100, 2)
                 leverage = _recommended_leverage(
                     score,
                     profile.recommended_leverage_cap,
@@ -201,8 +265,12 @@ def _balanced_candidates(candidates: list[TradeCandidate]) -> list[TradeCandidat
 
     if ranked:
         add(ranked[0])
-    for side in (TradeSide.long, TradeSide.short):
-        candidate = next((item for item in ranked if item.side == side), None)
+    for entry_type in ("market", "limit"):
+        candidate = next((item for item in ranked if item.entry_type == entry_type), None)
+        if candidate:
+            add(candidate)
+    for timeframe in ("15m", "1h", "4h", "1d"):
+        candidate = next((item for item in ranked if item.timeframe == timeframe), None)
         if candidate:
             add(candidate)
     for candidate in ranked:
@@ -210,6 +278,16 @@ def _balanced_candidates(candidates: list[TradeCandidate]) -> list[TradeCandidat
             break
         add(candidate)
     return selected[:8]
+
+
+def _timeframe_fit_bonus(interval: str, window_settings: dict[str, object]) -> float:
+    preferred = window_settings["preferred"]
+    usable = window_settings["usable"]
+    if isinstance(preferred, set) and interval in preferred:
+        return 9.0
+    if isinstance(usable, set) and interval in usable:
+        return 1.0
+    return -18.0
 
 
 def trade_plan_from_candidate(
@@ -300,24 +378,85 @@ def _entry_price(
     return current * (1 + offset_pct)
 
 
+def _bounded_stop_pct(
+    signal: TimeframeSignal,
+    risk_settings: dict[str, float],
+    window_settings: dict[str, object],
+) -> float:
+    raw = (signal.atr_pct or 1.0) * 1.15 * float(risk_settings["stop_scale"])
+    return max(0.45, min(float(window_settings["max_stop_pct"]), raw))
+
+
 def _exits(
     entry_price: float,
+    current_price: float,
     side: TradeSide,
     stop_pct: float,
     risk_reward: float,
-) -> tuple[float, float]:
+    max_take_pct: float,
+) -> tuple[float, float, float]:
+    max_take_pct = max(stop_pct * 1.1, max_take_pct)
+    return _exits_with_take_cap(
+        entry_price,
+        current_price,
+        side,
+        stop_pct,
+        risk_reward,
+        max_take_pct,
+    )
+
+
+def _exits_with_take_cap(
+    entry_price: float,
+    current_price: float,
+    side: TradeSide,
+    stop_pct: float,
+    risk_reward: float,
+    max_take_pct: float,
+) -> tuple[float, float, float]:
+    take_pct = min(stop_pct * risk_reward, max_take_pct)
+    if take_pct < stop_pct * 1.1:
+        stop_pct = max(0.35, take_pct / 1.1)
     stop_distance = entry_price * stop_pct / 100
-    take_distance = stop_distance * risk_reward
+    take_distance = entry_price * take_pct / 100
     if side == TradeSide.long:
-        return entry_price - stop_distance, entry_price + take_distance
-    return entry_price + stop_distance, entry_price - take_distance
+        stop_loss = entry_price - stop_distance
+        take_profit = entry_price + take_distance
+        minimum_take = max(entry_price, current_price) * 1.002
+        if take_profit < minimum_take:
+            take_profit = minimum_take
+    else:
+        stop_loss = entry_price + stop_distance
+        take_profit = entry_price - take_distance
+        maximum_take = min(entry_price, current_price) * 0.998
+        if take_profit > maximum_take:
+            take_profit = maximum_take
+    return stop_loss, take_profit, stop_pct
+
+
+def _candidate_levels_are_actionable(
+    side: TradeSide,
+    current_price: float,
+    entry_price: float,
+    stop_loss: float,
+    take_profit: float,
+) -> bool:
+    if side == TradeSide.long:
+        return stop_loss < min(entry_price, current_price) and take_profit > max(
+            entry_price,
+            current_price,
+        )
+    return take_profit < min(entry_price, current_price) and stop_loss > max(
+        entry_price,
+        current_price,
+    )
 
 
 def _recommended_leverage(score: float, profile_cap: float, max_leverage: int) -> float:
     exchange_cap = max_leverage if max_leverage > 0 else 10
     confidence_cap = 1.0 + (score / 100) * 2.0
     leverage = min(10.0, float(exchange_cap), profile_cap, confidence_cap)
-    return round(max(1.0, leverage), 2)
+    return float(max(1, round(leverage)))
 
 
 def _market_max_leverage(asset: str, market: MarketDataClient) -> int:

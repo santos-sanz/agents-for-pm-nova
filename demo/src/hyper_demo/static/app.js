@@ -4,6 +4,7 @@ const state = {
   analysis: null,
   plan: null,
   order: null,
+  orderBook: null,
   run: null,
   events: [],
   wallet: null,
@@ -17,6 +18,11 @@ const state = {
   candleRequestId: 0,
   marketCandles: {},
   candleStatus: {},
+  liveMarket: {
+    connected: false,
+    lastTickAt: null,
+    source: "idle",
+  },
   chartHover: null,
   chartMarks: [],
   chartViewport: null,
@@ -30,6 +36,13 @@ const state = {
     allowed: [],
     watchlist: [],
   },
+  ordersTab: "positions",
+  orderMode: "manual",
+  autoPrefs: {
+    risk_appetite: "balanced",
+    close_window: "1h",
+  },
+  positionProtection: {},
   manualOrder: {
     side: "long",
     entry_type: "market",
@@ -38,7 +51,15 @@ const state = {
     stop_loss: "",
     take_profit: "",
     leverage: 1,
+    reduce_only: false,
+    exits_enabled: false,
+    take_profit_enabled: false,
+    stop_loss_enabled: false,
+    exit_input_mode: "price",
   },
+  manualOrderDirty: false,
+  lastOrderError: "",
+  isSubmittingOrder: false,
   showSensitiveWalletData: false,
   masterFundingBalances: null,
 };
@@ -47,6 +68,7 @@ const DEFAULT_ASSETS = ["BTC", "ETH", "SOL", "HYPE"];
 const DEFAULT_NETWORK = "prodnet";
 const AGENT_NAME = "HyperClaude";
 const ARBITRUM_USDC_ADDRESS = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831";
+const MIN_ORDER_USDC = 10;
 const CHART_COLORS = {
   background: "#f5f0e8",
   text: "#181715",
@@ -65,6 +87,20 @@ const chartRuntime = {
   priceLines: [],
   resizeObserver: null,
 };
+const realtimeRuntime = {
+  reconnectTimer: null,
+  renderTimer: null,
+  socket: null,
+  url: "",
+};
+const INTERVAL_SECONDS = {
+  "15m": 15 * 60,
+  "1h": 60 * 60,
+  "4h": 4 * 60 * 60,
+  "1d": 24 * 60 * 60,
+};
+const imageLessAssetSymbols = new Set(["HYPE", "SPCX"]);
+const failedAssetIconUrls = new Set();
 
 function $(selector) {
   return document.querySelector(selector);
@@ -95,6 +131,10 @@ function displayPerpLabel(value) {
   return `${displayAssetSymbol(value)}-PERP`;
 }
 
+function marketDataKey(value) {
+  return displayAssetSymbol(value).toUpperCase();
+}
+
 function latestMarkPrice(asset = currentChartAsset()) {
   const candles = activeCandles();
   const latest = candles.at(-1);
@@ -106,7 +146,7 @@ function latestMarkPrice(asset = currentChartAsset()) {
 function assetMaxLeverage(asset = currentChartAsset()) {
   const meta = assetMeta(asset);
   const exchangeMax = Number(meta?.max_leverage || 10);
-  return Math.max(1, Math.min(10, exchangeMax || 10));
+  return Math.max(1, Math.floor(Math.min(10, exchangeMax || 10)));
 }
 
 function uniqueAssets(value) {
@@ -129,8 +169,87 @@ async function api(path, options = {}) {
   });
   const text = await response.text();
   const payload = text ? JSON.parse(text) : null;
-  if (!response.ok) throw new Error(payload?.detail || response.statusText);
+  if (!response.ok) throw new Error(apiErrorMessage(payload, response.statusText));
   return payload;
+}
+
+function apiErrorMessage(payload, fallback) {
+  const detail = payload?.detail;
+  if (typeof detail === "string") return friendlyOrderError(detail);
+  if (Array.isArray(detail)) {
+    const message = detail
+      .map((item) => item?.msg || item?.message || JSON.stringify(item))
+      .filter(Boolean)
+      .join("; ");
+    return friendlyOrderError(message);
+  }
+  if (detail && typeof detail === "object") return friendlyOrderError(detail.message || JSON.stringify(detail));
+  return fallback || "Request failed.";
+}
+
+function friendlyOrderError(message = "") {
+  const normalized = String(message).toLowerCase();
+  if (normalized.includes("minimum value of $10") || normalized.includes("minimum order value of 10")) {
+    return "Order too small. Hyperliquid requires a minimum order value of 10 USDC. Increase Size to at least 10 USDC and try again.";
+  }
+  if (normalized.includes("privy hyperliquid helper failed")) {
+    return "Hyperliquid rejected this order before execution. Check Size, Leverage, available margin, and TP/SL prices, then try again.";
+  }
+  return message || "Request failed.";
+}
+
+function orderErrorParts(message = "") {
+  const normalized = String(message).toLowerCase();
+  if (normalized.includes("order too small")) {
+    return {
+      title: "Order too small",
+      body: "Minimum order value is 10 USDC. Increase Size to 10 USDC or more.",
+      details: ["Use the Size field or a preset of at least 10 USDC before submitting again."],
+    };
+  }
+  if (normalized.includes("not enough available margin")) {
+    return {
+      title: "Not enough margin",
+      body: "Reduce Size or Leverage, or add more collateral before trying again.",
+      details: ["The wallet withdrawable balance must cover the required margin plus fees."],
+    };
+  }
+  if (normalized.includes("reduce-only")) {
+    return {
+      title: "No position to reduce",
+      body: "Turn off Reduce Only or open a matching position first.",
+      details: ["Reduce Only can only close or reduce an existing position on the same market."],
+    };
+  }
+  if (normalized.includes("invalid safe integer") || normalized.includes("whole number")) {
+    return {
+      title: "Invalid leverage",
+      body: "Leverage must be a whole number because Hyperliquid only accepts integer leverage.",
+      details: ["Use 1x, 2x, 3x, and so on. Decimal leverage such as 2.5x is not accepted."],
+    };
+  }
+  if (normalized.includes("hyperliquid rejected")) {
+    const exchangeReason = String(message).match(/Exchange reason:\s*(.*?)(?:\.\s*Check|$)/i)?.[1];
+    return {
+      title: "Exchange rejected the order",
+      body: exchangeReason
+        ? `Exchange reason: ${exchangeReason}.`
+        : "Hyperliquid did not accept this order before execution.",
+      details: [
+        "For Long: Take Profit must be above entry and Stop Loss below entry.",
+        "For Short: Take Profit must be below entry and Stop Loss above entry.",
+        "Check Size, Leverage, available margin, and whether Stop Loss is beyond liquidation.",
+      ],
+    };
+  }
+  return {
+    title: "Order blocked",
+    body: message || "Review the order inputs and try again.",
+    details: [
+      "Check Size, Leverage, available margin, and TP/SL prices.",
+      "If this keeps failing, reduce the order size and submit again.",
+    ],
+  };
 }
 
 function toast(message) {
@@ -140,12 +259,29 @@ function toast(message) {
   window.setTimeout(() => el.classList.remove("visible"), 2800);
 }
 
+function setOrderError(message = "") {
+  state.lastOrderError = message;
+  renderTicket();
+}
+
 async function loadState() {
   const payload = await api("/api/state");
   Object.assign(state, payload);
   state.marketCandles = state.marketCandles || {};
   syncManualOrderFromStoredPlan();
   syncAssetInputFromStoredTrade();
+  try {
+    state.wallet = await api("/api/wallet");
+  } catch (error) {
+    state.wallet = null;
+    console.warn("Wallet state unavailable", error);
+  }
+  try {
+    state.orderBook = await api("/api/orders");
+  } catch (error) {
+    state.orderBook = null;
+    console.warn("Orders unavailable", error);
+  }
   try {
     state.metrics = await api("/api/portfolio/metrics");
   } catch (error) {
@@ -159,7 +295,15 @@ async function loadState() {
     console.warn("Hyperliquid assets unavailable", error);
   }
   render();
+  startRealtimeMarketData();
   loadChartCandles().catch((error) => toast(error.message));
+}
+
+function orderAvailableUsdc() {
+  const maxOrder = Number(state.runtime?.max_order_usdc || 100);
+  const withdrawable = Number(state.wallet?.withdrawable_usdc);
+  if (Number.isFinite(withdrawable) && withdrawable >= 0) return Math.max(0, Math.min(maxOrder, withdrawable));
+  return maxOrder;
 }
 
 function render() {
@@ -213,10 +357,12 @@ function assetMeta(symbol) {
 function assetIcon(symbol, iconUrl = null) {
   const safeSymbol = escapeHtml(symbol);
   const safeDisplaySymbol = escapeHtml(displayAssetSymbol(symbol));
-  const safeUrl = escapeHtml(iconUrl || assetMeta(symbol)?.icon_url || "");
+  const rawUrl = iconUrl || assetMeta(symbol)?.icon_url || "";
+  const shouldRenderImage = rawUrl && !failedAssetIconUrls.has(rawUrl) && !imageLessAssetSymbols.has(marketDataKey(symbol));
+  const safeUrl = escapeHtml(shouldRenderImage ? rawUrl : "");
   return `
     <span class="asset-icon">
-      ${safeUrl ? `<img src="${safeUrl}" alt="" loading="lazy" />` : ""}
+      ${safeUrl ? `<img src="${safeUrl}" alt="" loading="lazy" data-asset-icon-url="${safeUrl}" />` : ""}
       <span>${safeDisplaySymbol.slice(0, 2)}</span>
     </span>
   `;
@@ -257,8 +403,21 @@ function renderMarketRail() {
     .join("");
   for (const image of target.querySelectorAll(".asset-icon img")) {
     image.addEventListener("error", () => {
+      if (image.dataset.assetIconUrl) failedAssetIconUrls.add(image.dataset.assetIconUrl);
       image.remove();
     });
+  }
+}
+
+function updateMarketRailPrices() {
+  const target = $("#market-rail");
+  if (!target) return;
+  for (const button of target.querySelectorAll("[data-quick-asset]")) {
+    const asset = button.dataset.quickAsset;
+    const meta = assetMeta(asset);
+    const price = meta?.mark_price ? compactPrice(meta.mark_price) : "live";
+    const priceEl = button.querySelector("small");
+    if (priceEl && priceEl.textContent !== price) priceEl.textContent = price;
   }
 }
 
@@ -332,6 +491,7 @@ function renderAssetOptions(kind) {
     : "<span class='empty-assets'>No matching Hyperliquid markets</span>";
   for (const image of target.querySelectorAll(".asset-icon img")) {
     image.addEventListener("error", () => {
+      if (image.dataset.assetIconUrl) failedAssetIconUrls.add(image.dataset.assetIconUrl);
       image.remove();
     });
   }
@@ -656,6 +816,7 @@ function renderTradingView() {
   renderBestBet();
   renderTimeframeCards();
   renderCandidateList();
+  renderOrdersPanel();
   renderTicket();
 }
 
@@ -697,7 +858,9 @@ function selectedCandidate() {
 
 function selectedTradeLevels() {
   const candidate = selectedCandidate();
-  if (candidate) return candidate;
+  if (candidate) return liveProposal(candidate);
+  const position = positionForAsset(currentChartAsset());
+  if (!position) return null;
   const plan = activePlan();
   if (!plan) return null;
   return {
@@ -720,6 +883,7 @@ function candidateMatchesPlan(candidate, plan) {
 
 function syncAssetInputFromStoredTrade() {
   const input = $("#asset-input");
+  if (state.manualOrderDirty) return;
   const storedAsset = state.plan?.source === "manual" ? state.plan.asset : state.analysis?.asset || state.plan?.asset;
   if (!input || !storedAsset) return;
   const current = currentInputAsset();
@@ -728,6 +892,7 @@ function syncAssetInputFromStoredTrade() {
 
 function syncManualOrderFromStoredPlan() {
   const plan = state.plan;
+  if (state.manualOrderDirty) return;
   if (plan?.source !== "manual") return;
   state.manualOrder = {
     side: plan.side || "long",
@@ -737,6 +902,11 @@ function syncManualOrderFromStoredPlan() {
     stop_loss: plan.stop_loss ? String(plan.stop_loss) : "",
     take_profit: plan.take_profit ? String(plan.take_profit) : "",
     leverage: plan.leverage ?? 1,
+    reduce_only: Boolean(state.manualOrder.reduce_only),
+    exits_enabled: Boolean(plan.stop_loss || plan.take_profit || state.manualOrder.exits_enabled),
+    take_profit_enabled: Boolean(plan.take_profit || state.manualOrder.take_profit_enabled),
+    stop_loss_enabled: Boolean(plan.stop_loss || state.manualOrder.stop_loss_enabled),
+    exit_input_mode: state.manualOrder.exit_input_mode || "price",
   };
 }
 
@@ -837,63 +1007,169 @@ async function loadChartCandles(asset = currentChartAsset(), interval = state.ac
   }
 }
 
+function realtimeUrl() {
+  return state.setup?.hyperliquid_ws_url || "";
+}
+
+function startRealtimeMarketData() {
+  const url = realtimeUrl();
+  if (!url || !window.WebSocket) return;
+  if (realtimeRuntime.socket && realtimeRuntime.url === url) return;
+  stopRealtimeMarketData();
+  realtimeRuntime.url = url;
+  try {
+    const socket = new WebSocket(url);
+    realtimeRuntime.socket = socket;
+    state.liveMarket = { ...state.liveMarket, connected: false, source: "connecting" };
+    socket.addEventListener("open", () => {
+      state.liveMarket = { ...state.liveMarket, connected: true, source: "websocket" };
+      socket.send(JSON.stringify({ method: "subscribe", subscription: { type: "allMids" } }));
+    });
+    socket.addEventListener("message", (event) => {
+      handleRealtimeMarketMessage(event.data);
+    });
+    socket.addEventListener("close", () => {
+      if (realtimeRuntime.socket !== socket) return;
+      state.liveMarket = { ...state.liveMarket, connected: false, source: "reconnecting" };
+      realtimeRuntime.socket = null;
+      realtimeRuntime.reconnectTimer = window.setTimeout(startRealtimeMarketData, 2500);
+      scheduleRealtimeRender();
+    });
+    socket.addEventListener("error", () => {
+      state.liveMarket = { ...state.liveMarket, connected: false, source: "error" };
+      socket.close();
+    });
+  } catch (error) {
+    console.warn("Realtime market connection unavailable", error);
+  }
+}
+
+function stopRealtimeMarketData() {
+  if (realtimeRuntime.reconnectTimer) window.clearTimeout(realtimeRuntime.reconnectTimer);
+  realtimeRuntime.reconnectTimer = null;
+  if (realtimeRuntime.socket) {
+    realtimeRuntime.socket.close();
+    realtimeRuntime.socket = null;
+  }
+}
+
+function handleRealtimeMarketMessage(rawMessage) {
+  let payload;
+  try {
+    payload = JSON.parse(rawMessage);
+  } catch {
+    return;
+  }
+  const mids = payload?.data?.mids || payload?.data || payload?.mids;
+  if (!mids || typeof mids !== "object") return;
+  const tickTime = Date.now();
+  let currentChanged = false;
+  for (const [asset, rawPrice] of Object.entries(mids)) {
+    const price = Number(rawPrice);
+    if (!Number.isFinite(price) || price <= 0) continue;
+    const normalized = normalizeAssetSymbol(asset);
+    updateMarketAssetPrice(normalized, price);
+    if (marketDataKey(currentChartAsset()) === marketDataKey(normalized)) {
+      applyRealtimeCandleTick(currentChartAsset(), state.activeTimeframe, price, tickTime);
+      currentChanged = true;
+    }
+  }
+  if (!currentChanged) return;
+  state.liveMarket = {
+    connected: true,
+    lastTickAt: new Date(tickTime).toISOString(),
+    source: "websocket",
+  };
+  scheduleRealtimeRender();
+}
+
+function updateMarketAssetPrice(asset, price) {
+  const key = marketDataKey(asset);
+  const existing = state.marketAssets.find((item) => marketDataKey(item.symbol) === key);
+  if (existing) {
+    existing.mark_price = price;
+    return;
+  }
+  state.marketAssets.push({
+    symbol: normalizeAssetSymbol(asset),
+    max_leverage: 0,
+    mark_price: price,
+    delisted: false,
+  });
+}
+
+function candleBucketStart(timestampMs, interval) {
+  const seconds = INTERVAL_SECONDS[interval] || INTERVAL_SECONDS["1h"];
+  return Math.floor(timestampMs / 1000 / seconds) * seconds;
+}
+
+function isoFromUnixSeconds(seconds) {
+  return new Date(seconds * 1000).toISOString();
+}
+
+function applyRealtimeCandleTick(asset, interval, price, timestampMs = Date.now()) {
+  const normalized = normalizeAssetSymbol(asset);
+  state.marketCandles[normalized] = state.marketCandles[normalized] || {};
+  const candles = state.marketCandles[normalized][interval] || [];
+  const bucket = candleBucketStart(timestampMs, interval);
+  const latest = candles.at(-1);
+  const latestTime = latest ? candleTimestamp(latest) : null;
+  let candle;
+  if (latest && latestTime === bucket) {
+    latest.high = Math.max(Number(latest.high || price), price);
+    latest.low = Math.min(Number(latest.low || price), price);
+    latest.close = price;
+    candle = latest;
+  } else {
+    candle = {
+      asset: normalized,
+      interval,
+      opened_at: isoFromUnixSeconds(bucket),
+      open: latest ? Number(latest.close) : price,
+      high: price,
+      low: price,
+      close: price,
+      volume: 0,
+      source: "websocket",
+    };
+    candles.push(candle);
+    if (candles.length > 500) candles.splice(0, candles.length - 500);
+    state.marketCandles[normalized][interval] = candles;
+  }
+  state.candleStatus[candleStatusKey(normalized, interval)] = "loaded";
+  updateLightweightCandle(candle);
+}
+
+function updateLightweightCandle(candle) {
+  if (!chartRuntime.candles) return;
+  const [data] = lightweightCandleData([candle]);
+  if (!data) return;
+  chartRuntime.candles.update(data);
+  chartRuntime.key = "";
+}
+
+function scheduleRealtimeRender() {
+  if (realtimeRuntime.renderTimer) return;
+  realtimeRuntime.renderTimer = window.setTimeout(() => {
+    realtimeRuntime.renderTimer = null;
+    updateMarketRailPrices();
+    renderMarketStats();
+    renderTicket();
+  }, 250);
+}
+
 function renderBestBet() {
-  const analysis = activeAnalysis();
-  const plan = activePlan();
-  if (plan?.source === "manual") {
-    const confidence = $("#confidence");
-    if (confidence) {
-      confidence.textContent = "Manual";
-      confidence.className = "pill neutral";
-    }
-    $("#best-bet").classList.remove("empty");
-    $("#best-bet").innerHTML = `
-      <div class="manual-mode-banner">
-        <span>Manual mode</span>
-        <b>${escapeHtml(plan.side.toUpperCase())} ${displayAssetSymbol(plan.asset)}</b>
-      </div>
-      <div class="best-metrics compact">
-        <div><span>Type</span><b>${escapeHtml(plan.entry_type)}</b></div>
-        <div><span>Leverage</span><b>${number(plan.leverage, 2)}x</b></div>
-        <div><span>Entry</span><b>${number(plan.entry_price, 6)}</b></div>
-        <div><span>Size</span><b>${money(plan.size_usdc)}</b></div>
-      </div>
-    `;
-    return;
-  }
-  const best = selectedCandidate() || analysis?.best_candidate;
-  const title = $("#best-title");
+  const target = $("#best-bet");
   const confidence = $("#confidence");
-  if (!best || !plan) {
-    if (title) title.textContent = "Awaiting analysis";
-    if (confidence) {
-      confidence.textContent = "0%";
-      confidence.className = "pill neutral";
-    }
-    $("#best-bet").classList.add("empty");
-    $("#best-bet").innerHTML = state.isAnalyzing
-      ? "<p>Building the best setup.</p>"
-      : "<p>No recommendation yet.</p>";
-    return;
-  }
-  if (title) title.textContent = `${best.side.toUpperCase()} ${displayAssetSymbol(analysis.asset)}`;
   if (confidence) {
-    confidence.textContent = `${Math.round((plan.confidence || best.confidence || 0) * 100)}%`;
-    confidence.className = `pill ${plan.confidence >= 0.7 ? "gain" : "neutral"}`;
+    confidence.textContent = state.orderMode === "auto" ? "Auto" : "Manual";
+    confidence.className = "pill neutral";
   }
-  $("#best-bet").classList.remove("empty");
-  $("#best-bet").innerHTML = `
-    <div class="side-toggle ${best.side}">
-      <span class="${best.side === "long" ? "active" : ""}">Long</span>
-      <span class="${best.side === "short" ? "active" : ""}">Short</span>
-    </div>
-    <div class="best-metrics compact">
-      <div><span>Type</span><b>${escapeHtml(best.entry_type)}</b></div>
-      <div><span>Leverage</span><b>${number(best.leverage, 2)}x</b></div>
-      <div><span>Entry</span><b>${number(best.entry_price, 6)}</b></div>
-      <div><span>Size</span><b>${money(best.size_usdc)}</b></div>
-    </div>
-  `;
+  if (target) {
+    target.hidden = true;
+    target.classList.add("empty");
+    target.innerHTML = "";
+  }
 }
 
 function renderMarketStats() {
@@ -905,8 +1181,10 @@ function renderMarketStats() {
   const candles = activeCandles();
   const latest = candles.at(-1);
   const side = plan?.side || analysis?.best_candidate?.side || "none";
+  const liveLabel = state.liveMarket.connected ? "live" : state.liveMarket.source || "idle";
   target.innerHTML = [
     ["Mark", latest ? compactPrice(latest.close) : "--", "neutral"],
+    ["Live", liveLabel, state.liveMarket.connected ? "gain" : "warning"],
     [
       "Signal",
       state.isAnalyzing
@@ -963,7 +1241,7 @@ function renderCandidateList() {
               <span>${escapeHtml(candidate.entry_type)}</span>
               <span>${escapeHtml(candidate.timeframe)}</span>
               <span>${number(candidate.entry_price, 6)}</span>
-              <span>${number(candidate.leverage, 2)}x</span>
+              <span>${number(candidate.leverage, 0)}x</span>
               <span>${number(candidate.score, 1)}</span>
             </button>
           `,
@@ -972,20 +1250,645 @@ function renderCandidateList() {
     : `<div class='empty-assets'>${state.isAnalyzing ? "Ranking candidates." : "Run analysis to compare candidates."}</div>`;
 }
 
+function configureTicketButtons(mode, { previewOnly = false, preflightBlocked = false } = {}) {
+  const buttons = [...document.querySelectorAll(".ticket-panel .button-row button")];
+  const [left, main, right] = buttons;
+  if (!left || !main || !right) return;
+  if (mode === "auto") {
+    const hasProposal = Boolean(selectedCandidate());
+    const selectedIssue = proposalIssue(selectedCandidate());
+    left.dataset.action = "auto-analyze";
+    left.textContent = state.isAnalyzing ? "Analyzing..." : "Analyze";
+    left.disabled = state.isAnalyzing;
+    main.dataset.action = "approve-auto-proposal";
+    main.textContent = state.isSubmittingOrder ? "Submitting..." : "Approve & place order";
+    main.disabled = state.isAnalyzing || state.isSubmittingOrder || !hasProposal || Boolean(selectedIssue);
+    right.dataset.action = "reject-auto-proposal";
+    right.textContent = "Reject";
+    right.disabled = state.isAnalyzing && !hasProposal;
+    return;
+  }
+  left.dataset.action = "create-manual-plan";
+  left.textContent = "Preview";
+  left.disabled = previewOnly || state.isSubmittingOrder;
+  main.dataset.action = "submit-manual-order";
+  main.textContent = state.isSubmittingOrder ? "Submitting..." : "Place order";
+  main.disabled = previewOnly || state.isSubmittingOrder || preflightBlocked;
+  right.dataset.action = "reject";
+  right.textContent = "Clear";
+  right.disabled = !activePlan();
+}
+
+function orderModeSwitchMarkup() {
+  return `
+    <div class="mode-switch" aria-label="Order mode">
+      <button type="button" class="${state.orderMode === "manual" ? "active" : ""}" data-order-mode="manual">Manual</button>
+      <button type="button" class="${state.orderMode === "auto" ? "active" : ""}" data-order-mode="auto">Auto</button>
+    </div>
+  `;
+}
+
+function proposalIssue(candidate) {
+  if (!candidate) return "Run analysis to create proposals.";
+  if (Number(candidate.size_usdc || 0) < MIN_ORDER_USDC) return "Size is below the 10 USDC minimum.";
+  if (Number(candidate.size_usdc || 0) > Number(state.runtime?.max_order_usdc || 100)) {
+    return "Size is above the runtime max order.";
+  }
+  const leverage = Number(candidate.leverage || 0);
+  if (!Number.isInteger(leverage)) return "Leverage must be a whole number.";
+  if (leverage < 1 || leverage > assetMaxLeverage(candidate.asset || currentChartAsset())) {
+    return "Leverage is outside the market limit.";
+  }
+  const live = liveProposal(candidate, candidate.asset || currentChartAsset());
+  const entry = Number(live.entry_price || 0);
+  const mark = latestMarkPrice(candidate.asset || currentChartAsset());
+  const hasTakeProfit = live.take_profit !== null && live.take_profit !== undefined;
+  const hasStopLoss = live.stop_loss !== null && live.stop_loss !== undefined;
+  const takeProfit = Number(live.take_profit || 0);
+  const stopLoss = Number(live.stop_loss || 0);
+  if (candidate.side === "long") {
+    if (hasTakeProfit && (takeProfit <= entry || (mark && takeProfit <= mark))) {
+      return "Take Profit is not above entry and mark.";
+    }
+    if (hasStopLoss && (stopLoss >= entry || (mark && stopLoss >= mark))) {
+      return "Stop Loss is not below entry and mark.";
+    }
+  }
+  if (candidate.side === "short") {
+    if (hasTakeProfit && (takeProfit >= entry || (mark && takeProfit >= mark))) {
+      return "Take Profit is not below entry and mark.";
+    }
+    if (hasStopLoss && (stopLoss <= entry || (mark && stopLoss <= mark))) {
+      return "Stop Loss is not above entry and mark.";
+    }
+  }
+  return "";
+}
+
+function proposalEntryPrice(candidate, asset = currentChartAsset()) {
+  if (!candidate) return 0;
+  if (candidate.entry_type === "market") {
+    return latestMarkPrice(asset) || Number(candidate.entry_price || 0);
+  }
+  return Number(candidate.entry_price || 0);
+}
+
+function proposalExitPrices(candidate, entryPrice = proposalEntryPrice(candidate)) {
+  const takeProfit =
+    candidate?.take_profit === null || candidate?.take_profit === undefined
+      ? null
+      : Number(candidate.take_profit);
+  const stopLoss =
+    candidate?.stop_loss === null || candidate?.stop_loss === undefined ? null : Number(candidate.stop_loss);
+  if (!candidate || !entryPrice) return { take_profit: takeProfit, stop_loss: stopLoss };
+  const originalEntry = Number(candidate.entry_price || 0);
+  if (candidate.entry_type !== "market" || !originalEntry) {
+    return { take_profit: takeProfit, stop_loss: stopLoss };
+  }
+  const stopDistance = stopLoss === null ? null : Math.abs(originalEntry - stopLoss) / originalEntry;
+  const takeDistance = takeProfit === null ? null : Math.abs(takeProfit - originalEntry) / originalEntry;
+  const isShort = candidate.side === "short";
+  return {
+    stop_loss: stopDistance === null ? null : entryPrice * (isShort ? 1 + stopDistance : 1 - stopDistance),
+    take_profit: takeDistance === null ? null : entryPrice * (isShort ? 1 - takeDistance : 1 + takeDistance),
+  };
+}
+
+function liveProposal(candidate, asset = currentChartAsset()) {
+  if (!candidate) return null;
+  const entryPrice = proposalEntryPrice(candidate, asset);
+  const exits = proposalExitPrices(candidate, entryPrice);
+  return {
+    ...candidate,
+    entry_price: entryPrice,
+    take_profit: exits.take_profit,
+    stop_loss: exits.stop_loss,
+  };
+}
+
+function renderAutoOrderSection(ticketAsset) {
+  const analysis = activeAnalysis();
+  const candidates = activeCandidates().slice(0, 5);
+  const selected = selectedCandidate();
+  const selectedIssue = proposalIssue(selected);
+  const riskOptions = ["conservative", "balanced", "aggressive"];
+  const closeOptions = ["15m", "1h", "4h", "1d"];
+  return `
+    <section class="manual-order-section auto-order-section">
+      ${orderModeSwitchMarkup()}
+      <div class="auto-prefs" aria-label="Auto preferences">
+        <div class="auto-pref-group risk-pref">
+          <div class="auto-pref-label">
+            <span>Risk appetite</span>
+            <small>${escapeHtml(state.autoPrefs.risk_appetite)}</small>
+          </div>
+          <div class="trade-segment" aria-label="Risk appetite">
+            ${riskOptions
+              .map(
+                (item) => `
+                  <button type="button" class="${state.autoPrefs.risk_appetite === item ? "active" : ""}" data-auto-pref="risk_appetite" data-value="${item}">
+                    ${escapeHtml(item)}
+                  </button>
+                `,
+              )
+              .join("")}
+          </div>
+        </div>
+        <div class="auto-pref-group close-pref">
+          <div class="auto-pref-label">
+            <span>Close window</span>
+            <small>${escapeHtml(state.autoPrefs.close_window)}</small>
+          </div>
+          <div class="trade-segment" aria-label="Close window">
+            ${closeOptions
+              .map(
+                (item) => `
+                  <button type="button" class="${state.autoPrefs.close_window === item ? "active" : ""}" data-auto-pref="close_window" data-value="${item}">
+                    ${escapeHtml(item)}
+                  </button>
+                `,
+              )
+              .join("")}
+          </div>
+        </div>
+      </div>
+      <div class="auto-status">
+        <span>${state.isAnalyzing ? "Analyzing" : analysis ? "Proposals ready" : "Auto mode ready"}</span>
+        <b>${escapeHtml(displayPerpLabel(ticketAsset))}</b>
+      </div>
+      <div class="auto-proposals">
+        ${
+          candidates.length
+            ? candidates
+                .map((candidate, index) => {
+                  const live = liveProposal(candidate, ticketAsset);
+                  const issue = proposalIssue(candidate);
+                  const entryLabel = candidate.entry_type === "market" ? "Live mark" : "Entry";
+                  return `
+                    <button type="button" class="auto-proposal ${candidate.side} ${index === state.selectedCandidateIndex ? "active" : ""}" data-candidate-index="${index}">
+                      <span>${escapeHtml(candidate.timeframe)} · ${escapeHtml(candidate.entry_type)}</span>
+                      <b>${escapeHtml(candidate.side.toUpperCase())} ${number(candidate.leverage, 0)}x</b>
+                      <em>${entryLabel} ${compactPrice(live.entry_price)}</em>
+                      <em>TP ${compactPrice(live.take_profit)} · SL ${compactPrice(live.stop_loss)}</em>
+                      <small>${issue || `Score ${number(candidate.score, 1)} · ${escapeHtml(candidate.rationale)}`}</small>
+                    </button>
+                  `;
+                })
+                .join("")
+            : `<div class="empty-assets">${state.isAnalyzing ? "Building proposals." : "Switch to Auto or press Analyze to get proposals."}</div>`
+        }
+      </div>
+      ${
+        selectedIssue
+          ? `<div class="order-error" role="alert"><span>Proposal needs review</span><b>${escapeHtml(selectedIssue)}</b></div>`
+          : ""
+      }
+    </section>
+  `;
+}
+
+function positionRows() {
+  const positions = globalExecutionSnapshot().positions;
+  return positions
+    .map((item) => item?.position || item)
+    .filter((position) => Number(position?.szi || position?.size || 0) !== 0);
+}
+
+function globalExecutionSnapshot() {
+  return {
+    positions: state.orderBook?.positions || state.wallet?.open_positions || [],
+    orders: state.orderBook?.orders || (state.order ? [state.order] : []),
+  };
+}
+
+function positionForAsset(asset) {
+  return (
+    positionRows().find(
+      (position) => normalizeAssetSymbol(position.coin || position.asset) === normalizeAssetSymbol(asset),
+    ) || null
+  );
+}
+
+function orderForPosition(asset) {
+  const orders = state.orderBook?.orders || [];
+  return orders
+    .slice()
+    .reverse()
+    .find((order) => normalizeAssetSymbol(order.asset) === normalizeAssetSymbol(asset));
+}
+
+function orderFill(order, key) {
+  const payload = order?.raw_response?.[key];
+  const status = payload?.response?.data?.statuses?.[0] || payload?.data?.statuses?.[0];
+  return status?.filled || null;
+}
+
+function orderFillPrice(order, key) {
+  return Number(orderFill(order, key)?.avgPx || 0);
+}
+
+function orderFillSize(order, key) {
+  return Number(orderFill(order, key)?.totalSz || 0);
+}
+
+function tradePnlRows(orders, positions) {
+  const entries = orders.filter((order) => order.plan_id !== "manual_position_close");
+  const closes = orders.filter((order) => order.plan_id === "manual_position_close");
+  const closedRows = closes.map((closeOrder) => {
+    const entryOrder = entries
+      .slice()
+      .reverse()
+      .find((order) => normalizeAssetSymbol(order.asset) === normalizeAssetSymbol(closeOrder.asset));
+    const entryPrice = orderFillPrice(entryOrder, "entry") || Number(entryOrder?.plan?.entry_price || 0);
+    const closePrice = orderFillPrice(closeOrder, "close");
+    const size = orderFillSize(closeOrder, "close") || orderFillSize(entryOrder, "entry");
+    const side = entryOrder?.side || (closeOrder.side === "short" ? "long" : "short");
+    const direction = side === "short" ? -1 : 1;
+    const pnl = entryPrice && closePrice && size ? (closePrice - entryPrice) * size * direction : null;
+    return {
+      asset: closeOrder.asset,
+      status: "closed",
+      side,
+      entryPrice,
+      exitPrice: closePrice,
+      size,
+      pnl,
+      openedAt: entryOrder?.created_at,
+      closedAt: closeOrder.created_at,
+    };
+  });
+  const openRows = positions.map((position) => {
+    const asset = normalizeAssetSymbol(position.coin || position.asset);
+    const signedSize = Number(position.szi || position.size || 0);
+    return {
+      asset,
+      status: "open",
+      side: signedSize < 0 ? "short" : "long",
+      entryPrice: Number(position.entryPx || position.entry_price || 0),
+      exitPrice: positionMarkPrice(position),
+      size: Math.abs(signedSize),
+      pnl: Number(position.unrealizedPnl || position.unrealized_pnl_usdc || 0),
+      openedAt: orderForPosition(asset)?.created_at,
+      closedAt: null,
+    };
+  });
+  return [...openRows, ...closedRows];
+}
+
+function positionMarkPrice(position) {
+  const size = Math.abs(Number(position.szi || position.size || 0));
+  const value = Number(position.positionValue || position.position_value_usdc || 0);
+  if (size > 0 && value > 0) return value / size;
+  return latestMarkPrice(position.coin || position.asset);
+}
+
+function percentAway(current, target) {
+  const from = Number(current);
+  const to = Number(target);
+  if (!Number.isFinite(from) || !Number.isFinite(to) || from <= 0 || to <= 0) return null;
+  return Math.abs((to - from) / from) * 100;
+}
+
+function progressTowardLevel(entry, current, target) {
+  const start = Number(entry);
+  const mark = Number(current);
+  const goal = Number(target);
+  if (![start, mark, goal].every((value) => Number.isFinite(value) && value > 0)) return 0;
+  const total = Math.abs(goal - start);
+  if (!total) return 100;
+  const progress = ((mark - start) / (goal - start)) * 100;
+  return Math.max(0, Math.min(100, progress));
+}
+
+function positionLevelRow(label, price, entry, current, className = "") {
+  const hasPrice = Number(price) > 0;
+  const away = hasPrice ? percentAway(current, price) : null;
+  const progress = hasPrice ? progressTowardLevel(entry, current, price) : 0;
+  return `
+    <div class="position-level ${className || "neutral"} ${hasPrice ? "" : "muted-level"}">
+      <div>
+        <span>${label}</span>
+        <b>${hasPrice ? compactPrice(price) : "Not set"}</b>
+        <em>${away === null ? "--" : `${number(away, 1)}% away`}</em>
+      </div>
+      <div class="level-track" aria-hidden="true">
+        <i style="width: ${number(progress, 1)}%"></i>
+      </div>
+    </div>
+  `;
+}
+
+function protectionDraft(asset) {
+  const key = normalizeAssetSymbol(asset);
+  if (!state.positionProtection[key]) {
+    state.positionProtection[key] = { take_profit: "", stop_loss: "", touched: false };
+  }
+  return state.positionProtection[key];
+}
+
+function protectionPriceFromEntry(kind, isLong, entry, percent) {
+  const reference = Number(entry);
+  const pct = Number(percent);
+  if (!Number.isFinite(reference) || reference <= 0 || !Number.isFinite(pct) || pct <= 0) return "";
+  const direction = kind === "take_profit" ? 1 : -1;
+  const sideMultiplier = isLong ? 1 : -1;
+  return inputPriceValue(reference * (1 + (direction * sideMultiplier * pct) / 100));
+}
+
+function inputPriceValue(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return "";
+  return parsed.toFixed(6).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+function defaultProtectionDraft(isLong, entry) {
+  return {
+    take_profit: protectionPriceFromEntry("take_profit", isLong, entry, 1),
+    stop_loss: protectionPriceFromEntry("stop_loss", isLong, entry, 20),
+  };
+}
+
+function syncProtectionDraftFromDom() {
+  document.querySelectorAll("[data-protection-field]").forEach((field) => {
+    const asset = normalizeAssetSymbol(field.dataset.protectionAsset);
+    const draft = protectionDraft(asset);
+    draft[field.dataset.protectionField] = field.value;
+  });
+}
+
+function isProtectionEditorActive() {
+  return Boolean(document.activeElement?.closest?.(".protection-editor"));
+}
+
+function applyProtectionPreset(asset, isLong, entry) {
+  const draft = protectionDraft(asset);
+  const defaults = defaultProtectionDraft(isLong, entry);
+  draft.take_profit = defaults.take_profit;
+  draft.stop_loss = defaults.stop_loss;
+  draft.touched = true;
+  document
+    .querySelectorAll(`[data-protection-asset="${CSS.escape(normalizeAssetSymbol(asset))}"]`)
+    .forEach((field) => {
+      if (!field.dataset.protectionField) return;
+      field.value = draft[field.dataset.protectionField] || "";
+    });
+}
+
+function protectionEditor(asset, isLong, entry, mark, takeProfit, stopLoss) {
+  const draft = protectionDraft(asset);
+  const needsProtection = !takeProfit || !stopLoss;
+  if (!needsProtection) return "";
+  if (!draft.touched || (!draft.take_profit && !draft.stop_loss)) {
+    const defaults = defaultProtectionDraft(isLong, entry);
+    draft.take_profit = takeProfit ? "" : defaults.take_profit;
+    draft.stop_loss = stopLoss ? "" : defaults.stop_loss;
+  }
+  return `
+    <div class="protection-editor">
+      <div class="protection-editor-title">
+        <b>Set TP/SL</b>
+        <span>From entry: TP +1%, SL -20%</span>
+      </div>
+      <label>
+        <span>Take Profit</span>
+        <input
+          type="number"
+          min="0"
+          step="0.000001"
+          data-protection-asset="${escapeHtml(asset)}"
+          data-protection-field="take_profit"
+          value="${escapeHtml(draft.take_profit || "")}"
+          placeholder="${escapeHtml(protectionPriceFromEntry("take_profit", isLong, entry, 1))}"
+        />
+      </label>
+      <label>
+        <span>Stop Loss</span>
+        <input
+          type="number"
+          min="0"
+          step="0.000001"
+          data-protection-asset="${escapeHtml(asset)}"
+          data-protection-field="stop_loss"
+          value="${escapeHtml(draft.stop_loss || "")}"
+          placeholder="${escapeHtml(protectionPriceFromEntry("stop_loss", isLong, entry, 20))}"
+        />
+      </label>
+      <button
+        type="button"
+        class="protection-preset"
+        data-protection-preset="entry-risk"
+        data-protection-asset="${escapeHtml(asset)}"
+        data-protection-side="${isLong ? "long" : "short"}"
+        data-protection-entry="${escapeHtml(String(entry || ""))}"
+      >
+        Use 1% / 20%
+      </button>
+      <button type="button" data-action="set-protection" data-asset="${escapeHtml(asset)}">
+        Fix TP/SL
+      </button>
+    </div>
+  `;
+}
+
+function positionCard(position) {
+  const asset = normalizeAssetSymbol(position.coin || position.asset);
+  const order = orderForPosition(asset);
+  const plan = order?.plan || {};
+  const size = Number(position.szi || position.size || 0);
+  const isLong = size >= 0;
+  const side = isLong ? "Long" : "Short";
+  const leverage = position.leverage?.value || position.leverage || plan.leverage || "--";
+  const entry = Number(position.entryPx || position.entry_price || plan.entry_price || 0);
+  const mark = positionMarkPrice(position);
+  const liquidation = Number(position.liquidationPx || position.liquidation_price || 0);
+  const pnl = Number(position.unrealizedPnl || position.unrealized_pnl_usdc || 0);
+  const funding = Number(position.cumFunding?.sinceOpen || 0);
+  const takeProfit = Number(plan.take_profit || 0);
+  const stopLoss = Number(plan.stop_loss || 0);
+  return `
+    <article class="active-trade-card">
+      <div class="active-trade-main">
+        <div class="asset-badge">${escapeHtml(displayAssetSymbol(asset).slice(0, 2))}</div>
+        <div>
+          <h3>${escapeHtml(displayAssetSymbol(asset))} <span>${compactPrice(mark)}</span></h3>
+          <p class="${isLong ? "gain" : "loss"}">${escapeHtml(String(leverage))}x ${side.toLowerCase()}</p>
+        </div>
+        <div class="trade-pnl">
+          <span class="${pnl >= 0 ? "gain" : "loss"}">${money(pnl)}</span>
+          <b>${money(position.positionValue || position.position_value_usdc || order?.size_usdc || 0)}</b>
+        </div>
+      </div>
+      <div class="trade-summary">
+        <div><span>Current PnL</span><b class="${pnl >= 0 ? "gain" : "loss"}">${money(pnl)}</b></div>
+        <div><span>Funding</span><b>${money(funding)}</b></div>
+        <div><span>Entry</span><b>${compactPrice(entry)}</b></div>
+      </div>
+      <div class="position-levels">
+        ${positionLevelRow("Take Profit", takeProfit, entry, mark, "profit")}
+        ${positionLevelRow("Stop Loss", stopLoss, entry, mark, "stop")}
+        ${positionLevelRow("Liquidation", liquidation, entry, mark, "liquidation")}
+      </div>
+      ${protectionEditor(asset, isLong, entry, mark, takeProfit, stopLoss)}
+      <div class="active-trade-actions">
+        <button type="button" class="danger" data-action="close-position" data-asset="${escapeHtml(asset)}">
+          Close position
+        </button>
+      </div>
+    </article>
+  `;
+}
+
+function exitPercentPreview(kind, manual, entryPrice) {
+  const price = exitPriceFromManualPercent(kind, manual, entryPrice);
+  return price ? compactPrice(price) : "--";
+}
+
+function exitFieldMarkup(kind, label, manual, exitMode, entryPrice, placeholder, exitStep, exitUnit) {
+  const value = manual[kind] || "";
+  if (exitMode !== "percent") {
+    return `
+      <label>${label}
+        <span>
+          <input type="number" min="0" step="${exitStep}" data-manual-field="${kind}" value="${escapeHtml(value)}" placeholder="${placeholder}" />
+          <em>${escapeHtml(exitUnit)}</em>
+        </span>
+      </label>
+    `;
+  }
+  const percent = Math.max(0, Math.min(50, Number(value || (kind === "take_profit" ? 3 : 2))));
+  const angle = (percent / 50) * 270;
+  return `
+    <div class="zoom-dial ${kind === "take_profit" ? "profit" : "stop"}">
+      <div class="zoom-dial-head">
+        <span>${label}</span>
+        <b>${number(percent, 1)}%</b>
+      </div>
+      <div class="zoom-wheel" style="--zoom-angle: ${number(angle, 2)}deg">
+        <button type="button" aria-label="Decrease ${label}" data-exit-step="${kind}" data-delta="-0.5">-</button>
+        <output>${exitPercentPreview(kind, { ...manual, [kind]: percent }, entryPrice)}</output>
+        <button type="button" aria-label="Increase ${label}" data-exit-step="${kind}" data-delta="0.5">+</button>
+      </div>
+      <input
+        type="range"
+        min="0.5"
+        max="50"
+        step="0.5"
+        data-manual-field="${kind}"
+        value="${escapeHtml(percent)}"
+        aria-label="${label} percent"
+      />
+    </div>
+  `;
+}
+
+function renderOrdersPanel() {
+  const target = $("#orders-panel");
+  if (!target) return;
+  syncProtectionDraftFromDom();
+  const snapshot = globalExecutionSnapshot();
+  const positions = positionRows();
+  const orders = snapshot.orders;
+  const scope = $("#orders-scope");
+  if (scope) scope.textContent = "All markets";
+  const tabs = [
+    ["positions", "Open positions", positions.length],
+    ["pnl", "Trade P&L", tradePnlRows(orders, positions).length],
+    ["history", "Order history", orders.length],
+  ];
+  if (!tabs.some(([key]) => key === state.ordersTab)) state.ordersTab = "positions";
+  const positionMarkup = positions.length
+    ? positions
+        .map((position) => positionCard(position))
+        .join("")
+    : "<div class='orders-empty'>No open positions.</div>";
+  const pnlRows = tradePnlRows(orders, positions);
+  const pnlMarkup = pnlRows.length
+    ? pnlRows
+        .map(
+          (row) => `
+            <div class="order-row pnl-row">
+              <div><span>Asset</span><b>${escapeHtml(displayPerpLabel(row.asset))}</b></div>
+              <div><span>Status</span><b>${escapeHtml(row.status)}</b></div>
+              <div><span>Side</span><b class="${row.side === "long" ? "gain" : "loss"}">${escapeHtml(row.side)}</b></div>
+              <div><span>Entry</span><b>${row.entryPrice ? compactPrice(row.entryPrice) : "--"}</b></div>
+              <div><span>${row.status === "open" ? "Mark" : "Exit"}</span><b>${row.exitPrice ? compactPrice(row.exitPrice) : "--"}</b></div>
+              <div><span>Size</span><b>${row.size ? number(row.size, 6) : "--"}</b></div>
+              <div><span>P&L</span><b class="${Number(row.pnl || 0) >= 0 ? "gain" : "loss"}">${row.pnl === null ? "--" : money(row.pnl)}</b></div>
+              <div><span>${row.status === "open" ? "Opened" : "Closed"}</span><b>${row.closedAt || row.openedAt ? new Date(row.closedAt || row.openedAt).toLocaleTimeString() : "--"}</b></div>
+            </div>
+          `,
+        )
+        .join("")
+    : "<div class='orders-empty'>No P&L yet.</div>";
+  const orderMarkup = orders.length
+    ? orders
+        .slice()
+        .reverse()
+        .map(
+          (order) => `
+            <div class="order-row history-row">
+              <div><span>Order</span><b>${escapeHtml(order.entry_order_id || order.id || "--")}</b></div>
+              <div><span>Asset</span><b>${escapeHtml(displayPerpLabel(order.asset))}</b></div>
+              <div><span>Side</span><b class="${order.side === "long" ? "gain" : "loss"}">${escapeHtml(order.side || "--")}</b></div>
+              <div><span>Value</span><b>${money(order.size_usdc || 0)}</b></div>
+              <div><span>Status</span><b>${escapeHtml(order.status || "--")}</b></div>
+              <div><span>Exchange</span><b>${escapeHtml(order.exchange || "--")}</b></div>
+              <div><span>Created</span><b>${order.created_at ? new Date(order.created_at).toLocaleTimeString() : "--"}</b></div>
+              <p>${escapeHtml(order.message || "")}</p>
+            </div>
+          `,
+        )
+        .join("")
+    : "<div class='orders-empty'>No submitted orders yet.</div>";
+  const activeMarkup =
+    state.ordersTab === "positions"
+      ? positionMarkup
+      : state.ordersTab === "pnl"
+      ? pnlMarkup
+      : orderMarkup;
+  target.innerHTML = `
+    <section class="orders-section">
+      <div class="orders-tabs" role="tablist" aria-label="Orders and positions">
+        ${tabs
+          .map(
+            ([key, label, count]) => `
+              <button
+                type="button"
+                role="tab"
+                aria-selected="${state.ordersTab === key}"
+                class="${state.ordersTab === key ? "active" : ""}"
+                data-orders-tab="${key}"
+              >
+                <span>${escapeHtml(label)}</span>
+                <b>${count}</b>
+              </button>
+            `,
+          )
+          .join("")}
+      </div>
+      <div class="orders-tab-panel">
+        ${activeMarkup}
+      </div>
+    </section>
+  `;
+}
+
 function renderTicket() {
   const plan = activePlan();
   const isManualPlan = plan?.source === "manual";
   const candidate = selectedCandidate();
   const previewOnly = Boolean(candidate && plan && !candidateMatchesPlan(candidate, plan));
   const ticketAsset = currentChartAsset();
+  document.querySelector(".ticket-panel")?.classList.toggle("auto-mode", state.orderMode === "auto");
   const manual = state.manualOrder;
   const maxLeverage = assetMaxLeverage(ticketAsset);
-  if (Number(manual.leverage) > maxLeverage) manual.leverage = maxLeverage;
+  manual.leverage = boundedLeverage(manual.leverage, maxLeverage);
   const decision = previewOnly ? "preview_only" : plan?.execution_decision || "manual_draft";
   const decisionPill = $("#decision-pill");
   if (decisionPill) {
-    decisionPill.textContent =
-      isManualPlan && decision === "proposed"
+    decisionPill.textContent = state.orderMode === "auto"
+      ? "auto mode"
+      : isManualPlan && decision === "proposed"
         ? "manual mode"
         : !plan
         ? "manual mode"
@@ -993,64 +1896,168 @@ function renderTicket() {
     decisionPill.className = `pill ${decisionClass(decision)}`;
   }
   $("#ticket-title").textContent = `Trade ${displayPerpLabel(ticketAsset)}`;
-  const submitButton = $('[data-action="submit-manual-order"]');
-  const rejectButton = $('[data-action="reject"]');
-  if (submitButton) submitButton.disabled = previewOnly;
-  if (rejectButton) rejectButton.disabled = !plan;
+  if (state.orderMode === "auto") {
+    configureTicketButtons("auto");
+    $("#ticket").innerHTML = renderAutoOrderSection(ticketAsset);
+    return;
+  }
   const source = candidate || plan;
+  const livePosition = positionForAsset(ticketAsset);
+  const livePositionSize = Number(livePosition?.szi || livePosition?.size || 0);
+  const livePositionLabel = livePosition
+    ? `${livePositionSize >= 0 ? "long" : "short"} ${money(
+        livePosition.positionValue || livePosition.position_value_usdc || 0,
+      )}`
+    : "None";
   const mark = latestMarkPrice(ticketAsset);
-  const limitHidden = manual.entry_type !== "limit" ? " hidden" : "";
+  const maxOrder = Number(state.runtime?.max_order_usdc || 100);
+  const available = orderAvailableUsdc();
+  const leverage = boundedLeverage(manual.leverage, maxLeverage);
+  manual.leverage = leverage;
+  if (available > 0 && Number(manual.size_usdc) > available * leverage) {
+    manual.size_usdc = Math.max(1, Math.floor(available * leverage * 100) / 100);
+  }
+  const maxNotional = available > 0 ? available * leverage : maxOrder;
+  if (maxNotional >= MIN_ORDER_USDC && Number(manual.size_usdc) < MIN_ORDER_USDC) {
+    manual.size_usdc = MIN_ORDER_USDC;
+  }
+  const size = Number(manual.size_usdc) || 0;
+  const orderValue = size;
+  const marginRequired = leverage > 0 ? orderValue / leverage : orderValue;
+  const effectiveEntryPrice = manual.entry_type === "limit" ? optionalNumber(manual.entry_price) || mark : mark;
+  const liquidationPrice = estimatedLiquidationPrice(manual.side, effectiveEntryPrice, leverage);
+  const sizeBase = available > 0 ? available * Math.max(1, leverage) : maxOrder;
+  const minSize = sizeBase >= MIN_ORDER_USDC ? MIN_ORDER_USDC : 1;
+  const sizePercent = sizeBase > 0 ? Math.min(100, Math.round((size / sizeBase) * 100)) : 0;
+  const percentStops = [25, 50, 75, 100];
+  const limitHiddenClass = manual.entry_type !== "limit" ? " hidden" : "";
+  const exitMode = manual.exit_input_mode || "price";
+  const takeProfitEnabled = Boolean(manual.take_profit_enabled || (manual.exits_enabled && manual.take_profit));
+  const stopLossEnabled = Boolean(manual.stop_loss_enabled || (manual.exits_enabled && manual.stop_loss));
+  const anyExitEnabled = takeProfitEnabled || stopLossEnabled;
+  const exitStep = exitMode === "percent" ? "0.1" : "0.000001";
+  const exitUnit = exitMode === "percent" ? "%" : displayAssetSymbol(ticketAsset);
+  const takeProfitPlaceholder =
+    exitMode === "percent" ? "3.0" : mark ? number(manual.side === "short" ? mark * 0.97 : mark * 1.03, 6) : "0.00";
+  const stopLossPlaceholder =
+    exitMode === "percent" ? "2.0" : mark ? number(manual.side === "short" ? mark * 1.02 : mark * 0.98, 6) : "0.00";
+  const preflightView = manualOrderPreflight({
+    asset: ticketAsset,
+    mark,
+    maxLeverage,
+    leverage,
+    entryPrice: effectiveEntryPrice,
+    liquidationPrice,
+    available,
+    marginRequired,
+    livePosition,
+  });
+  const blockedPlanError =
+    plan?.execution_decision === "blocked" ? plan.execution_message || "Execution blocked." : "";
+  const orderErrorView = state.lastOrderError
+    ? orderErrorParts(state.lastOrderError)
+    : preflightView || (blockedPlanError ? orderErrorParts(blockedPlanError) : null);
+  configureTicketButtons("manual", {
+    previewOnly,
+    preflightBlocked: Boolean(preflightView?.blocking),
+  });
   $("#ticket").innerHTML = `
     <section class="manual-order-section order-ticket-core">
+      ${orderModeSwitchMarkup()}
       <div class="order-ticket-meta">
-        <div><span>Market</span><b>${displayPerpLabel(ticketAsset)}</b></div>
-        <div><span>Mark</span><b>${mark ? compactPrice(mark) : "--"}</b></div>
-      </div>
-      <div class="trade-segment side-picker" aria-label="Side">
-        <button type="button" class="${manual.side === "long" ? "active" : ""}" data-manual-pick="side" data-value="long">Buy</button>
-        <button type="button" class="${manual.side === "short" ? "active" : ""}" data-manual-pick="side" data-value="short">Sell</button>
+        <div><span>Available</span><b>${money(available)}</b><small>${state.wallet ? "wallet withdrawable" : "order limit"}</small></div>
+        <div><span>Position</span><b>${escapeHtml(livePositionLabel)}</b><small>${displayPerpLabel(ticketAsset)}</small></div>
       </div>
       <div class="trade-segment" aria-label="Order type">
         <button type="button" class="${manual.entry_type === "market" ? "active" : ""}" data-manual-pick="entry_type" data-value="market">Market</button>
         <button type="button" class="${manual.entry_type === "limit" ? "active" : ""}" data-manual-pick="entry_type" data-value="limit">Limit</button>
       </div>
+      <div class="trade-segment side-picker" aria-label="Side">
+        <button type="button" class="${manual.side === "long" ? "active" : ""}" data-manual-pick="side" data-value="long">Long</button>
+        <button type="button" class="${manual.side === "short" ? "active" : ""}" data-manual-pick="side" data-value="short">Short</button>
+      </div>
       <label class="primary-number">Size
         <span>
-          <input type="number" min="1" step="1" data-manual-field="size_usdc" value="${escapeHtml(manual.size_usdc)}" />
-          <em>USDC</em>
+          <input type="number" min="${escapeHtml(minSize)}" max="${escapeHtml(sizeBase || maxOrder)}" step="1" data-manual-field="size_usdc" value="${escapeHtml(manual.size_usdc)}" />
+          <em class="asset-select-pill">USDC</em>
         </span>
       </label>
+      <div class="percent-slider" aria-label="Size percentage">
+        <input type="range" min="1" max="100" step="1" data-manual-percent value="${escapeHtml(sizePercent || 1)}" />
+        <output>${sizePercent}%</output>
+      </div>
       <div class="size-presets" aria-label="Size presets">
-        ${[25, 50, 100]
+        ${percentStops
           .map(
-            (size) => `
-              <button type="button" class="${Number(manual.size_usdc) === size ? "active" : ""}" data-manual-size="${size}">
-                ${size}
+            (percent) => `
+              <button type="button" class="${sizePercent === percent ? "active" : ""}" data-manual-percent-preset="${percent}">
+                ${percent}%
               </button>
             `,
           )
           .join("")}
       </div>
-      <label class="primary-number"${limitHidden}>Limit price
+      <label class="leverage-control">Leverage
+        <span>${number(leverage, 0)}x</span>
+      </label>
+      <div class="percent-slider leverage-slider" aria-label="Leverage">
+        <input type="range" min="1" max="${escapeHtml(maxLeverage)}" step="1" data-manual-leverage value="${escapeHtml(leverage)}" />
+        <output>${number(maxLeverage, 0)}x max</output>
+      </div>
+      <label class="primary-number${limitHiddenClass}">Limit price
         <input type="number" min="0" step="0.000001" data-manual-field="entry_price" value="${escapeHtml(manual.entry_price)}" placeholder="${mark ? number(mark, 6) : "0.00"}" />
       </label>
+      <div class="order-options">
+        <label class="toggle-row">
+          <input type="checkbox" data-manual-checkbox="reduce_only" ${manual.reduce_only ? "checked" : ""} />
+          <span>Reduce Only</span>
+        </label>
+        <label class="toggle-row">
+          <input type="checkbox" data-manual-checkbox="take_profit_enabled" ${takeProfitEnabled ? "checked" : ""} />
+          <span>Take Profit</span>
+        </label>
+        <label class="toggle-row">
+          <input type="checkbox" data-manual-checkbox="stop_loss_enabled" ${stopLossEnabled ? "checked" : ""} />
+          <span>Stop Loss</span>
+        </label>
+      </div>
+      <div class="exit-fields ${anyExitEnabled ? "" : "hidden"} ${exitMode === "percent" ? "dial-mode" : ""}">
+        <div class="trade-segment exit-mode-picker" aria-label="TP SL input mode">
+          <button type="button" class="${exitMode === "price" ? "active" : ""}" data-manual-pick="exit_input_mode" data-value="price">Price</button>
+          <button type="button" class="${exitMode === "percent" ? "active" : ""}" data-manual-pick="exit_input_mode" data-value="percent">%</button>
+        </div>
+        ${
+          takeProfitEnabled
+            ? exitFieldMarkup("take_profit", "Take profit", manual, exitMode, effectiveEntryPrice, takeProfitPlaceholder, exitStep, exitUnit)
+            : ""
+        }
+        ${
+          stopLossEnabled
+            ? exitFieldMarkup("stop_loss", "Stop loss", manual, exitMode, effectiveEntryPrice, stopLossPlaceholder, exitStep, exitUnit)
+            : ""
+        }
+      </div>
       <div class="order-footprint">
-        <div><span>Leverage</span><b>1x</b></div>
-        <div><span>Max</span><b>${money(state.runtime?.max_order_usdc || 100)}</b></div>
-        <div><span>Network</span><b>${escapeHtml(state.runtime?.network || DEFAULT_NETWORK)}</b></div>
+        <div><span>Mark price</span><b>${mark ? compactPrice(mark) : "--"}</b></div>
+        <div><span>Liquidation price</span><b>${liquidationPrice ? compactPrice(liquidationPrice) : "--"}</b></div>
+        <div><span>Order value</span><b>${money(orderValue)}</b></div>
+        <div><span>Margin required</span><b>${money(marginRequired)}</b></div>
+        <div><span>Slippage</span><b>Checked at submit</b></div>
+        <div><span>Fees</span><b>Est. on submit</b></div>
       </div>
-    </section>
-    <section class="manual-order-section provided-data order-status-card">
-      <div class="ticket-section-head">
-        <span class="ticket-label">Status</span>
-        <em>${isManualPlan ? "active plan" : "draft"}</em>
-      </div>
-      <div class="provided-grid">
-        <div><span>Mode</span><b>${isManualPlan || !plan ? "Manual" : "AI assisted"}</b></div>
-        <div><span>Active plan</span><b>${source ? `${escapeHtml(source.side)} ${number(source.entry_price, 4)}` : "none"}</b></div>
-        <div><span>Decision</span><b>${escapeHtml(decision.replaceAll("_", " "))}</b></div>
-        <div><span>Confirm</span><b>${$("#execute-confirm")?.checked ? "ready" : "required"}</b></div>
-      </div>
+      ${
+        orderErrorView
+          ? `<div class="order-error" role="alert">
+              <span>${escapeHtml(orderErrorView.title)}</span>
+              <b>${escapeHtml(orderErrorView.body)}</b>
+              ${
+                orderErrorView.details?.length
+                  ? `<ul>${orderErrorView.details.map((detail) => `<li>${escapeHtml(detail)}</li>`).join("")}</ul>`
+                  : ""
+              }
+            </div>`
+          : ""
+      }
     </section>
   `;
 }
@@ -1487,14 +2494,13 @@ async function saveRuntime(partial = {}) {
     body: JSON.stringify(payload),
   });
   await loadState();
-  toast("Runtime updated");
 }
 
 async function analyze(event) {
   event.preventDefault();
   if (state.isAnalyzing) return;
-  const asset = normalizeAssetSymbol($("#asset-input").value || "BTC");
-  const context = $("#context-input").value || null;
+  const asset = normalizeAssetSymbol($("#asset-input")?.value || "BTC");
+  const context = $("#context-input")?.value || null;
   state.analysis = null;
   state.plan = null;
   state.order = null;
@@ -1530,6 +2536,92 @@ async function analyze(event) {
   }
 }
 
+function autoContext(asset) {
+  const available = orderAvailableUsdc();
+  const maxLeverage = assetMaxLeverage(asset);
+  return [
+    `Auto mode for ${displayPerpLabel(asset)}.`,
+    `Risk appetite: ${state.autoPrefs.risk_appetite}.`,
+    `Preferred close window: ${state.autoPrefs.close_window}.`,
+    `Available trading input: ${money(available)}.`,
+    `${displayPerpLabel(asset)} max supported leverage: ${maxLeverage}x.`,
+    "Return several proposals that can pass order validation without user edits.",
+  ].join(" ");
+}
+
+async function analyzeAutoProposals() {
+  if (state.isAnalyzing) return;
+  const asset = currentChartAsset();
+  state.orderMode = "auto";
+  state.analysis = null;
+  state.plan = null;
+  state.order = null;
+  state.selectedCandidateIndex = 0;
+  state.lastOrderError = "";
+  try {
+    await loadChartCandles(asset, state.activeTimeframe);
+    state.isAnalyzing = true;
+    renderTradingView();
+    const result = await api("/api/agent/analyze", {
+      method: "POST",
+      body: JSON.stringify({
+        asset,
+        context: autoContext(asset),
+        risk_appetite: state.autoPrefs.risk_appetite,
+        close_window: state.autoPrefs.close_window,
+        available_usdc: orderAvailableUsdc(),
+        max_leverage: assetMaxLeverage(asset),
+      }),
+    });
+    state.analysis = result.analysis;
+    state.plan = result.plan;
+    state.selectedCandidateIndex = 0;
+    if (result.analysis?.candles_by_timeframe) {
+      state.marketCandles[result.analysis.asset] = {
+        ...(state.marketCandles[result.analysis.asset] || {}),
+        ...result.analysis.candles_by_timeframe,
+      };
+    }
+    await loadState();
+    state.orderMode = "auto";
+    toast("Auto proposals ready");
+  } finally {
+    state.isAnalyzing = false;
+    renderTradingView();
+  }
+}
+
+async function approveAutoProposal() {
+  const candidate = selectedCandidate();
+  if (!candidate) throw new Error("Run auto analysis before approving a proposal.");
+  const issue = proposalIssue(candidate);
+  if (issue) throw new Error(issue);
+  state.lastOrderError = "";
+  state.isSubmittingOrder = true;
+  renderTicket();
+  try {
+    const result = await api(`/api/agent/proposals/${state.selectedCandidateIndex || 0}/approve`, {
+      method: "POST",
+    });
+    state.plan = result.plan;
+    state.analysis = result.analysis || state.analysis;
+    await executeTrade({ confirmed: true });
+    toast("Auto proposal approved");
+  } finally {
+    state.isSubmittingOrder = false;
+    renderTradingView();
+  }
+}
+
+async function rejectAutoProposal() {
+  state.lastOrderError = "";
+  state.plan = null;
+  state.analysis = null;
+  state.selectedCandidateIndex = 0;
+  renderTradingView();
+  toast("Auto proposals rejected");
+}
+
 async function scan() {
   const result = await api("/api/agent/proactive-scan", { method: "POST" });
   state.analysis = result.analysis;
@@ -1540,44 +2632,198 @@ async function scan() {
 }
 
 function optionalNumber(value) {
-  const parsed = Number(value);
+  const parsed = Number(normalizeNumericInput(value));
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
-async function createManualPlan() {
+function normalizeNumericInput(value) {
+  if (typeof value !== "string") return value;
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  if (trimmed.includes(",") && trimmed.includes(".")) return trimmed.replaceAll(",", "");
+  if (trimmed.includes(",")) return trimmed.replace(",", ".");
+  return trimmed;
+}
+
+function boundedLeverage(value, maxLeverage = 10) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 1;
+  return Math.max(1, Math.min(maxLeverage, Math.round(parsed)));
+}
+
+function estimatedLiquidationPrice(side, entryPrice, leverage) {
+  const entry = Number(entryPrice);
+  const lev = Number(leverage);
+  if (!Number.isFinite(entry) || entry <= 0 || !Number.isFinite(lev) || lev <= 1) return null;
+  const move = 1 / lev;
+  const price = side === "short" ? entry * (1 + move) : entry * (1 - move);
+  return Math.max(0, price);
+}
+
+function exitPriceFromManualPercent(kind, manual, entryPrice) {
+  const value = optionalNumber(manual[kind]);
+  const entry = Number(entryPrice);
+  if (!value || !Number.isFinite(entry) || entry <= 0) return null;
+  const direction = kind === "take_profit" ? 1 : -1;
+  const sideMultiplier = manual.side === "short" ? -1 : 1;
+  return entry * (1 + (direction * sideMultiplier * value) / 100);
+}
+
+function manualExitPrice(kind, manual, entryPrice) {
+  const enabledKey = kind === "take_profit" ? "take_profit_enabled" : "stop_loss_enabled";
+  if (!manual[enabledKey] && !(manual.exits_enabled && manual[kind])) return null;
+  if ((manual.exit_input_mode || "price") === "percent") {
+    const price = exitPriceFromManualPercent(kind, manual, entryPrice);
+    return price ? Number(price.toFixed(6)) : null;
+  }
+  return optionalNumber(manual[kind]);
+}
+
+function manualOrderPayload() {
   const asset = currentChartAsset();
   const manual = state.manualOrder;
   const mark = latestMarkPrice(asset);
   const entryPrice =
     manual.entry_type === "limit" ? optionalNumber(manual.entry_price) : mark || null;
-  const leverage = 1;
+  const leverage = boundedLeverage(manual.leverage, assetMaxLeverage(asset));
+  const stopLoss = manualExitPrice("stop_loss", manual, entryPrice);
+  const takeProfit = manualExitPrice("take_profit", manual, entryPrice);
+  const anyExitEnabled = Boolean(manual.take_profit_enabled || manual.stop_loss_enabled);
+  return {
+    asset,
+    side: manual.side,
+    entry_type: manual.entry_type,
+    size_usdc: Number(manual.size_usdc),
+    entry_price: entryPrice,
+    stop_loss: stopLoss,
+    take_profit: takeProfit,
+    leverage,
+  };
+}
+
+function manualOrderPreflight(context = {}) {
+  const asset = context.asset || currentChartAsset();
+  const manual = state.manualOrder;
+  const mark = context.mark ?? latestMarkPrice(asset);
+  const maxLeverage = context.maxLeverage ?? assetMaxLeverage(asset);
+  const leverage = context.leverage ?? boundedLeverage(manual.leverage, maxLeverage);
+  const entryPrice =
+    context.entryPrice ??
+    (manual.entry_type === "limit" ? optionalNumber(manual.entry_price) : mark || null);
+  const size = Number(normalizeNumericInput(manual.size_usdc)) || 0;
+  const available = context.available ?? orderAvailableUsdc();
+  const marginRequired = context.marginRequired ?? (leverage > 0 ? size / leverage : size);
+  const liquidationPrice =
+    context.liquidationPrice ?? estimatedLiquidationPrice(manual.side, entryPrice, leverage);
+  const livePosition = context.livePosition ?? positionForAsset(asset);
+  const stopLoss = manualExitPrice("stop_loss", manual, entryPrice);
+  const takeProfit = manualExitPrice("take_profit", manual, entryPrice);
+  const anyExitEnabled = Boolean(manual.take_profit_enabled || manual.stop_loss_enabled);
+  const preflightDetails = [
+    "This check runs before sending anything to Hyperliquid.",
+    "Review the highlighted field, adjust the order, then submit again.",
+  ];
+
+  const issue = (body, details = preflightDetails) => ({
+    blocking: true,
+    title: "Check order before submitting",
+    body,
+    details,
+  });
+
+  if (!Number.isFinite(size) || size <= 0) return issue("Enter an order Size greater than zero.");
+  if (size < MIN_ORDER_USDC) {
+    return issue(`Minimum order value is ${MIN_ORDER_USDC} USDC. Increase Size before submitting.`);
+  }
+  if (size > Number(state.runtime?.max_order_usdc || 100)) {
+    return issue("Size is above the runtime max order. Lower Size or change runtime settings.");
+  }
+  if (!Number.isFinite(leverage) || leverage < 1 || leverage > maxLeverage) {
+    return issue(`Leverage must be between 1x and ${number(maxLeverage, 1)}x for ${displayAssetSymbol(asset)}.`);
+  }
+  if (manual.entry_type === "market" && (!mark || mark <= 0)) {
+    return issue("Live mark price is not available yet. Wait for the market price before submitting.");
+  }
+  if (manual.entry_type === "limit" && (!entryPrice || entryPrice <= 0)) {
+    return issue("Limit orders require a valid entry price.");
+  }
+  if (mark && entryPrice && manual.entry_type === "limit" && Math.abs(entryPrice - mark) / mark > 0.95) {
+    return issue(`Limit price is more than 95% away from the current mark price (${compactPrice(mark)}).`);
+  }
+  if (available > 0 && marginRequired > available) {
+    return issue(
+      `Margin required is ${money(marginRequired)}, but available wallet collateral is ${money(available)}.`,
+      ["Reduce Size, reduce Leverage, or add collateral before submitting."],
+    );
+  }
+  if (manual.reduce_only && !livePosition) {
+    return issue("Reduce Only needs an open position on this market.");
+  }
+  if (manual.take_profit_enabled && !takeProfit) {
+    return issue("Take Profit is enabled. Enter a Take Profit value or turn it off.");
+  }
+  if (manual.stop_loss_enabled && !stopLoss) {
+    return issue("Stop Loss is enabled. Enter a Stop Loss value or turn it off.");
+  }
+  if (!anyExitEnabled || (!takeProfit && !stopLoss) || !entryPrice || !mark) return null;
+
+  if (manual.side === "long") {
+    if (takeProfit && (takeProfit <= entryPrice || takeProfit <= mark)) {
+      return issue("Take Profit would be invalid for this Long. Set it above entry and current mark price.");
+    }
+    if (stopLoss && (stopLoss >= entryPrice || stopLoss >= mark)) {
+      return issue("Stop Loss would be invalid for this Long. Set it below entry and current mark price.");
+    }
+    if (stopLoss && liquidationPrice && stopLoss <= liquidationPrice) {
+      return issue(
+        `Stop Loss is beyond estimated liquidation (${compactPrice(liquidationPrice)}). Move Stop Loss above liquidation.`,
+      );
+    }
+  }
+  if (manual.side === "short") {
+    if (takeProfit && (takeProfit >= entryPrice || takeProfit >= mark)) {
+      return issue("Take Profit would be invalid for this Short. Set it below entry and current mark price.");
+    }
+    if (stopLoss && (stopLoss <= entryPrice || stopLoss <= mark)) {
+      return issue("Stop Loss would be invalid for this Short. Set it above entry and current mark price.");
+    }
+    if (stopLoss && liquidationPrice && stopLoss >= liquidationPrice) {
+      return issue(
+        `Stop Loss is beyond estimated liquidation (${compactPrice(liquidationPrice)}). Move Stop Loss below liquidation.`,
+      );
+    }
+  }
+  return null;
+}
+
+async function createManualPlan({ silent = false } = {}) {
+  state.lastOrderError = "";
+  const preflight = manualOrderPreflight();
+  if (preflight?.blocking) {
+    renderTicket();
+    toast(preflight.body);
+    return null;
+  }
   const plan = await api("/api/trades/manual-plan", {
     method: "POST",
-    body: JSON.stringify({
-      asset,
-      side: manual.side,
-      entry_type: manual.entry_type,
-      size_usdc: Number(manual.size_usdc),
-      entry_price: entryPrice,
-      stop_loss: null,
-      take_profit: null,
-      leverage,
-    }),
+    body: JSON.stringify(manualOrderPayload()),
   });
   state.plan = plan;
   state.analysis = null;
   state.selectedCandidateIndex = 0;
+  state.manualOrderDirty = false;
   await loadState();
-  toast("Manual plan created");
+  if (!silent) toast("Manual plan created");
   return plan;
 }
 
-async function executeTrade() {
+async function executeTrade({ confirmed = true } = {}) {
+  state.lastOrderError = "";
   if (!state.plan?.id) throw new Error("No trade plan to execute.");
   const result = await api(`/api/trades/${state.plan.id}/execute`, {
     method: "POST",
     body: JSON.stringify({
-      confirmed: $("#execute-confirm").checked,
+      confirmed: Boolean(confirmed),
     }),
   });
   state.plan = result.plan;
@@ -1586,16 +2832,128 @@ async function executeTrade() {
 }
 
 async function submitManualOrder() {
-  if (!$("#execute-confirm").checked) throw new Error("Confirm order submission first.");
-  await createManualPlan();
-  await executeTrade();
+  state.lastOrderError = "";
+  const preflight = manualOrderPreflight();
+  if (preflight?.blocking) {
+    renderTicket();
+    toast(preflight.body);
+    return;
+  }
+  state.isSubmittingOrder = true;
+  renderTicket();
+  try {
+    const result = await api("/api/trades/manual-submit", {
+      method: "POST",
+      body: JSON.stringify(manualOrderPayload()),
+    });
+    state.plan = result.plan;
+    state.order = result.order;
+    state.analysis = null;
+    state.selectedCandidateIndex = 0;
+    state.manualOrderDirty = false;
+    renderTradingView();
+    toast("Order submitted");
+    refreshOrders({ silent: true }).catch((error) => console.warn("Order refresh failed", error));
+  } finally {
+    state.isSubmittingOrder = false;
+    renderTicket();
+  }
 }
 
 async function rejectTrade() {
-  if (!state.plan?.id) throw new Error("No trade plan to reject.");
+  state.manualOrderDirty = false;
+  if (!state.plan?.id) {
+    clearTradeDisplay();
+    toast("Order cleared");
+    return;
+  }
   state.plan = await api(`/api/trades/${state.plan.id}/reject`, { method: "POST" });
   await loadState();
   toast("Trade rejected");
+}
+
+async function refreshOrders({ silent = false } = {}) {
+  state.wallet = await api("/api/wallet");
+  state.orderBook = await api("/api/orders");
+  renderTradingView();
+  if (!silent) toast("Orders refreshed");
+}
+
+async function closePosition(asset) {
+  const label = displayPerpLabel(asset);
+  if (!window.confirm(`Close ${label} with a reduce-only market order?`)) return;
+  const result = await api(`/api/positions/${encodeURIComponent(asset)}/close`, {
+    method: "POST",
+    body: JSON.stringify({ confirmed: true }),
+  });
+  state.order = result.order;
+  await loadState();
+  toast(`Close order submitted for ${label}`);
+}
+
+async function setPositionProtection(asset) {
+  const normalizedAsset = normalizeAssetSymbol(asset);
+  const label = displayPerpLabel(normalizedAsset);
+  const draft = protectionDraft(normalizedAsset);
+  const takeProfit = optionalNumber(draft.take_profit);
+  const stopLoss = optionalNumber(draft.stop_loss);
+  if (!takeProfit && !stopLoss) {
+    throw new Error("Enter a take profit, a stop loss, or both.");
+  }
+  if (!window.confirm(`Submit reduce-only TP/SL triggers for ${label}?`)) return;
+  await api(`/api/positions/${encodeURIComponent(normalizedAsset)}/protection`, {
+    method: "POST",
+    body: JSON.stringify({
+      confirmed: true,
+      take_profit: takeProfit,
+      stop_loss: stopLoss,
+    }),
+  });
+  state.positionProtection[normalizedAsset] = { take_profit: "", stop_loss: "" };
+  await loadState();
+  toast(`TP/SL updated for ${label}`);
+}
+
+async function runAction(action, actionTarget) {
+  if (action === "save-settings") await saveRuntime();
+  if (action === "scan") {
+    await saveRuntime();
+    await scan();
+  }
+  if (action === "create-manual-plan") await createManualPlan();
+  if (action === "submit-manual-order") await submitManualOrder();
+  if (action === "auto-analyze") await analyzeAutoProposals();
+  if (action === "approve-auto-proposal") await approveAutoProposal();
+  if (action === "reject-auto-proposal") await rejectAutoProposal();
+  if (action === "execute") await executeTrade();
+  if (action === "reject") await rejectTrade();
+  if (action === "privy-setup-agent") await setupPrivyAgent();
+  if (action === "toggle-sensitive") toggleSensitiveWalletData();
+  if (action === "copy-wallet-address") await copyWalletAddress(actionTarget.dataset.walletTarget);
+  if (action === "open-hyperliquid-deposit") openHyperliquidDeposit();
+  if (action === "deposit-master-hyperliquid") await depositMasterToHyperliquid();
+  if (action === "events" || action === "refresh") await loadState();
+  if (action === "refresh-orders") await refreshOrders();
+  if (action === "close-position") await closePosition(actionTarget.dataset.asset);
+  if (action === "set-protection") await setPositionProtection(actionTarget.dataset.asset);
+}
+
+function handleActionError(action, error) {
+  const message = error.message || "Request failed.";
+  if (
+    [
+      "create-manual-plan",
+      "submit-manual-order",
+      "auto-analyze",
+      "approve-auto-proposal",
+      "execute",
+      "close-position",
+      "set-protection",
+    ].includes(action)
+  ) {
+    setOrderError(message);
+  }
+  toast(message);
 }
 
 async function setupPrivyAgent() {
@@ -1627,6 +2985,35 @@ document.addEventListener("click", async (event) => {
     return;
   }
   if (event.target.closest(".app-nav")) return;
+  const orderMode = event.target.closest("[data-order-mode]");
+  if (orderMode) {
+    state.orderMode = orderMode.dataset.orderMode || "manual";
+    state.lastOrderError = "";
+    renderTradingView();
+    if (state.orderMode === "auto" && !activeCandidates().length) {
+      try {
+        await analyzeAutoProposals();
+      } catch (error) {
+        handleActionError("auto-analyze", error);
+      }
+    }
+    return;
+  }
+  const autoPref = event.target.closest("[data-auto-pref]");
+  if (autoPref) {
+    state.autoPrefs[autoPref.dataset.autoPref] = autoPref.dataset.value;
+    state.analysis = null;
+    state.plan = null;
+    state.selectedCandidateIndex = 0;
+    renderTradingView();
+    return;
+  }
+  const ordersTab = event.target.closest("[data-orders-tab]");
+  if (ordersTab) {
+    state.ordersTab = ordersTab.dataset.ordersTab || "positions";
+    renderOrdersPanel();
+    return;
+  }
   const quickAssetButton = event.target.closest("[data-quick-asset]");
   if (quickAssetButton) {
     const nextAsset = quickAssetButton.dataset.quickAsset || "BTC";
@@ -1687,50 +3074,160 @@ document.addEventListener("click", async (event) => {
   const action = actionTarget?.dataset.action;
   if (!action) return;
   try {
-    if (action === "save-settings") await saveRuntime();
-    if (action === "scan") {
-      await saveRuntime();
-      await scan();
-    }
-    if (action === "create-manual-plan") await createManualPlan();
-    if (action === "submit-manual-order") await submitManualOrder();
-    if (action === "execute") await executeTrade();
-    if (action === "reject") await rejectTrade();
-    if (action === "privy-setup-agent") await setupPrivyAgent();
-    if (action === "toggle-sensitive") toggleSensitiveWalletData();
-    if (action === "copy-wallet-address") await copyWalletAddress(actionTarget.dataset.walletTarget);
-    if (action === "open-hyperliquid-deposit") openHyperliquidDeposit();
-    if (action === "deposit-master-hyperliquid") await depositMasterToHyperliquid();
-    if (action === "events" || action === "refresh") await loadState();
+    await runAction(action, actionTarget);
   } catch (error) {
-    toast(error.message);
+    handleActionError(action, error);
   }
 });
 
+document.querySelectorAll(".ticket-panel [data-action]").forEach((button) => {
+  button.addEventListener("click", async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const action = button.dataset.action;
+    try {
+      await runAction(action, button);
+    } catch (error) {
+      handleActionError(action, error);
+    }
+  });
+});
+
 document.addEventListener("input", (event) => {
+  const protectionField = event.target.closest("[data-protection-field]");
+  if (protectionField) {
+    const asset = normalizeAssetSymbol(protectionField.dataset.protectionAsset);
+    const draft = protectionDraft(asset);
+    draft[protectionField.dataset.protectionField] = protectionField.value;
+    draft.touched = true;
+    return;
+  }
+  const leverage = event.target.closest("[data-manual-leverage]");
+  if (leverage) {
+    state.lastOrderError = "";
+    state.manualOrderDirty = true;
+    state.manualOrder.leverage = boundedLeverage(leverage.value, assetMaxLeverage(currentChartAsset()));
+    renderTradingView();
+    return;
+  }
+  const percent = event.target.closest("[data-manual-percent]");
+  if (percent) {
+    const maxOrder = orderAvailableUsdc() * Math.max(1, Number(state.manualOrder.leverage) || 1);
+    state.lastOrderError = "";
+    state.manualOrderDirty = true;
+    const nextSize = Math.round((maxOrder * Number(percent.value || 1)) / 100);
+    state.manualOrder.size_usdc = Math.max(maxOrder >= MIN_ORDER_USDC ? MIN_ORDER_USDC : 1, nextSize);
+    renderTradingView();
+    return;
+  }
   const field = event.target.closest("[data-manual-field]");
   if (!field) return;
+  state.lastOrderError = "";
+  state.manualOrderDirty = true;
   state.manualOrder[field.dataset.manualField] = field.value;
-  if (field.dataset.manualField === "leverage") renderTradingView();
+  if (
+    field.dataset.manualField === "leverage" ||
+    (state.manualOrder.exit_input_mode === "percent" &&
+      ["take_profit", "stop_loss"].includes(field.dataset.manualField))
+  ) {
+    renderTradingView();
+  }
 });
 
 document.addEventListener("change", (event) => {
+  const protectionField = event.target.closest("[data-protection-field]");
+  if (protectionField) {
+    const asset = normalizeAssetSymbol(protectionField.dataset.protectionAsset);
+    const draft = protectionDraft(asset);
+    draft[protectionField.dataset.protectionField] = protectionField.value;
+    draft.touched = true;
+    return;
+  }
+  const checkbox = event.target.closest("[data-manual-checkbox]");
+  if (checkbox) {
+    state.lastOrderError = "";
+    state.manualOrderDirty = true;
+    state.manualOrder[checkbox.dataset.manualCheckbox] = checkbox.checked;
+    if (["take_profit_enabled", "stop_loss_enabled"].includes(checkbox.dataset.manualCheckbox)) {
+      state.manualOrder.exits_enabled = Boolean(
+        state.manualOrder.take_profit_enabled || state.manualOrder.stop_loss_enabled,
+      );
+      if (checkbox.checked && state.manualOrder.exit_input_mode === "percent") {
+        const field = checkbox.dataset.manualCheckbox === "take_profit_enabled" ? "take_profit" : "stop_loss";
+        if (!state.manualOrder[field]) state.manualOrder[field] = field === "take_profit" ? "3" : "2";
+      }
+    }
+    renderTradingView();
+    return;
+  }
   const field = event.target.closest("[data-manual-field]");
   if (!field) return;
+  state.lastOrderError = "";
+  state.manualOrderDirty = true;
   state.manualOrder[field.dataset.manualField] = field.value;
   renderTradingView();
 });
 
 document.addEventListener("click", (event) => {
+  const exitStep = event.target.closest("[data-exit-step]");
+  if (exitStep) {
+    state.lastOrderError = "";
+    state.manualOrderDirty = true;
+    const field = exitStep.dataset.exitStep;
+    const delta = Number(exitStep.dataset.delta || 0);
+    const current = Number(state.manualOrder[field] || (field === "take_profit" ? 3 : 2));
+    state.manualOrder[field] = inputPriceValue(Math.max(0.5, Math.min(50, current + delta)));
+    renderTradingView();
+    return;
+  }
+  const protectionPreset = event.target.closest("[data-protection-preset]");
+  if (protectionPreset) {
+    const asset = normalizeAssetSymbol(protectionPreset.dataset.protectionAsset);
+    const isLong = protectionPreset.dataset.protectionSide !== "short";
+    applyProtectionPreset(asset, isLong, Number(protectionPreset.dataset.protectionEntry || 0));
+    renderOrdersPanel();
+    return;
+  }
   const pick = event.target.closest("[data-manual-pick]");
   if (pick) {
+    state.lastOrderError = "";
+    state.manualOrderDirty = true;
+    const previousValue = state.manualOrder[pick.dataset.manualPick];
     state.manualOrder[pick.dataset.manualPick] = pick.dataset.value;
+    if (pick.dataset.manualPick === "entry_type" && pick.dataset.value === "market") {
+      state.manualOrder.entry_price = "";
+    }
+    if (pick.dataset.manualPick === "exit_input_mode" && previousValue !== pick.dataset.value) {
+      if (pick.dataset.value === "percent") {
+        if (state.manualOrder.take_profit_enabled && !state.manualOrder.take_profit) {
+          state.manualOrder.take_profit = "3";
+        }
+        if (state.manualOrder.stop_loss_enabled && !state.manualOrder.stop_loss) {
+          state.manualOrder.stop_loss = "2";
+        }
+      } else {
+        if (!state.manualOrder.take_profit_enabled) state.manualOrder.take_profit = "";
+        if (!state.manualOrder.stop_loss_enabled) state.manualOrder.stop_loss = "";
+      }
+    }
     renderTradingView();
     return;
   }
   const size = event.target.closest("[data-manual-size]");
   if (size) {
+    state.lastOrderError = "";
+    state.manualOrderDirty = true;
     state.manualOrder.size_usdc = Number(size.dataset.manualSize);
+    renderTradingView();
+    return;
+  }
+  const percent = event.target.closest("[data-manual-percent-preset]");
+  if (percent) {
+    const maxOrder = orderAvailableUsdc() * Math.max(1, Number(state.manualOrder.leverage) || 1);
+    state.lastOrderError = "";
+    state.manualOrderDirty = true;
+    const nextSize = Math.round((maxOrder * Number(percent.dataset.manualPercentPreset)) / 100);
+    state.manualOrder.size_usdc = Math.max(maxOrder >= MIN_ORDER_USDC ? MIN_ORDER_USDC : 1, nextSize);
     renderTradingView();
   }
 });
@@ -1765,7 +3262,7 @@ for (const search of document.querySelectorAll("#allowed-asset-search, #watchlis
   });
 }
 
-$("#analyze-form").addEventListener("submit", async (event) => {
+$("#analyze-form")?.addEventListener("submit", async (event) => {
   try {
     await analyze(event);
   } catch (error) {
