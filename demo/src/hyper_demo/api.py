@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import math
 import urllib.error
 import urllib.request
 from dataclasses import asdict, is_dataclass
@@ -26,13 +28,14 @@ from hyper_demo.models import (
     OrderRecord,
     PortfolioMetrics,
     PositionSnapshot,
+    ResearchReport,
+    RiskProfileInput,
     RunEvent,
     RuntimeNetwork,
     RuntimeSettings,
     RuntimeSettingsUpdate,
     TradePlan,
     TradeSide,
-    UIMode,
     normalize_asset_symbol,
 )
 from hyper_demo.services.formal_validation import (
@@ -46,6 +49,11 @@ from hyper_demo.services.metrics import compute_portfolio_metrics
 from hyper_demo.services.monitoring import HyperliquidWebsocketMonitor
 from hyper_demo.services.perplexity import PerplexityFinanceClient
 from hyper_demo.services.perplexity_mcp import PerplexityMcpServer
+from hyper_demo.services.risk import build_investor_profile
+from hyper_demo.services.technical_analysis import (
+    build_agent_trade_analysis,
+    trade_plan_from_candidate,
+)
 from hyper_demo.services.trading_agent import (
     AGENT_RUN_ID,
     analyze_trade,
@@ -78,6 +86,14 @@ class AgentAnalyzeRequest(BaseModel):
     context: str | None = None
     risk_appetite: Literal["conservative", "balanced", "aggressive"] = "balanced"
     close_window: Literal["15m", "1h", "4h", "1d"] = "1h"
+    available_usdc: float | None = None
+    max_leverage: int | None = None
+
+
+class TradingAutoChatRequest(BaseModel):
+    asset: str
+    risk_appetite: Literal["conservative", "balanced", "aggressive"]
+    close_window: Literal["15m", "1h", "4h", "1d"]
     available_usdc: float | None = None
     max_leverage: int | None = None
 
@@ -756,6 +772,72 @@ async def api_agent_analyze(request: AgentAnalyzeRequest):
     }
 
 
+@app.post("/api/agent/chat-auto")
+async def api_agent_chat_auto(request: TradingAutoChatRequest):
+    store = get_store()
+    runtime = get_runtime(store)
+    settings = settings_for_runtime(runtime)
+    asset = normalize_asset_symbol(request.asset)
+    market = MarketDataClient(settings)
+    available_usdc = _available_usdc_for_agent_input(store, runtime, settings)
+    if request.available_usdc is not None:
+        available_usdc = max(0.0, min(available_usdc, request.available_usdc))
+    max_leverage = int(min(10.0, _max_leverage_for_asset(asset, market)))
+    if request.max_leverage is not None:
+        max_leverage = int(max(1, min(max_leverage, request.max_leverage)))
+    service = get_chat_service(store)
+    resources = service.resources()
+    if resources.status != "ready" and settings.anthropic_chat_auto_bootstrap:
+        resources = await service.bootstrap()
+    if resources.status != "ready":
+        raise HTTPException(
+            status_code=400,
+            detail=resources.disabled_reason or resources.error or "Managed Chat is not ready.",
+        )
+    session = await service.create_session(f"Trading Auto intraday - {asset}")
+    prompt = _trading_auto_chat_prompt(
+        asset=asset,
+        runtime=runtime,
+        risk_appetite=request.risk_appetite,
+        close_window=request.close_window,
+        available_usdc=available_usdc,
+        max_leverage=max_leverage,
+    )
+    try:
+        session = await asyncio.wait_for(
+            service.send_message(
+                session.id,
+                prompt,
+                tool_runner=run_chat_custom_tool,
+            ),
+            timeout=14,
+        )
+    except TimeoutError:
+        pass
+    events = service.events(session.id)
+    plans = _plans_from_chat_events(events)
+    if not plans:
+        plans = _technical_auto_trade_plans(
+            asset,
+            runtime,
+            store,
+            settings,
+            risk_appetite=request.risk_appetite,
+            close_window=request.close_window,
+            max_plans=5,
+        )
+    latest_plan = plans[-1] if plans else None
+    return {
+        "session": session,
+        "events": events,
+        "plans": plans,
+        "plan": latest_plan,
+        "analysis": None,
+        "order_id": None,
+        "run_id": None,
+    }
+
+
 @app.post("/api/agent/proactive-scan")
 async def api_proactive_scan():
     store = get_store()
@@ -798,15 +880,17 @@ def api_approve_agent_proposal(candidate_index: int):
         candidate,
         mark_price=mark_price,
     )
+    leverage = float(int(candidate.leverage))
+    plan_stop_loss = stop_loss if leverage >= 10 else None
     request = ManualTradePlanRequest(
         asset=asset,
         side=candidate.side,
         entry_type=candidate.entry_type,
         entry_price=entry_price,
         size_usdc=candidate.size_usdc,
-        stop_loss=stop_loss,
+        stop_loss=plan_stop_loss,
         take_profit=take_profit,
-        leverage=float(int(candidate.leverage)),
+        leverage=leverage,
     )
     if request.size_usdc < HYPERLIQUID_MIN_ORDER_USDC:
         raise HTTPException(
@@ -835,22 +919,28 @@ def api_approve_agent_proposal(candidate_index: int):
     updated_candidate = candidate.model_copy(
         update={
             "entry_price": entry_price,
-            "stop_loss": stop_loss,
+            "stop_loss": plan_stop_loss or stop_loss,
             "take_profit": take_profit,
-            "max_loss_usdc": _manual_max_loss(candidate.size_usdc, entry_price, stop_loss),
+            "max_loss_usdc": _manual_max_loss(candidate.size_usdc, entry_price, plan_stop_loss),
         }
     )
+    rationale = candidate.rationale
+    if plan_stop_loss is None:
+        rationale = (
+            f"{rationale} No stop-loss is attached because leverage is below 10x; "
+            "use active monitoring, thesis invalidation, and take-profit for the intraday exit."
+        )
     plan = TradePlan(
         asset=asset,
         side=candidate.side,
         size_usdc=candidate.size_usdc,
         entry_type=candidate.entry_type,
         entry_price=entry_price,
-        stop_loss=stop_loss,
+        stop_loss=plan_stop_loss,
         take_profit=take_profit,
-        max_loss_usdc=updated_candidate.max_loss_usdc,
+        max_loss_usdc=_manual_max_loss(candidate.size_usdc, entry_price, plan_stop_loss),
         leverage=request.leverage,
-        rationale=candidate.rationale,
+        rationale=rationale,
         invalidation_criteria=[
             "The selected timeframe flips direction against the approved proposal.",
             "Stop-loss or take-profit placement can no longer be verified before execution.",
@@ -1186,12 +1276,10 @@ def _require_chat_trade_action_approval(
 ) -> None:
     if runtime.network != RuntimeNetwork.prodnet:
         return
-    if runtime.ui_mode == UIMode.robot:
-        return
     if bool(event.get("host_human_approved")):
         return
     raise ExecutionBlocked(
-        "Autonomous prodnet trade actions require runtime ui_mode=robot or human approval."
+        "Prodnet trade actions require explicit host human approval."
     )
 
 
@@ -1303,6 +1391,205 @@ def _json_safe(value: Any) -> Any:
     if isinstance(value, list):
         return [_json_safe(item) for item in value]
     return value
+
+
+def _technical_auto_trade_plans(
+    asset: str,
+    runtime: RuntimeSettings,
+    store: JsonStore,
+    settings: Settings,
+    *,
+    risk_appetite: str,
+    close_window: str,
+    max_plans: int = 5,
+) -> list[dict[str, Any]]:
+    profile = build_investor_profile(
+        RiskProfileInput(
+            asset_preference=asset,
+            capital_at_risk_usdc=max(HYPERLIQUID_MIN_ORDER_USDC, runtime.max_order_usdc),
+            stop_loss_pct=4.0,
+        )
+    )
+    report = ResearchReport(
+        asset=asset,
+        profile_id=profile.id,
+        thesis=(
+            "Fast Trading Auto fallback: local market structure generated reviewable "
+            "intraday trade plans while the Managed Agent session continues separately."
+        ),
+        evidence=[
+            (
+                "Runtime wallet, allowed assets, current marks, and local timeframe "
+                "candles were loaded."
+            ),
+            "Plans are stored for human review; no exchange order is submitted by generation.",
+        ],
+        risks=[
+            "Intraday signals can reverse quickly.",
+            "Open positions and available margin must be reviewed before execution.",
+        ],
+        assumptions=[
+            f"Risk appetite: {risk_appetite}.",
+            f"Preferred close window: {close_window}.",
+        ],
+        why_not_invest=[
+            "Momentum flips against the selected timeframe.",
+            "Available margin falls below the order requirement before approval.",
+            "Take-profit cannot be validated against the current mark.",
+        ],
+        sources=["local-market-structure"],
+        fallback_used=True,
+    )
+    store.save("profiles", profile)
+    store.save("research", report)
+    market = MarketDataClient(settings)
+    analysis = build_agent_trade_analysis(
+        asset,
+        runtime,
+        profile,
+        report,
+        market,
+        risk_appetite=risk_appetite,
+        close_window=close_window,
+    )
+    plans: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str, float]] = set()
+    available_usdc = _available_usdc_for_agent_input(store, runtime, settings)
+    market_max_leverage = int(min(10.0, _max_leverage_for_asset(asset, market)))
+    if available_usdc <= 0:
+        max_viable_notional = 0.0
+    else:
+        max_viable_notional = math.floor(available_usdc * market_max_leverage * 95) / 100
+    for candidate in analysis.candidates:
+        if len(plans) >= max_plans:
+            break
+        if max_viable_notional < HYPERLIQUID_MIN_ORDER_USDC:
+            break
+        key = (
+            candidate.side.value,
+            candidate.entry_type,
+            candidate.timeframe,
+            candidate.entry_price,
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            plan = trade_plan_from_candidate(asset, profile, report, runtime, candidate)
+        except ValueError:
+            continue
+        leverage = max(
+            int(candidate.leverage),
+            math.ceil(HYPERLIQUID_MIN_ORDER_USDC / max(available_usdc, 0.01)),
+        )
+        leverage = max(1, min(market_max_leverage, leverage))
+        size_usdc = min(runtime.max_order_usdc, math.floor(available_usdc * leverage * 95) / 100)
+        if size_usdc < HYPERLIQUID_MIN_ORDER_USDC:
+            continue
+        stop_loss = plan.stop_loss if leverage >= 10 else None
+        rationale = plan.rationale
+        if stop_loss is None and plan.stop_loss is not None:
+            rationale = (
+                f"{candidate.rationale} No stop-loss is attached because leverage is below 10x; "
+                "use active monitoring, thesis invalidation, and take-profit for the intraday exit."
+            )
+        plan = plan.model_copy(
+            update={
+                "size_usdc": round(size_usdc, 2),
+                "leverage": float(leverage),
+                "stop_loss": stop_loss,
+                "max_loss_usdc": _manual_max_loss(size_usdc, plan.entry_price, stop_loss),
+                "rationale": rationale,
+            }
+        )
+        plan.execution_message = (
+            "Auto plan ready for review. Approve & place is required to submit."
+        )
+        store.save("plans", plan)
+        plans.append(plan.model_dump(mode="json"))
+    if plans:
+        analysis.plan_id = plans[0]["id"]
+    store.save("analysis", analysis)
+    store.append_event(
+        RunEvent(
+            run_id=AGENT_RUN_ID,
+            message=f"Trading Auto created {len(plans)} reviewable plan(s) for {asset}.",
+            payload={
+                "asset": asset,
+                "risk_appetite": risk_appetite,
+                "close_window": close_window,
+                "plan_ids": [plan["id"] for plan in plans],
+            },
+        )
+    )
+    return plans
+
+
+def _trading_auto_chat_prompt(
+    *,
+    asset: str,
+    runtime: RuntimeSettings,
+    risk_appetite: str,
+    close_window: str,
+    available_usdc: float,
+    max_leverage: int,
+) -> str:
+    allowed_assets = ", ".join(runtime.allowed_assets or [])
+    watchlist = ", ".join(runtime.watchlist or runtime.allowed_assets or [])
+    return "\n".join(
+        [
+            "Trading Auto mode request.",
+            "",
+            "Use the same Managed Agents workflow as Chat, but focus on several intraday "
+            "leveraged trade proposals for the Trading screen.",
+            "",
+            f"Primary chart asset: {asset}.",
+            f"Runtime network: {runtime.network}.",
+            f"Runtime UI mode: {runtime.ui_mode}.",
+            f"Allowed assets: {allowed_assets or 'none configured'}.",
+            f"Watchlist: {watchlist or 'none configured'}.",
+            f"Risk appetite: {risk_appetite}.",
+            f"Preferred close window: {close_window}.",
+            f"Available trading input: {available_usdc:.2f} USDC.",
+            f"Runtime max order: {runtime.max_order_usdc:.2f} USDC.",
+            f"{asset} max supported leverage: {max_leverage}x.",
+            "",
+            "Required workflow:",
+            "- Call trading_market_snapshot before proposing anything.",
+            "- Use current wallet, open positions, protection orders, allowed assets, and marks.",
+            "- Propose several intraday trades that are intended to close within minutes or hours.",
+            "- Prefer assets from the allowed list and include at least the primary chart asset "
+            "when it makes sense.",
+            "- For each proposal include asset, side, entry type, entry price or market-entry "
+            "assumption, notional size, leverage, take profit, stop loss policy, validation "
+            "assumptions, monitoring cadence, and rationale.",
+            "- For trades below 10x leverage, do not attach stop loss by default; use take "
+            "profit, active monitoring, and explicit thesis invalidation unless a hard stop is "
+            "clearly justified.",
+            "- Create stored trade plans only for proposals that are formally coherent and likely "
+            "to pass validation. Do not execute any trade from this Auto request.",
+            "- End with a compact ranked list and say which plan, if any, should be reviewed next.",
+        ]
+    )
+
+
+def _plans_from_chat_events(events: list[ManagedChatEvent]) -> list[dict[str, Any]]:
+    plans: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for event in events:
+        result = event.payload.get("result") if isinstance(event.payload, dict) else None
+        if not isinstance(result, dict):
+            continue
+        plan = result.get("plan")
+        if not isinstance(plan, dict):
+            continue
+        plan_id = str(plan.get("id") or "")
+        if plan_id and plan_id in seen:
+            continue
+        if plan_id:
+            seen.add(plan_id)
+        plans.append(plan)
+    return plans
 
 
 def _live_proposal_prices(

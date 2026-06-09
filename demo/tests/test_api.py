@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 from hyper_demo.api import app, run_chat_custom_tool
 from hyper_demo.models import (
     ManagedChatDeployment,
+    ManagedChatEvent,
     ManagedChatResources,
     ManagedChatSession,
     OrderRecord,
@@ -154,6 +155,96 @@ def test_agent_analyze_creates_trade_proposal(tmp_path, monkeypatch) -> None:
     assert len(events.json()) >= 2
 
 
+def test_agent_chat_auto_uses_managed_chat_service(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    captured: dict[str, str] = {}
+    session = ManagedChatSession(
+        title="Trading Auto intraday - BTC",
+        claude_session_id="sess_chat",
+    )
+    plan = TradePlan(
+        asset="BTC",
+        side="short",
+        size_usdc=12,
+        entry_price=62000,
+        take_profit=61000,
+        leverage=3,
+        rationale="test",
+        invalidation_criteria=["test"],
+    ).model_dump(mode="json")
+    events = [
+        ManagedChatEvent(
+            session_id=session.id,
+            type="user.custom_tool_result",
+            role="tool",
+            payload={"result": {"plan": plan}},
+        ),
+        ManagedChatEvent(
+            session_id=session.id,
+            type="agent.message",
+            role="agent",
+            text="Ranked intraday proposals are ready.",
+        ),
+    ]
+
+    class FakeChatService:
+        def resources(self):
+            return ManagedChatResources(status="ready")
+
+        async def create_session(self, title=None):
+            captured["title"] = title
+            return session
+
+        async def send_message(self, session_id, message, tool_runner=None):
+            captured["session_id"] = session_id
+            captured["message"] = message
+            captured["tool_runner"] = str(tool_runner is not None)
+            return session
+
+        def events(self, session_id):
+            captured["events_session_id"] = session_id
+            return events
+
+    monkeypatch.setattr("hyper_demo.api.get_chat_service", lambda store=None: FakeChatService())
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/agent/chat-auto",
+        json={"asset": "BTC", "risk_appetite": "balanced", "close_window": "1h"},
+    )
+
+    assert response.status_code == 200, response.json()
+    payload = response.json()
+    assert payload["session"]["id"] == session.id
+    assert payload["plans"][0]["asset"] == "BTC"
+    assert payload["plan"]["id"] == plan["id"]
+    assert captured["title"] == "Trading Auto intraday - BTC"
+    assert "Risk appetite: balanced." in captured["message"]
+    assert "Preferred close window: 1h." in captured["message"]
+    assert "Do not execute any trade from this Auto request." in captured["message"]
+    assert captured["tool_runner"] == "True"
+
+
+def test_agent_chat_auto_requires_managed_chat_ready(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_CHAT_AUTO_BOOTSTRAP", "false")
+
+    class FakeChatService:
+        def resources(self):
+            return ManagedChatResources(status="disabled", disabled_reason="not configured")
+
+    monkeypatch.setattr("hyper_demo.api.get_chat_service", lambda store=None: FakeChatService())
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/agent/chat-auto",
+        json={"asset": "BTC", "risk_appetite": "balanced", "close_window": "1h"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "not configured"
+
+
 def test_agent_proposal_can_be_approved_as_valid_plan(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("ANTHROPIC_API_KEY", "")
@@ -214,10 +305,16 @@ def test_agent_market_proposal_approval_uses_live_entry_price(tmp_path, monkeypa
     assert plan["entry_price"] != stale_entry
     if plan["side"] == "long":
         assert plan["take_profit"] > plan["entry_price"]
-        assert plan["stop_loss"] < plan["entry_price"]
+        if plan["stop_loss"] is None:
+            assert plan["leverage"] < 10
+        else:
+            assert plan["stop_loss"] < plan["entry_price"]
     else:
         assert plan["take_profit"] < plan["entry_price"]
-        assert plan["stop_loss"] > plan["entry_price"]
+        if plan["stop_loss"] is None:
+            assert plan["leverage"] < 10
+        else:
+            assert plan["stop_loss"] > plan["entry_price"]
 
 
 def test_agent_analyze_adds_hypertracker_evidence(tmp_path, monkeypatch) -> None:
@@ -373,7 +470,8 @@ def test_chat_state_includes_default_deployment(tmp_path, monkeypatch) -> None:
     assert deployment["status"] == "not_created"
     assert deployment["cron_expression"] == "*/30 * * * *"
     assert deployment["timezone"] == "Europe/Madrid"
-    assert "human mode" in deployment["initial_prompt"]
+    assert "explicit host human approval" in deployment["initial_prompt"]
+    assert "Record non-secret lessons" in deployment["initial_prompt"]
 
 
 def test_chat_create_deployment_posts_anthropic_payload(tmp_path, monkeypatch) -> None:
@@ -782,7 +880,7 @@ def test_chat_formal_validation_blocks_unbuffered_minimum_order(
     monkeypatch.setenv("PRIVY_APP_ID", "app")
     monkeypatch.setenv("PRIVY_APP_SECRET", "secret")
     store = JsonStore()
-    store.save("runtime", RuntimeSettings(network="prodnet"))
+    store.save("runtime", RuntimeSettings(network="prodnet", ui_mode="robot"))
     store.save(
         "privy_agent_wallet",
         PrivyAgentWallet(
@@ -944,7 +1042,7 @@ def test_chat_formal_validation_requires_stop_loss_at_10x(
     )
 
 
-def test_chat_autonomous_execution_requires_robot_mode(tmp_path, monkeypatch) -> None:
+def test_chat_autonomous_execution_requires_human_approval(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("HYPERLIQUID_MAINNET_ENABLED", "true")
     monkeypatch.setenv("PRIVY_EXECUTION_ENABLED", "true")
@@ -997,12 +1095,12 @@ def test_chat_autonomous_execution_requires_robot_mode(tmp_path, monkeypatch) ->
             },
         )
     except Exception as exc:
-        assert "ui_mode=robot" in str(exc)
+        assert "host human approval" in str(exc)
     else:
         raise AssertionError("human mode must block autonomous prodnet execution")
 
 
-def test_chat_trade_action_tools_require_robot_mode_or_human_approval(
+def test_chat_trade_action_tools_require_human_approval(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -1164,7 +1262,7 @@ def test_chat_human_approval_executes_pending_trade_once(
     assert result["payload"]["custom_tool_use_id"] == "custom_tool_1"
 
 
-def test_chat_autonomous_execution_runs_in_robot_mode_after_validation(
+def test_chat_robot_mode_prodnet_execution_waits_for_human_approval(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -1208,38 +1306,21 @@ def test_chat_autonomous_execution_runs_in_robot_mode_after_validation(
     def fake_mark(self, asset):
         return MarketPrice(asset=asset, mark_price=100, source="test")
 
-    def fake_execute(self, submitted_plan, runtime_agent, confirmed, confirmation_phrase=None):
-        assert submitted_plan.id == plan.id
-        assert confirmed is True
-        assert runtime_agent.agent_wallet_id == "agent-id"
-        return OrderRecord(
-            plan_id=submitted_plan.id,
-            exchange="hyperliquid-mainnet",
-            asset=submitted_plan.asset,
-            side=submitted_plan.side,
-            size_usdc=submitted_plan.size_usdc,
-            entry_order_id="entry-robot",
-            status="submitted",
-            message="Submitted by robot mode.",
-        )
-
     monkeypatch.setattr("hyper_demo.api.PrivyHyperliquidAdapter.wallet_state", fake_wallet_state)
     monkeypatch.setattr("hyper_demo.api.MarketDataClient.mark_price", fake_mark)
-    monkeypatch.setattr(
-        "hyper_demo.services.trading_agent.PrivyHyperliquidAdapter.execute_plan",
-        fake_execute,
-    )
 
-    payload = run_chat_custom_tool(
-        ManagedChatSession(title="Executor"),
-        {
-            "name": "trading_execute_plan",
-            "input": {"plan_id": plan.id, "confirmed": True},
-        },
-    )
-
-    assert payload["plan"]["status"] == "executed"
-    assert payload["order_id"] is not None
+    try:
+        run_chat_custom_tool(
+            ManagedChatSession(title="Executor"),
+            {
+                "name": "trading_execute_plan",
+                "input": {"plan_id": plan.id, "confirmed": True},
+            },
+        )
+    except Exception as exc:
+        assert "host human approval" in str(exc)
+    else:
+        raise AssertionError("robot mode must not bypass prodnet human approval")
 
 
 def test_setup_check_reflects_hypertracker_status(tmp_path, monkeypatch) -> None:
