@@ -1495,6 +1495,7 @@ function globalExecutionSnapshot() {
   return {
     positions: state.orderBook?.positions || state.wallet?.open_positions || [],
     orders: state.orderBook?.orders || (state.order ? [state.order] : []),
+    openOrders: state.orderBook?.open_orders || state.wallet?.open_orders || [],
   };
 }
 
@@ -1512,6 +1513,73 @@ function orderForPosition(asset) {
     .slice()
     .reverse()
     .find((order) => normalizeAssetSymbol(order.asset) === normalizeAssetSymbol(asset));
+}
+
+function protectionOrderKind(order, context = {}) {
+  const orderType = String(order?.orderType || order?.order_type || "").toLowerCase();
+  if (orderType.includes("take profit")) return "take_profit";
+  if (orderType.includes("stop")) return "stop_loss";
+  const tpsl = order?.t?.trigger?.tpsl || order?.trigger?.tpsl || order?.tpsl;
+  if (tpsl === "tp") return "take_profit";
+  if (tpsl === "sl") return "stop_loss";
+  const price = protectionOrderPrice(order);
+  const reference = Number(context.mark || context.entry || 0);
+  if (!price || !reference) return null;
+  if (context.isLong === true) return price > reference ? "take_profit" : "stop_loss";
+  if (context.isLong === false) return price < reference ? "take_profit" : "stop_loss";
+  return null;
+}
+
+function protectionOrderPrice(order) {
+  return Number(
+    order?.triggerPx ||
+      order?.trigger_px ||
+      order?.limitPx ||
+      order?.limit_px ||
+      order?.price ||
+      order?.px ||
+      0,
+  );
+}
+
+function protectionOrdersForAsset(asset, context = {}) {
+  const normalizedAsset = normalizeAssetSymbol(asset);
+  return (globalExecutionSnapshot().openOrders || [])
+    .filter((order) => normalizeAssetSymbol(order?.coin || order?.asset || "") === normalizedAsset)
+    .map((order) => ({
+      ...order,
+      protectionKind: protectionOrderKind(order, context),
+      protectionPrice: protectionOrderPrice(order),
+    }))
+    .filter((order) => order.protectionKind && order.protectionPrice > 0);
+}
+
+function activeProtectionForAsset(asset, plan = {}, context = {}) {
+  const protection = {
+    take_profit: Number(plan.take_profit || 0),
+    stop_loss: Number(plan.stop_loss || 0),
+    takeProfitOrder: null,
+    stopLossOrder: null,
+    takeProfitCount: 0,
+    stopLossCount: 0,
+  };
+  for (const order of protectionOrdersForAsset(asset, context)) {
+    if (order.protectionKind === "take_profit") {
+      protection.takeProfitCount += 1;
+      if (!protection.takeProfitOrder || Number(order.timestamp || 0) >= Number(protection.takeProfitOrder.timestamp || 0)) {
+        protection.take_profit = order.protectionPrice;
+        protection.takeProfitOrder = order;
+      }
+    }
+    if (order.protectionKind === "stop_loss") {
+      protection.stopLossCount += 1;
+      if (!protection.stopLossOrder || Number(order.timestamp || 0) >= Number(protection.stopLossOrder.timestamp || 0)) {
+        protection.stop_loss = order.protectionPrice;
+        protection.stopLossOrder = order;
+      }
+    }
+  }
+  return protection;
 }
 
 function orderFill(order, key) {
@@ -1641,7 +1709,7 @@ function inputPriceValue(value) {
 function defaultProtectionDraft(isLong, entry) {
   return {
     take_profit: protectionPriceFromEntry("take_profit", isLong, entry, 1),
-    stop_loss: protectionPriceFromEntry("stop_loss", isLong, entry, 20),
+    stop_loss: "",
   };
 }
 
@@ -1661,7 +1729,6 @@ function applyProtectionPreset(asset, isLong, entry) {
   const draft = protectionDraft(asset);
   const defaults = defaultProtectionDraft(isLong, entry);
   draft.take_profit = defaults.take_profit;
-  draft.stop_loss = defaults.stop_loss;
   draft.touched = true;
   document
     .querySelectorAll(`[data-protection-asset="${CSS.escape(normalizeAssetSymbol(asset))}"]`)
@@ -1671,20 +1738,26 @@ function applyProtectionPreset(asset, isLong, entry) {
     });
 }
 
-function protectionEditor(asset, isLong, entry, mark, takeProfit, stopLoss) {
+function protectionEditor(asset, isLong, entry, mark, takeProfit, stopLoss, activeProtection) {
   const draft = protectionDraft(asset);
-  const needsProtection = !takeProfit || !stopLoss;
-  if (!needsProtection) return "";
   if (!draft.touched || (!draft.take_profit && !draft.stop_loss)) {
-    const defaults = defaultProtectionDraft(isLong, entry);
-    draft.take_profit = takeProfit ? "" : defaults.take_profit;
-    draft.stop_loss = stopLoss ? "" : defaults.stop_loss;
+    draft.take_profit = takeProfit ? inputPriceValue(takeProfit) : "";
+    draft.stop_loss = stopLoss ? inputPriceValue(stopLoss) : "";
   }
+  const protection = activeProtection || activeProtectionForAsset(asset, {}, { isLong, entry, mark });
+  const status = [
+    protection.takeProfitCount
+      ? `TP active at ${compactPrice(protection.take_profit)}`
+      : "TP not set",
+    protection.stopLossCount
+      ? `SL active at ${compactPrice(protection.stop_loss)}`
+      : "SL not set",
+  ].join(" · ");
   return `
     <div class="protection-editor">
       <div class="protection-editor-title">
-        <b>Set TP/SL</b>
-        <span>From entry: TP +1%, SL -20%</span>
+        <b>Edit active protection</b>
+        <span>${escapeHtml(status)}</span>
       </div>
       <label>
         <span>Take Profit</span>
@@ -1695,7 +1768,7 @@ function protectionEditor(asset, isLong, entry, mark, takeProfit, stopLoss) {
           data-protection-asset="${escapeHtml(asset)}"
           data-protection-field="take_profit"
           value="${escapeHtml(draft.take_profit || "")}"
-          placeholder="${escapeHtml(protectionPriceFromEntry("take_profit", isLong, entry, 1))}"
+          placeholder="${escapeHtml(protection.takeProfitCount ? inputPriceValue(protection.take_profit) : protectionPriceFromEntry("take_profit", isLong, entry, 1))}"
         />
       </label>
       <label>
@@ -1707,7 +1780,7 @@ function protectionEditor(asset, isLong, entry, mark, takeProfit, stopLoss) {
           data-protection-asset="${escapeHtml(asset)}"
           data-protection-field="stop_loss"
           value="${escapeHtml(draft.stop_loss || "")}"
-          placeholder="${escapeHtml(protectionPriceFromEntry("stop_loss", isLong, entry, 20))}"
+          placeholder="${escapeHtml(protection.stopLossCount ? inputPriceValue(protection.stop_loss) : "Optional")}"
         />
       </label>
       <button
@@ -1718,10 +1791,10 @@ function protectionEditor(asset, isLong, entry, mark, takeProfit, stopLoss) {
         data-protection-side="${isLong ? "long" : "short"}"
         data-protection-entry="${escapeHtml(String(entry || ""))}"
       >
-        Use 1% / 20%
+        Use TP +1%
       </button>
       <button type="button" data-action="set-protection" data-asset="${escapeHtml(asset)}">
-        Fix TP/SL
+        Update protection
       </button>
     </div>
   `;
@@ -1740,8 +1813,9 @@ function positionCard(position) {
   const liquidation = Number(position.liquidationPx || position.liquidation_price || 0);
   const pnl = Number(position.unrealizedPnl || position.unrealized_pnl_usdc || 0);
   const funding = Number(position.cumFunding?.sinceOpen || 0);
-  const takeProfit = Number(plan.take_profit || 0);
-  const stopLoss = Number(plan.stop_loss || 0);
+  const activeProtection = activeProtectionForAsset(asset, plan, { isLong, entry, mark });
+  const takeProfit = activeProtection.take_profit;
+  const stopLoss = activeProtection.stop_loss;
   return `
     <article class="active-trade-card">
       <div class="active-trade-main">
@@ -1765,7 +1839,7 @@ function positionCard(position) {
         ${positionLevelRow("Stop Loss", stopLoss, entry, mark, "stop")}
         ${positionLevelRow("Liquidation", liquidation, entry, mark, "liquidation")}
       </div>
-      ${protectionEditor(asset, isLong, entry, mark, takeProfit, stopLoss)}
+      ${protectionEditor(asset, isLong, entry, mark, takeProfit, stopLoss, activeProtection)}
       <div class="active-trade-actions">
         <button type="button" class="danger" data-action="close-position" data-asset="${escapeHtml(asset)}">
           Close position
@@ -2449,26 +2523,189 @@ function renderChatTranscript() {
   const session = selectedChatSession();
   const title = $("#chat-session-title");
   if (title) title.textContent = session?.title || "Chat";
+  const status = $("#chat-session-status");
+  if (status) {
+    status.className = `pill ${chatStatusClass(session?.status || "idle")}`;
+    status.textContent = session?.status || "idle";
+  }
   const list = $("#chat-events-list");
   if (!list) return;
-  const events = activeChatEvents();
+  const events = activeChatEvents().filter(isChatVisibleEvent);
   list.innerHTML = events.length
     ? events
         .map(
           (event) => `
-            <article class="chat-event ${escapeHtml(event.role || "system")} ${escapeHtml(event.level || "info")}">
+            <article class="chat-event ${escapeHtml(chatEventKind(event))} ${escapeHtml(event.level || "info")}">
               <div class="chat-event-meta">
-                <span>${escapeHtml(chatEventLabel(event.type))}</span>
+                <span>${escapeHtml(chatEventDisplayLabel(event))}</span>
                 <time>${chatTime(event.created_at)}</time>
               </div>
-              <p>${escapeHtml(chatEventText(event))}</p>
+              <div class="chat-event-body">${chatEventBody(event)}</div>
               ${chatEventPayload(event)}
             </article>
           `,
         )
         .join("")
-    : "<div class='chat-empty-state'>Start a session and send a message.</div>";
+    : `<div class="chat-empty-state rich-empty">
+        <b>No messages in this session.</b>
+        <span>Start with a portfolio brief or ask for intraday trade proposals.</span>
+      </div>`;
   list.scrollTop = list.scrollHeight;
+}
+
+function isChatVisibleEvent(event) {
+  return [
+    "user.message",
+    "agent.message",
+    "agent.custom_tool_use",
+    "user.custom_tool_result",
+    "session.error",
+  ].includes(event.type);
+}
+
+function chatEventKind(event) {
+  if (event.type === "user.message") return "user";
+  if (event.type === "agent.message") return "agent";
+  if (event.type === "agent.custom_tool_use" || event.type === "user.custom_tool_result") return "tool";
+  if (event.level === "error" || event.type === "session.error") return "error";
+  return event.role || "system";
+}
+
+function chatEventDisplayLabel(event) {
+  if (event.type === "user.message") return "You";
+  if (event.type === "agent.message") return "Agent";
+  if (event.type === "agent.custom_tool_use") return `Tool request · ${event.payload?.name || "tool"}`;
+  if (event.type === "user.custom_tool_result") return event.payload?.is_error ? "Tool error" : "Tool result";
+  if (event.type === "session.error") return "Session error";
+  return chatEventLabel(event.type);
+}
+
+function chatEventBody(event) {
+  if (event.type === "agent.message") return renderChatMarkdown(chatEventText(event));
+  if (event.type === "user.message") return `<p>${escapeHtml(chatEventText(event))}</p>`;
+  if (event.type === "agent.custom_tool_use") {
+    const name = event.payload?.name || "tool";
+    return `<p>${escapeHtml(toolDisplayName(name))}</p>${compactToolInput(event.payload?.input)}`;
+  }
+  if (event.type === "user.custom_tool_result") {
+    return `<p>${escapeHtml(toolResultSummary(event.payload?.result, event.payload?.is_error))}</p>`;
+  }
+  return `<p>${escapeHtml(chatEventText(event))}</p>`;
+}
+
+function renderChatMarkdown(value) {
+  const lines = String(value || "").split("\n");
+  const html = [];
+  let index = 0;
+  while (index < lines.length) {
+    const line = lines[index].trim();
+    if (!line) {
+      index += 1;
+      continue;
+    }
+    if (/^-{3,}$/.test(line)) {
+      html.push("<hr>");
+      index += 1;
+      continue;
+    }
+    if (line.startsWith("### ")) {
+      html.push(`<h4>${renderInlineMarkdown(line.slice(4))}</h4>`);
+      index += 1;
+      continue;
+    }
+    if (line.startsWith("## ")) {
+      html.push(`<h3>${renderInlineMarkdown(line.slice(3))}</h3>`);
+      index += 1;
+      continue;
+    }
+    if (isMarkdownTableLine(line)) {
+      const tableLines = [];
+      while (index < lines.length && isMarkdownTableLine(lines[index].trim())) {
+        tableLines.push(lines[index].trim());
+        index += 1;
+      }
+      html.push(renderMarkdownTable(tableLines));
+      continue;
+    }
+    if (line.startsWith("- ")) {
+      const items = [];
+      while (index < lines.length && lines[index].trim().startsWith("- ")) {
+        items.push(`<li>${renderInlineMarkdown(lines[index].trim().slice(2))}</li>`);
+        index += 1;
+      }
+      html.push(`<ul>${items.join("")}</ul>`);
+      continue;
+    }
+    const paragraph = [];
+    while (
+      index < lines.length &&
+      lines[index].trim() &&
+      !lines[index].trim().startsWith("## ") &&
+      !lines[index].trim().startsWith("### ") &&
+      !lines[index].trim().startsWith("- ") &&
+      !isMarkdownTableLine(lines[index].trim()) &&
+      !/^-{3,}$/.test(lines[index].trim())
+    ) {
+      paragraph.push(lines[index].trim());
+      index += 1;
+    }
+    html.push(`<p>${renderInlineMarkdown(paragraph.join(" "))}</p>`);
+  }
+  return `<div class="chat-markdown">${html.join("")}</div>`;
+}
+
+function renderInlineMarkdown(value) {
+  return escapeHtml(value)
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+}
+
+function isMarkdownTableLine(line) {
+  return line.startsWith("|") && line.endsWith("|") && line.includes("|");
+}
+
+function renderMarkdownTable(lines) {
+  const rows = lines
+    .filter((line) => !/^\|[\s:|-]+\|$/.test(line))
+    .map((line) => line.slice(1, -1).split("|").map((cell) => renderInlineMarkdown(cell.trim())));
+  if (!rows.length) return "";
+  const [head, ...body] = rows;
+  return `
+    <div class="chat-table-wrap">
+      <table class="chat-markdown-table">
+        <thead><tr>${head.map((cell) => `<th>${cell}</th>`).join("")}</tr></thead>
+        <tbody>${body.map((row) => `<tr>${row.map((cell) => `<td>${cell}</td>`).join("")}</tr>`).join("")}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+function compactToolInput(input) {
+  if (!input || typeof input !== "object" || !Object.keys(input).length) return "";
+  const entries = Object.entries(input)
+    .slice(0, 4)
+    .map(([key, value]) => `<span>${escapeHtml(key)}: <b>${escapeHtml(formatCompactToolValue(value))}</b></span>`)
+    .join("");
+  return `<div class="chat-tool-chips">${entries}</div>`;
+}
+
+function formatCompactToolValue(value) {
+  if (value === null || value === undefined) return "--";
+  if (typeof value === "object") return JSON.stringify(value).slice(0, 80);
+  return String(value).slice(0, 80);
+}
+
+function toolDisplayName(name) {
+  return String(name || "tool").replace(/^trading_/, "").replaceAll("_", " ");
+}
+
+function toolResultSummary(result, isError) {
+  if (isError) return result?.error || "Tool failed.";
+  if (result?.order_id) return `Order submitted: ${result.order_id}`;
+  if (result?.validation) return result.validation.valid ? "Formal validation passed." : "Formal validation failed.";
+  if (result?.plan) return `Plan ready: ${result.plan.asset || "asset"} ${result.plan.side || ""}`;
+  if (result?.runtime) return "Runtime and market context loaded.";
+  return "Tool completed.";
 }
 
 function renderVaultStatus() {
@@ -2611,13 +2848,21 @@ function chatEventText(event) {
 }
 
 function chatEventPayload(event) {
+  if (!["agent.custom_tool_use", "user.custom_tool_result", "session.error"].includes(event.type)) {
+    return "";
+  }
   const payload = event.payload || {};
   const interesting = {};
   for (const key of ["name", "input", "result", "usage", "stop_reason", "thread_id"]) {
     if (payload[key] !== undefined) interesting[key] = payload[key];
   }
   if (!Object.keys(interesting).length) return "";
-  return `<pre>${escapeHtml(JSON.stringify(interesting, null, 2))}</pre>`;
+  return `
+    <details class="chat-event-details">
+      <summary>Details</summary>
+      <pre>${escapeHtml(JSON.stringify(interesting, null, 2))}</pre>
+    </details>
+  `;
 }
 
 async function refreshChat() {
@@ -3429,23 +3674,39 @@ async function setPositionProtection(asset) {
   const normalizedAsset = normalizeAssetSymbol(asset);
   const label = displayPerpLabel(normalizedAsset);
   const draft = protectionDraft(normalizedAsset);
+  const position = positionForAsset(normalizedAsset);
+  const size = Number(position?.szi || position?.size || 0);
+  const isLong = size >= 0;
+  const entry = Number(position?.entryPx || position?.entry_price || 0);
+  const mark = position ? positionMarkPrice(position) : latestMarkPrice(normalizedAsset);
+  const activeProtection = activeProtectionForAsset(normalizedAsset, {}, { isLong, entry, mark });
   const takeProfit = optionalNumber(draft.take_profit);
   const stopLoss = optionalNumber(draft.stop_loss);
-  if (!takeProfit && !stopLoss) {
-    throw new Error("Enter a take profit, a stop loss, or both.");
+  const removeTakeProfit = Boolean(activeProtection.takeProfitCount && !takeProfit);
+  const removeStopLoss = Boolean(activeProtection.stopLossCount && !stopLoss);
+  if (!takeProfit && !stopLoss && !removeTakeProfit && !removeStopLoss) {
+    throw new Error("Enter or clear an active take profit, stop loss, or both.");
   }
-  if (!window.confirm(`Submit reduce-only TP/SL triggers for ${label}?`)) return;
+  const actions = [
+    takeProfit ? `set TP ${compactPrice(takeProfit)}` : removeTakeProfit ? "remove TP" : null,
+    stopLoss ? `set SL ${compactPrice(stopLoss)}` : removeStopLoss ? "remove SL" : null,
+  ].filter(Boolean);
+  if (!window.confirm(`Update reduce-only protection for ${label}: ${actions.join(", ")}?`)) {
+    return;
+  }
   await api(`/api/positions/${encodeURIComponent(normalizedAsset)}/protection`, {
     method: "POST",
     body: JSON.stringify({
       confirmed: true,
       take_profit: takeProfit,
       stop_loss: stopLoss,
+      remove_take_profit: removeTakeProfit,
+      remove_stop_loss: removeStopLoss,
     }),
   });
   state.positionProtection[normalizedAsset] = { take_profit: "", stop_loss: "" };
   await loadState();
-  toast(`TP/SL updated for ${label}`);
+  toast(`Protection updated for ${label}`);
 }
 
 async function runAction(action, actionTarget) {
@@ -3539,6 +3800,17 @@ document.addEventListener("click", async (event) => {
       startChatPolling();
     } catch (error) {
       toast(error.message);
+    }
+    return;
+  }
+  const chatPromptButton = event.target.closest("[data-chat-prompt]");
+  if (chatPromptButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    const input = $("#chat-message-input");
+    if (input) {
+      input.value = chatPromptButton.dataset.chatPrompt || "";
+      input.focus();
     }
     return;
   }

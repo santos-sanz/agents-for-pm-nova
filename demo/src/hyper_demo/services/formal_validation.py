@@ -8,6 +8,7 @@ from hyper_demo.models import RuntimeSettings, TradePlan, TradeSide, normalize_a
 HYPERLIQUID_MIN_NOTIONAL_BUFFER_USDC = 0.25
 DEFAULT_INTRADAY_MIN_LEVERAGE = 2.0
 DEFAULT_MAX_PLANNED_LOSS_USDC = 2.0
+STOP_LOSS_REQUIRED_LEVERAGE = 10.0
 
 
 @dataclass(frozen=True)
@@ -93,10 +94,27 @@ def validate_formal_trade_plan(
                 f"{DEFAULT_INTRADAY_MIN_LEVERAGE:g}x leverage."
             )
 
-    if plan.stop_loss is None or plan.take_profit is None:
-        errors.append("Autonomous trades require both stop_loss and take_profit.")
+    if plan.take_profit is None:
+        errors.append("Autonomous trades require take_profit.")
     else:
         _validate_exit_direction(plan, mark_price, checks, errors)
+
+    if plan.stop_loss is None:
+        if plan.leverage >= STOP_LOSS_REQUIRED_LEVERAGE:
+            errors.append(
+                f"Trades at {STOP_LOSS_REQUIRED_LEVERAGE:g}x leverage or higher require stop_loss."
+            )
+        else:
+            checks.append(
+                f"No stop_loss attached for sub-{STOP_LOSS_REQUIRED_LEVERAGE:g}x leverage; "
+                "use active monitoring and thesis invalidation instead."
+            )
+    else:
+        if plan.leverage < STOP_LOSS_REQUIRED_LEVERAGE:
+            warnings.append(
+                f"Stop loss is unusual for sub-{STOP_LOSS_REQUIRED_LEVERAGE:g}x leverage; "
+                "prefer omitting it unless the user explicitly requested one."
+            )
         planned_loss = _planned_loss_usdc(plan)
         if planned_loss <= DEFAULT_MAX_PLANNED_LOSS_USDC:
             checks.append(f"Planned stop loss is capped at {planned_loss:.2f} USDC.")
@@ -148,25 +166,23 @@ def _validate_exit_direction(
 ) -> None:
     reference = mark_price or plan.entry_price
     if plan.side == TradeSide.long:
-        if (
-            plan.stop_loss < plan.entry_price < plan.take_profit
-            and plan.stop_loss < reference < plan.take_profit
+        if plan.take_profit <= plan.entry_price or plan.take_profit <= reference:
+            errors.append("Long plans require take_profit above entry and current mark.")
+        elif plan.stop_loss is not None and (
+            plan.stop_loss >= plan.entry_price or plan.stop_loss >= reference
         ):
-            checks.append("Long TP/SL bracket entry and current mark correctly.")
+            errors.append("Long plans require stop_loss below entry and current mark when used.")
         else:
-            errors.append(
-                "Long plans require stop_loss below entry/mark and take_profit above entry/mark."
-            )
+            checks.append("Long exit levels are directionally valid.")
     if plan.side == TradeSide.short:
-        if (
-            plan.take_profit < plan.entry_price < plan.stop_loss
-            and plan.take_profit < reference < plan.stop_loss
+        if plan.take_profit >= plan.entry_price or plan.take_profit >= reference:
+            errors.append("Short plans require take_profit below entry and current mark.")
+        elif plan.stop_loss is not None and (
+            plan.stop_loss <= plan.entry_price or plan.stop_loss <= reference
         ):
-            checks.append("Short TP/SL bracket entry and current mark correctly.")
+            errors.append("Short plans require stop_loss above entry and current mark when used.")
         else:
-            errors.append(
-                "Short plans require take_profit below entry/mark and stop_loss above entry/mark."
-            )
+            checks.append("Short exit levels are directionally valid.")
 
 
 def _planned_loss_usdc(plan: TradePlan) -> float:

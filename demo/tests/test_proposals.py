@@ -11,7 +11,7 @@ class StaticMarket:
         return MarketPrice(asset=asset, mark_price=100.0, source="test")
 
 
-def test_build_trade_plan_adds_directional_exits() -> None:
+def test_build_trade_plan_omits_stop_loss_below_10x() -> None:
     profile = build_investor_profile(RiskProfileInput(stop_loss_pct=5, capital_at_risk_usdc=100))
     research = ResearchReport(
         asset="BTC",
@@ -26,8 +26,10 @@ def test_build_trade_plan_adds_directional_exits() -> None:
 
     assert plan.side == "long"
     assert plan.entry_type == "limit"
-    assert plan.stop_loss < plan.entry_price < plan.take_profit
-    assert plan.max_loss_usdc <= 100
+    assert plan.stop_loss is None
+    assert plan.entry_price < plan.take_profit
+    assert plan.max_loss_usdc == 0
+    assert "No stop-loss is attached because leverage is below 10x" in plan.rationale
 
 
 def test_invalid_trade_plan_exit_shape_is_rejected() -> None:

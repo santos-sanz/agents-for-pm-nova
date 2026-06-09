@@ -172,7 +172,8 @@ CUSTOM_TOOLS: list[dict[str, Any]] = [
         "name": "trading_set_protection",
         "description": (
             "Set take-profit and/or stop-loss protection through the guarded backend "
-            "reduce-only trigger flow. Requires confirmed=true."
+            "reduce-only trigger flow. Stop-loss updates are exceptional for sub-10x trades. "
+            "Requires confirmed=true."
         ),
         "input_schema": {
             "type": "object",
@@ -344,10 +345,15 @@ Decision rubric:
 Use this skill before creating a trade plan.
 
 - Convert a thesis into a bounded plan: asset, side, size, entry type, entry price, leverage,
-  stop loss, take profit, invalidation, confidence, and monitoring cadence.
+  take profit, invalidation, confidence, and monitoring cadence.
+- Do not include a stop loss by default for trades below 10x leverage. For low-leverage
+  trades, prefer take-profit plus explicit thesis invalidation and active monitoring.
+- Use stop loss only when leverage is 10x or higher, when the user explicitly asks for it,
+  or when exchange/liquidation risk makes a hard exit necessary.
 - Keep leverage integer and at or below the asset maximum.
 - Reject plans that exceed runtime max order USDC or are outside the allowlist.
-- Reject plans where TP/SL are on the wrong side of entry/current price.
+- Reject plans where take profit or any exceptional stop loss is on the wrong side of
+  entry/current price.
 - Prefer plans that are easy to explain and easy to cancel.
 """,
     ),
@@ -363,13 +369,17 @@ Use this skill before validating or executing autonomous leveraged intraday trad
 - Prefer trades intended to close within minutes or hours, not multi-day investment theses.
 - Use integer leverage of at least 2x for autonomous intraday trades, while staying below the
   asset max leverage and runtime limits.
-- Include both stop loss and take profit.
+- Include take profit.
+- Do not include stop loss for trades below 10x leverage unless the user explicitly asks for
+  one or the agent can justify a hard exit as necessary. For sub-10x trades, rely on active
+  monitoring, thesis invalidation, small notional size, and manual/agent close actions.
+- Require stop loss for trades at 10x leverage or higher.
 - Use a notional size above the 10 USDC minimum with a buffer so exchange size rounding does
   not produce an order below minimum.
 - Reject plans whose required margin exceeds wallet withdrawable USDC.
-- Reject trades with TP/SL on the wrong side of both entry and current mark.
-- Keep planned stop-loss loss small; autonomous trades should fail closed before taking large
-  demo-wallet risk.
+- Reject trades with take profit or exceptional stop loss on the wrong side of both entry and
+  current mark.
+- If an exceptional stop loss is used, keep the planned loss small.
 - If validation fails, explain the failed checks and do not retry by increasing risk blindly.
 """,
     ),
@@ -443,10 +453,14 @@ provided custom tools. You may self-improve during the conversation by proposing
 Hard boundaries:
 - Do not request, reveal, infer, or persist secrets.
 - Do not invent exchange access or arbitrary URLs.
+- Always respond in English, even when the user writes in another language.
 - Host-side trading actions are only available through custom tools and existing guardrails.
 - Prodnet execution requires explicit environment enablement and UI confirmation.
 - Prodnet autonomous execution is allowed only when runtime ui_mode is robot and
   `trading_validate_plan` returns valid=true for the stored plan.
+- For trades below 10x leverage, do not attach stop loss by default. Prefer take profit,
+  explicit invalidation criteria, small notional size, and active monitoring. Stop loss is
+  reserved for 10x+ leverage, explicit user instruction, or necessary hard-exit risk control.
 - Testnet execution must still pass validation, sizing, leverage, margin, and asset allowlist
   checks.
 

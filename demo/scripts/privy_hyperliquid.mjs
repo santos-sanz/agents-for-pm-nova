@@ -296,15 +296,57 @@ async function placeProtectionOrder(client, index, szDecimals, size, closingIsBu
   });
 }
 
+function protectionOrderKind(order, side, referencePrice) {
+  const orderType = String(order?.orderType || "").toLowerCase();
+  if (orderType.includes("take profit")) return "tp";
+  if (orderType.includes("stop")) return "sl";
+  const tpsl = order?.t?.trigger?.tpsl || order?.trigger?.tpsl || order?.tpsl;
+  if (tpsl === "tp" || tpsl === "sl") return tpsl;
+  const price = Number(order?.triggerPx || order?.limitPx || order?.price || order?.px || 0);
+  const reference = Number(referencePrice || 0);
+  if (!price || !reference) return null;
+  if (side === "long") return price > reference ? "tp" : "sl";
+  if (side === "short") return price < reference ? "tp" : "sl";
+  return null;
+}
+
+async function cancelExistingProtectionOrders(
+  client,
+  infoClient,
+  user,
+  asset,
+  index,
+  kinds,
+  side,
+  referencePrice,
+) {
+  if (!kinds.size) return null;
+  const openOrders = await infoClient.openOrders({ user });
+  const cancels = (openOrders || [])
+    .filter(
+      (order) =>
+        order?.coin === asset &&
+        order?.reduceOnly !== false &&
+        kinds.has(protectionOrderKind(order, side, referencePrice)),
+    )
+    .map((order) => Number(order.oid || order.orderId || 0))
+    .filter((oid) => Number.isSafeInteger(oid) && oid > 0)
+    .map((oid) => ({ a: index, o: oid }));
+  if (!cancels.length) return null;
+  return client.cancel({ cancels });
+}
+
 async function setProtection(input) {
   const privy = privyClient();
   const transport = transportFor(input.network || "testnet");
-  const { index, meta } = await assetContext(transport, input.asset);
+  const { index, meta, context } = await assetContext(transport, input.asset);
   const szDecimals = Number(meta.szDecimals || 5);
   const size = formatSize(input.size, szDecimals);
   const closingIsBuy = input.side === "short";
-  if (!input.takeProfit && !input.stopLoss) {
-    throw new Error("takeProfit or stopLoss is required");
+  const removeTakeProfit = Boolean(input.removeTakeProfit);
+  const removeStopLoss = Boolean(input.removeStopLoss);
+  if (!input.takeProfit && !input.stopLoss && !removeTakeProfit && !removeStopLoss) {
+    throw new Error("takeProfit, stopLoss, removeTakeProfit, or removeStopLoss is required");
   }
 
   const client = new hl.ExchangeClient({
@@ -314,6 +356,20 @@ async function setProtection(input) {
       address: input.agentWalletAddress,
     }),
   });
+  const infoClient = new hl.InfoClient({ transport });
+  const replacementKinds = new Set();
+  if (input.takeProfit || removeTakeProfit) replacementKinds.add("tp");
+  if (input.stopLoss || removeStopLoss) replacementKinds.add("sl");
+  const cancelled = await cancelExistingProtectionOrders(
+    client,
+    infoClient,
+    input.masterWalletAddress || input.agentWalletAddress,
+    input.asset,
+    index,
+    replacementKinds,
+    input.side,
+    Number(context?.markPx || 0),
+  );
   const stopLoss = await placeProtectionOrder(
     client,
     index,
@@ -333,6 +389,7 @@ async function setProtection(input) {
     "tp",
   );
   return {
+    cancelled,
     stopLoss,
     takeProfit,
     stopOrderId: stopLoss ? extractOrderId(stopLoss) : null,

@@ -371,8 +371,11 @@ def _apply_runtime_size_cap(plan: TradePlan, runtime: RuntimeSettings) -> None:
     if plan.size_usdc <= runtime.max_order_usdc:
         return
     plan.size_usdc = round(runtime.max_order_usdc, 2)
-    stop_distance_pct = abs(plan.entry_price - plan.stop_loss) / plan.entry_price
-    plan.max_loss_usdc = round(plan.size_usdc * stop_distance_pct, 2)
+    if plan.stop_loss is None:
+        plan.max_loss_usdc = 0.0
+    else:
+        stop_distance_pct = abs(plan.entry_price - plan.stop_loss) / plan.entry_price
+        plan.max_loss_usdc = round(plan.size_usdc * stop_distance_pct, 2)
     plan.rationale = (
         f"{plan.rationale} Position size was capped at the runtime max order "
         f"({runtime.max_order_usdc} USDC)."

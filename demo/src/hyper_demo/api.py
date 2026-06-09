@@ -93,6 +93,8 @@ class ClosePositionRequest(BaseModel):
 class PositionProtectionRequest(BaseModel):
     take_profit: float | None = None
     stop_loss: float | None = None
+    remove_take_profit: bool = False
+    remove_stop_loss: bool = False
     confirmed: bool = False
 
 
@@ -1721,9 +1723,16 @@ def _validate_position_protection(
     mark_price: float,
     take_profit: float | None,
     stop_loss: float | None,
+    remove_take_profit: bool = False,
+    remove_stop_loss: bool = False,
 ) -> None:
-    if take_profit is None and stop_loss is None:
-        raise ExecutionBlocked("Set at least one take profit or stop loss price.")
+    if (
+        take_profit is None
+        and stop_loss is None
+        and not remove_take_profit
+        and not remove_stop_loss
+    ):
+        raise ExecutionBlocked("Set or remove at least one take profit or stop loss price.")
     reference = mark_price or entry_price
     if side == TradeSide.long:
         if take_profit is not None and (take_profit <= entry_price or take_profit <= reference):
@@ -1822,6 +1831,8 @@ def set_position_protection(asset: str, request: PositionProtectionRequest):
             mark_price,
             request.take_profit,
             request.stop_loss,
+            request.remove_take_profit,
+            request.remove_stop_loss,
         )
         protection = PrivyHyperliquidAdapter(settings).set_position_protection(
             agent=agent,
@@ -1830,6 +1841,8 @@ def set_position_protection(asset: str, request: PositionProtectionRequest):
             side=side,
             take_profit=request.take_profit,
             stop_loss=request.stop_loss,
+            remove_take_profit=request.remove_take_profit,
+            remove_stop_loss=request.remove_stop_loss,
             confirmed=request.confirmed,
         )
     except (ExecutionBlocked, ValueError) as exc:
@@ -1843,12 +1856,20 @@ def set_position_protection(asset: str, request: PositionProtectionRequest):
     order = _latest_position_order(store, normalized_asset)
     plan = store.get("plans", order.plan_id) if order else None
     if plan:
+        updated_take_profit = (
+            None
+            if request.remove_take_profit
+            else request.take_profit if request.take_profit is not None else plan.take_profit
+        )
+        updated_stop_loss = (
+            None
+            if request.remove_stop_loss
+            else request.stop_loss if request.stop_loss is not None else plan.stop_loss
+        )
         plan = plan.model_copy(
             update={
-                "take_profit": (
-                    request.take_profit if request.take_profit is not None else plan.take_profit
-                ),
-                "stop_loss": request.stop_loss if request.stop_loss is not None else plan.stop_loss,
+                "take_profit": updated_take_profit,
+                "stop_loss": updated_stop_loss,
             }
         )
         store.save("plans", plan)
@@ -1856,8 +1877,9 @@ def set_position_protection(asset: str, request: PositionProtectionRequest):
         order = order.model_copy(
             update={
                 "take_profit_order_id": protection.get("takeProfitOrderId")
-                or order.take_profit_order_id,
-                "stop_order_id": protection.get("stopOrderId") or order.stop_order_id,
+                or (None if request.remove_take_profit else order.take_profit_order_id),
+                "stop_order_id": protection.get("stopOrderId")
+                or (None if request.remove_stop_loss else order.stop_order_id),
                 "raw_response": {
                     **order.raw_response,
                     "protection": protection,
@@ -1874,6 +1896,8 @@ def set_position_protection(asset: str, request: PositionProtectionRequest):
                 "asset": normalized_asset,
                 "take_profit": request.take_profit,
                 "stop_loss": request.stop_loss,
+                "remove_take_profit": request.remove_take_profit,
+                "remove_stop_loss": request.remove_stop_loss,
                 "take_profit_order_id": protection.get("takeProfitOrderId"),
                 "stop_order_id": protection.get("stopOrderId"),
             },

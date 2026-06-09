@@ -41,22 +41,33 @@ def build_trade_plan(
     leverage = min(profile.recommended_leverage_cap, 2.0)
 
     if side == TradeSide.long:
-        stop_loss = price.mark_price * (1 - stop_pct)
+        calculated_stop_loss = price.mark_price * (1 - stop_pct)
         take_profit = price.mark_price * (1 + stop_pct * reward_multiple)
     else:
-        stop_loss = price.mark_price * (1 + stop_pct)
+        calculated_stop_loss = price.mark_price * (1 + stop_pct)
         take_profit = price.mark_price * (1 - stop_pct * reward_multiple)
+    stop_loss = (
+        round(calculated_stop_loss, 4)
+        if leverage >= 10
+        else None
+    )
+    max_loss_usdc = round(max_loss, 2) if stop_loss is not None else 0.0
 
     rationale = (
         f"Testnet-only {side.value} proposal for {request.asset} based on the risk profile "
         f"and the latest research thesis. Mark price source: {price.source}."
     )
+    if stop_loss is None:
+        rationale = (
+            f"{rationale} No stop-loss is attached because leverage is below 10x; "
+            "the plan relies on active monitoring, thesis invalidation, and take-profit."
+        )
     if research:
         rationale = f"{rationale} Thesis: {research.thesis[:260]}"
 
     invalidation = [
         "The agent cannot verify current market structure or source quality.",
-        "The stop-loss order is missing, rejected, or no longer aligned with the position.",
+        "The monitored thesis invalidates or the trade is no longer expected to close intraday.",
         "Portfolio beta or drawdown exceeds the guardrails from the risk profile.",
     ]
     if research:
@@ -67,9 +78,9 @@ def build_trade_plan(
         side=side,
         size_usdc=round(size_usdc, 2),
         entry_price=round(price.mark_price, 4),
-        stop_loss=round(stop_loss, 4),
+        stop_loss=stop_loss,
         take_profit=round(take_profit, 4),
-        max_loss_usdc=round(max_loss, 2),
+        max_loss_usdc=max_loss_usdc,
         leverage=round(leverage, 2),
         profile_id=profile.id,
         research_id=research.id if research else None,

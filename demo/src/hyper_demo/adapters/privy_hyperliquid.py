@@ -235,24 +235,34 @@ class PrivyHyperliquidAdapter:
         side: TradeSide,
         take_profit: float | None,
         stop_loss: float | None,
+        remove_take_profit: bool,
+        remove_stop_loss: bool,
         confirmed: bool,
     ) -> dict[str, Any]:
         self._validate_privy_config()
         if not confirmed:
             raise ExecutionBlocked("Confirm TP/SL before submitting reduce-only trigger orders.")
-        if take_profit is None and stop_loss is None:
-            raise ExecutionBlocked("Set at least one take profit or stop loss price.")
+        if (
+            take_profit is None
+            and stop_loss is None
+            and not remove_take_profit
+            and not remove_stop_loss
+        ):
+            raise ExecutionBlocked("Set or remove at least one take profit or stop loss price.")
         return self._run_helper(
             "set-protection",
             {
                 "network": agent.network.value,
                 "agentWalletId": agent.agent_wallet_id,
                 "agentWalletAddress": agent.agent_wallet_address,
+                "masterWalletAddress": agent.master_wallet_address,
                 "asset": asset,
                 "size": size,
                 "side": side.value,
                 "takeProfit": take_profit,
                 "stopLoss": stop_loss,
+                "removeTakeProfit": remove_take_profit,
+                "removeStopLoss": remove_stop_loss,
             },
         )
 

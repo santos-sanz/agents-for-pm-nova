@@ -828,6 +828,122 @@ def test_chat_formal_validation_blocks_unbuffered_minimum_order(
     assert any("10.25 USDC" in item for item in payload["validation"]["errors"])
 
 
+def test_chat_formal_validation_allows_sub_10x_take_profit_without_stop_loss(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("PRIVY_EXECUTION_ENABLED", "true")
+    monkeypatch.setenv("PRIVY_APP_ID", "app")
+    monkeypatch.setenv("PRIVY_APP_SECRET", "secret")
+    store = JsonStore()
+    store.save("runtime", RuntimeSettings(network="prodnet"))
+    store.save(
+        "privy_agent_wallet",
+        PrivyAgentWallet(
+            id="privy_agent_wallet_prodnet",
+            network="prodnet",
+            master_wallet_id="master-id",
+            master_wallet_address="0x0000000000000000000000000000000000000000",
+            agent_wallet_id="agent-id",
+            agent_wallet_address="0x0000000000000000000000000000000000000001",
+            registered=True,
+        ),
+    )
+    plan = TradePlan(
+        asset="ETH",
+        side="long",
+        size_usdc=12,
+        entry_type="market",
+        entry_price=100,
+        stop_loss=None,
+        take_profit=104,
+        leverage=3,
+        rationale="test",
+        invalidation_criteria=["Close manually if thesis invalidates."],
+        network="prodnet",
+    )
+    store.save("plans", plan)
+
+    def fake_wallet_state(self, agent):
+        return {"withdrawable_usdc": 10, "open_positions": []}
+
+    def fake_mark(self, asset):
+        return MarketPrice(asset=asset, mark_price=100, source="test")
+
+    monkeypatch.setattr("hyper_demo.api.PrivyHyperliquidAdapter.wallet_state", fake_wallet_state)
+    monkeypatch.setattr("hyper_demo.api.MarketDataClient.mark_price", fake_mark)
+
+    payload = run_chat_custom_tool(
+        ManagedChatSession(title="Validator"),
+        {"name": "trading_validate_plan", "input": {"plan_id": plan.id}},
+    )
+
+    assert payload["validation"]["valid"] is True
+    assert any(
+        "No stop_loss attached for sub-10x" in item
+        for item in payload["validation"]["checks"]
+    )
+
+
+def test_chat_formal_validation_requires_stop_loss_at_10x(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("PRIVY_EXECUTION_ENABLED", "true")
+    monkeypatch.setenv("PRIVY_APP_ID", "app")
+    monkeypatch.setenv("PRIVY_APP_SECRET", "secret")
+    store = JsonStore()
+    store.save("runtime", RuntimeSettings(network="prodnet"))
+    store.save(
+        "privy_agent_wallet",
+        PrivyAgentWallet(
+            id="privy_agent_wallet_prodnet",
+            network="prodnet",
+            master_wallet_id="master-id",
+            master_wallet_address="0x0000000000000000000000000000000000000000",
+            agent_wallet_id="agent-id",
+            agent_wallet_address="0x0000000000000000000000000000000000000001",
+            registered=True,
+        ),
+    )
+    plan = TradePlan(
+        asset="ETH",
+        side="long",
+        size_usdc=12,
+        entry_type="market",
+        entry_price=100,
+        stop_loss=None,
+        take_profit=104,
+        leverage=10,
+        rationale="test",
+        invalidation_criteria=["Close manually if thesis invalidates."],
+        network="prodnet",
+    )
+    store.save("plans", plan)
+
+    def fake_wallet_state(self, agent):
+        return {"withdrawable_usdc": 10, "open_positions": []}
+
+    def fake_mark(self, asset):
+        return MarketPrice(asset=asset, mark_price=100, source="test")
+
+    monkeypatch.setattr("hyper_demo.api.PrivyHyperliquidAdapter.wallet_state", fake_wallet_state)
+    monkeypatch.setattr("hyper_demo.api.MarketDataClient.mark_price", fake_mark)
+
+    payload = run_chat_custom_tool(
+        ManagedChatSession(title="Validator"),
+        {"name": "trading_validate_plan", "input": {"plan_id": plan.id}},
+    )
+
+    assert payload["validation"]["valid"] is False
+    assert any(
+        "10x leverage or higher require stop_loss" in item
+        for item in payload["validation"]["errors"]
+    )
+
+
 def test_chat_autonomous_execution_requires_robot_mode(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("HYPERLIQUID_MAINNET_ENABLED", "true")
@@ -854,7 +970,7 @@ def test_chat_autonomous_execution_requires_robot_mode(tmp_path, monkeypatch) ->
         size_usdc=12,
         entry_type="market",
         entry_price=100,
-        stop_loss=98,
+        stop_loss=None,
         take_profit=104,
         leverage=2,
         rationale="test",
@@ -1077,7 +1193,7 @@ def test_chat_autonomous_execution_runs_in_robot_mode_after_validation(
         size_usdc=12,
         entry_type="market",
         entry_price=100,
-        stop_loss=98,
+        stop_loss=None,
         take_profit=104,
         leverage=2,
         rationale="test",
@@ -2075,12 +2191,114 @@ def test_set_position_protection_updates_plan_and_order(tmp_path, monkeypatch) -
     assert captured["side"] == "long"
     assert captured["take_profit"] == 63000
     assert captured["stop_loss"] == 60000
+    assert captured["remove_take_profit"] is False
+    assert captured["remove_stop_loss"] is False
     updated_plan = store.get("plans", plan.id)
     assert updated_plan.take_profit == 63000
     assert updated_plan.stop_loss == 60000
     updated_order = store.get("orders", order.id)
     assert updated_order.take_profit_order_id == "tp-oid"
     assert updated_order.stop_order_id == "stop-oid"
+
+
+def test_set_position_protection_can_remove_existing_stop_loss(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("PRIVY_EXECUTION_ENABLED", "true")
+    monkeypatch.setenv("PRIVY_APP_ID", "app")
+    monkeypatch.setenv("PRIVY_APP_SECRET", "secret")
+    store = JsonStore()
+    store.save("runtime", RuntimeSettings(network="prodnet"))
+    store.save(
+        "privy_agent_wallet",
+        PrivyAgentWallet(
+            id="privy_agent_wallet_prodnet",
+            master_wallet_id="master-id",
+            master_wallet_address="0x0000000000000000000000000000000000000000",
+            agent_wallet_id="agent-id",
+            agent_wallet_address="0x0000000000000000000000000000000000000001",
+            network="prodnet",
+            registered=True,
+        ),
+    )
+    plan = TradePlan(
+        asset="BTC",
+        side="long",
+        size_usdc=12,
+        entry_price=61792,
+        take_profit=63000,
+        stop_loss=60000,
+        leverage=3,
+        rationale="test",
+        invalidation_criteria=["test"],
+        network="prodnet",
+        status="executed",
+    )
+    store.save("plans", plan)
+    order = store.save(
+        "orders",
+        OrderRecord(
+            plan_id=plan.id,
+            exchange="hyperliquid-mainnet",
+            asset="BTC",
+            side="long",
+            size_usdc=12,
+            entry_order_id="entry-oid",
+            take_profit_order_id="tp-oid",
+            stop_order_id="stop-oid",
+            message="submitted",
+        ),
+    )
+    captured = {}
+
+    def fake_wallet_state(self, runtime_agent):
+        return {
+            "open_positions": [
+                {
+                    "position": {
+                        "coin": "BTC",
+                        "szi": "0.00017",
+                        "entryPx": "61792",
+                        "markPx": "62000",
+                        "positionValue": "10.54",
+                    }
+                }
+            ],
+            "open_orders": [],
+        }
+
+    def fake_set_position_protection(self, **kwargs):
+        captured.update(kwargs)
+        return {
+            "cancelled": {"status": "ok"},
+            "stopOrderId": None,
+            "takeProfitOrderId": "tp-new",
+            "stopLoss": None,
+            "takeProfit": {"status": "ok"},
+        }
+
+    monkeypatch.setattr("hyper_demo.api.PrivyHyperliquidAdapter.wallet_state", fake_wallet_state)
+    monkeypatch.setattr(
+        "hyper_demo.api.PrivyHyperliquidAdapter.set_position_protection",
+        fake_set_position_protection,
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/positions/BTC/protection",
+        json={"confirmed": True, "take_profit": 63100, "remove_stop_loss": True},
+    )
+
+    assert response.status_code == 200
+    assert captured["take_profit"] == 63100
+    assert captured["stop_loss"] is None
+    assert captured["remove_take_profit"] is False
+    assert captured["remove_stop_loss"] is True
+    updated_plan = store.get("plans", plan.id)
+    assert updated_plan.take_profit == 63100
+    assert updated_plan.stop_loss is None
+    updated_order = store.get("orders", order.id)
+    assert updated_order.take_profit_order_id == "tp-new"
+    assert updated_order.stop_order_id is None
 
 
 def test_set_position_protection_rejects_wrong_side_levels(tmp_path, monkeypatch) -> None:
