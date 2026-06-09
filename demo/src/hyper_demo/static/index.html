@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>HyperClaude</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%236fa874'/%3E%3Ctext x='32' y='40' text-anchor='middle' font-family='Arial' font-size='24' font-weight='700' fill='%2310110f'%3EHC%3C/text%3E%3C/svg%3E" />
-    <link rel="stylesheet" href="/static/styles.css?v=hyperclaude-trading-ui-20260609-43" />
+    <link rel="stylesheet" href="/static/styles.css?v=hyperclaude-managed-chat-20260609-2" />
   </head>
   <body class="trading-screen" data-screen="trading">
     <header class="topbar">
@@ -18,6 +18,7 @@
       </a>
       <nav class="app-nav" aria-label="Primary">
         <button class="active" data-screen="trading">Trading</button>
+        <button data-screen="chat">Chat</button>
         <button data-screen="settings">Settings</button>
       </nav>
     </header>
@@ -242,11 +243,125 @@
 
         </div>
       </section>
+
+      <section id="chat-screen" class="chat-screen" hidden>
+        <div class="chat-grid">
+          <aside class="chat-sidebar">
+            <section class="panel chat-status-panel">
+              <div class="panel-head">
+                <div>
+                  <span class="eyebrow">Managed Agents</span>
+                  <h2>Chat resources</h2>
+                </div>
+                <span id="chat-bootstrap-status" class="pill neutral">checking</span>
+              </div>
+              <div id="chat-resource-grid" class="chat-resource-grid"></div>
+              <div class="button-row">
+                <button type="button" data-action="chat-bootstrap">Bootstrap</button>
+                <button type="button" data-action="chat-refresh">Refresh</button>
+              </div>
+            </section>
+
+            <section class="panel chat-sessions-panel">
+              <div class="panel-head">
+                <div>
+                  <span class="eyebrow">Conversations</span>
+                  <h2>Sessions</h2>
+                </div>
+                <button type="button" data-action="chat-new-session">New</button>
+              </div>
+              <div id="chat-session-list" class="chat-session-list"></div>
+            </section>
+          </aside>
+
+          <section class="panel chat-transcript-panel">
+            <div class="panel-head">
+              <div>
+                <span class="eyebrow">Autonomous agent</span>
+                <h1 id="chat-session-title">Chat</h1>
+              </div>
+              <div class="chat-head-actions">
+                <button type="button" data-action="chat-interrupt">Interrupt</button>
+                <button type="button" data-action="chat-archive">Archive</button>
+              </div>
+            </div>
+            <div id="chat-events-list" class="chat-events-list"></div>
+            <div class="chat-composer">
+              <label class="field">
+                Message
+                <textarea id="chat-message-input" rows="3" placeholder="Ask the trading agent to research, validate, improve, or propose an action."></textarea>
+              </label>
+              <button class="primary" type="button" data-action="chat-send-message">Send</button>
+            </div>
+            <div class="chat-outcome-box">
+              <div>
+                <span class="eyebrow">Outcome mode</span>
+                <h2>Self-evaluate before action</h2>
+              </div>
+              <label class="field">
+                Outcome
+                <textarea id="chat-outcome-description" rows="2" placeholder="Produce the highest-quality BTC plan with explicit risk and evidence scoring."></textarea>
+              </label>
+              <label class="field">
+                Rubric
+                <textarea id="chat-outcome-rubric" rows="3" placeholder="Grade source quality, risk control, execution validity, and clarity. Reject if evidence is stale or guardrails fail."></textarea>
+              </label>
+              <label class="field compact-field">
+                Iterations
+                <input id="chat-outcome-iterations" type="number" min="1" max="20" value="5" />
+              </label>
+              <button type="button" data-action="chat-define-outcome">Run outcome loop</button>
+            </div>
+          </section>
+
+          <aside class="chat-inspector">
+            <section class="panel">
+              <div class="panel-head">
+                <div>
+                  <span class="eyebrow">Vaults</span>
+                  <h2>Credentials</h2>
+                </div>
+              </div>
+              <div id="chat-vault-status" class="vault-status"></div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-head">
+                <div>
+                  <span class="eyebrow">Actions</span>
+                  <h2>Pending</h2>
+                </div>
+              </div>
+              <div id="chat-pending-actions" class="chat-pending-actions"></div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-head">
+                <div>
+                  <span class="eyebrow">Trading</span>
+                  <h2>Latest plans</h2>
+                </div>
+              </div>
+              <div id="chat-plan-actions" class="chat-plan-actions"></div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-head">
+                <div>
+                  <span class="eyebrow">Capabilities</span>
+                  <h2>Tools & memory</h2>
+                </div>
+              </div>
+              <div id="chat-capabilities" class="chat-capabilities"></div>
+            </section>
+          </aside>
+        </div>
+      </section>
     </main>
 
     <div id="toast" role="status" aria-live="polite"></div>
     <script src="/vendor/lightweight-charts/lightweight-charts.standalone.production.js"></script>
-    <script src="/static/app.js?v=hyperclaude-trading-ui-20260609-61"></script>
+    <script src="/static/app.js?v=hyperclaude-managed-chat-20260609-2"></script>
     <script type="module" src="/static/privy.js?v=hyperclaude-integrated-funding-20260609-4"></script>
   </body>
 </html>

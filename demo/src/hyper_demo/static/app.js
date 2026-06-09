@@ -62,6 +62,15 @@ const state = {
   isSubmittingOrder: false,
   showSensitiveWalletData: false,
   masterFundingBalances: null,
+  chat: {
+    resources: null,
+    sessions: [],
+    events: {},
+    capabilities: null,
+    activeSessionId: null,
+    isLoading: false,
+    isSending: false,
+  },
 };
 
 const DEFAULT_ASSETS = ["BTC", "ETH", "SOL", "HYPE"];
@@ -92,6 +101,9 @@ const realtimeRuntime = {
   renderTimer: null,
   socket: null,
   url: "",
+};
+const chatRuntime = {
+  pollTimer: null,
 };
 const INTERVAL_SECONDS = {
   "15m": 15 * 60,
@@ -294,6 +306,11 @@ async function loadState() {
     state.marketAssets = [];
     console.warn("Hyperliquid assets unavailable", error);
   }
+  try {
+    await loadChatState({ renderAfter: false });
+  } catch (error) {
+    console.warn("Managed chat unavailable", error);
+  }
   render();
   startRealtimeMarketData();
   loadChartCandles().catch((error) => toast(error.message));
@@ -312,6 +329,7 @@ function render() {
   renderConnectedWallet();
   renderTradingView();
   renderEvents();
+  renderChat();
 }
 
 function renderRuntime() {
@@ -331,7 +349,7 @@ function renderRuntime() {
   renderAssetPicker("allowed");
   renderAssetPicker("watchlist");
   renderMarketRail();
-  for (const button of document.querySelectorAll("[data-network]")) {
+  for (const button of document.querySelectorAll(".network-card[data-network]")) {
     button.classList.toggle("active", button.dataset.network === (runtime.network || DEFAULT_NETWORK));
   }
   document.body.dataset.uiMode = "human";
@@ -759,10 +777,17 @@ function renderScreen() {
   document.body.classList.remove("active");
   document.body.classList.toggle("trading-screen", state.screen === "trading");
   document.body.classList.toggle("settings-screen-active", state.screen === "settings");
+  document.body.classList.toggle("chat-screen-active", state.screen === "chat");
   for (const button of document.querySelectorAll(".app-nav [data-screen]")) {
     button.classList.toggle("active", button.dataset.screen === state.screen);
   }
   $("#settings-screen").hidden = state.screen !== "settings";
+  $("#chat-screen").hidden = state.screen !== "chat";
+  if (state.screen === "chat") {
+    startChatPolling();
+  } else {
+    stopChatPolling();
+  }
 }
 
 function renderPortfolio() {
@@ -2263,6 +2288,397 @@ function renderEvents() {
     : "<div class='event'><p>No events yet.</p></div>";
 }
 
+async function loadChatState({ renderAfter = true } = {}) {
+  const payload = await api("/api/chat/state");
+  state.chat.resources = payload.resources;
+  state.chat.sessions = payload.sessions || [];
+  state.chat.capabilities = payload.capabilities || null;
+  if (!state.chat.activeSessionId && state.chat.sessions.length) {
+    state.chat.activeSessionId = state.chat.sessions[0].id;
+  }
+  if (state.chat.activeSessionId) {
+    await loadChatEvents(state.chat.activeSessionId, { renderAfter: false });
+  }
+  if (renderAfter) renderChat();
+}
+
+async function loadChatEvents(sessionId = state.chat.activeSessionId, { renderAfter = true } = {}) {
+  if (!sessionId) return [];
+  const events = await api(`/api/chat/sessions/${encodeURIComponent(sessionId)}/events`);
+  state.chat.events[sessionId] = events;
+  if (renderAfter) renderChat();
+  return events;
+}
+
+function selectedChatSession() {
+  return (state.chat.sessions || []).find((session) => session.id === state.chat.activeSessionId) || null;
+}
+
+function activeChatEvents() {
+  const session = selectedChatSession();
+  if (!session) return [];
+  return state.chat.events[session.id] || [];
+}
+
+function renderChat() {
+  if (!$("#chat-screen")) return;
+  renderChatResources();
+  renderChatSessions();
+  renderChatTranscript();
+  renderChatInspector();
+}
+
+function renderChatResources() {
+  const resources = state.chat.resources || {};
+  const status = $("#chat-bootstrap-status");
+  if (status) {
+    status.className = `pill ${chatStatusClass(resources.status)}`;
+    status.textContent = resources.status || "disabled";
+  }
+  const grid = $("#chat-resource-grid");
+  if (!grid) return;
+  const skillCount = Object.keys(resources.skill_ids || {}).length;
+  const memoryCount = Object.keys(resources.memory_store_ids || {}).length;
+  const vaultCount = (resources.vault_ids || []).length;
+  const mcpCount = (resources.mcp_servers || []).length;
+  grid.innerHTML = [
+    ["Environment", resources.environment_id ? shortId(resources.environment_id) : "not ready"],
+    ["Coordinator", resources.coordinator_agent_id ? shortId(resources.coordinator_agent_id) : "not ready"],
+    ["Skills", String(skillCount)],
+    ["Memory", String(memoryCount)],
+    ["Vaults", String(vaultCount)],
+    ["MCP", String(mcpCount)],
+  ]
+    .map(([label, value]) => `<div><span>${label}</span><b>${escapeHtml(value)}</b></div>`)
+    .join("");
+  if (resources.disabled_reason || resources.error) {
+    grid.innerHTML += `<p class="chat-warning">${escapeHtml(resources.disabled_reason || resources.error)}</p>`;
+  }
+}
+
+function renderChatSessions() {
+  const list = $("#chat-session-list");
+  if (!list) return;
+  const sessions = state.chat.sessions || [];
+  list.innerHTML = sessions.length
+    ? sessions
+        .map(
+          (session) => `
+            <button
+              type="button"
+              class="chat-session-item ${session.id === state.chat.activeSessionId ? "active" : ""}"
+              data-chat-session="${escapeHtml(session.id)}"
+            >
+              <span>${escapeHtml(session.title || "Chat session")}</span>
+              <small>${escapeHtml(session.status || "idle")} · ${chatTime(session.updated_at || session.created_at)}</small>
+            </button>
+          `,
+        )
+        .join("")
+    : "<div class='chat-empty-state'>No sessions yet.</div>";
+}
+
+function renderChatTranscript() {
+  const session = selectedChatSession();
+  const title = $("#chat-session-title");
+  if (title) title.textContent = session?.title || "Chat";
+  const list = $("#chat-events-list");
+  if (!list) return;
+  const events = activeChatEvents();
+  list.innerHTML = events.length
+    ? events
+        .map(
+          (event) => `
+            <article class="chat-event ${escapeHtml(event.role || "system")} ${escapeHtml(event.level || "info")}">
+              <div class="chat-event-meta">
+                <span>${escapeHtml(chatEventLabel(event.type))}</span>
+                <time>${chatTime(event.created_at)}</time>
+              </div>
+              <p>${escapeHtml(chatEventText(event))}</p>
+              ${chatEventPayload(event)}
+            </article>
+          `,
+        )
+        .join("")
+    : "<div class='chat-empty-state'>Start a session and send a message.</div>";
+  list.scrollTop = list.scrollHeight;
+}
+
+function renderChatInspector() {
+  renderVaultStatus();
+  renderPendingChatActions();
+  renderChatPlanActions();
+  renderChatCapabilities();
+}
+
+function renderVaultStatus() {
+  const target = $("#chat-vault-status");
+  if (!target) return;
+  const credentials = state.chat.resources?.credentials || [];
+  target.innerHTML = credentials.length
+    ? credentials
+        .map(
+          (credential) => `
+            <div class="vault-row">
+              <span class="pill ${chatStatusClass(credential.status)}">${escapeHtml(credential.status)}</span>
+              <div>
+                <b>${escapeHtml(credential.name)}</b>
+                <small>${escapeHtml(credential.kind)}${credential.mcp_server ? ` · ${escapeHtml(credential.mcp_server)}` : ""}</small>
+                <p>${escapeHtml(credential.message || "")}</p>
+              </div>
+            </div>
+          `,
+        )
+        .join("")
+    : "<div class='chat-empty-state'>No credential status yet.</div>";
+}
+
+function renderPendingChatActions() {
+  const target = $("#chat-pending-actions");
+  if (!target) return;
+  const pending = activeChatEvents().filter((event) => event.requires_action);
+  target.innerHTML = pending.length
+    ? pending
+        .map((event) => {
+          const toolId = event.payload?.id || event.payload?.tool_use_id || "";
+          return `
+            <div class="pending-action">
+              <b>${escapeHtml(event.payload?.name || chatEventLabel(event.type))}</b>
+              <p>${escapeHtml(chatEventText(event))}</p>
+              ${
+                toolId
+                  ? `<div class="button-row">
+                      <button type="button" data-action="chat-confirm-tool" data-tool-id="${escapeHtml(toolId)}" data-tool-allow="true">Allow</button>
+                      <button type="button" class="danger" data-action="chat-confirm-tool" data-tool-id="${escapeHtml(toolId)}" data-tool-allow="false">Deny</button>
+                    </div>`
+                  : ""
+              }
+            </div>
+          `;
+        })
+        .join("")
+    : "<div class='chat-empty-state'>No pending tool confirmations.</div>";
+}
+
+function renderChatPlanActions() {
+  const target = $("#chat-plan-actions");
+  if (!target) return;
+  const eventPlan = activeChatEvents()
+    .slice()
+    .reverse()
+    .map((event) => event.payload?.result?.plan)
+    .find(Boolean);
+  const plan = state.plan || eventPlan;
+  target.innerHTML = plan
+    ? `
+      <div class="chat-plan-card">
+        <span class="pill ${decisionClass(plan.execution_decision)}">${escapeHtml(plan.execution_decision || "proposed")}</span>
+        <h3>${escapeHtml(displayPerpLabel(plan.asset))} ${escapeHtml(plan.side)}</h3>
+        <p>${escapeHtml(plan.rationale || plan.thesis || "Latest stored plan.")}</p>
+        <div class="kv mini">
+          <div><span>Size</span><b>${money(plan.size_usdc)}</b></div>
+          <div><span>Entry</span><b>${compactPrice(plan.entry_price)}</b></div>
+          <div><span>Lev</span><b>${number(plan.leverage, 1)}x</b></div>
+        </div>
+        <button type="button" data-action="chat-execute-plan">Execute guarded</button>
+      </div>
+    `
+    : "<div class='chat-empty-state'>No stored trade plan.</div>";
+}
+
+function renderChatCapabilities() {
+  const target = $("#chat-capabilities");
+  if (!target) return;
+  const resources = state.chat.resources || {};
+  const capabilities = state.chat.capabilities || {};
+  const tools = capabilities.custom_tools || resources.custom_tools || [];
+  target.innerHTML = `
+    <div class="capability-list">
+      <div><span>Sandbox tools</span><b>${capabilities.managed_agents ? "enabled" : "disabled"}</b></div>
+      <div><span>Outcome max</span><b>${escapeHtml(String(capabilities.max_outcome_iterations || 5))}</b></div>
+      <div><span>Dreams</span><b>${capabilities.dreams ? "opt-in on" : "off"}</b></div>
+      <div><span>Custom tools</span><b>${tools.length}</b></div>
+    </div>
+    <div class="tool-chip-list">
+      ${tools.map((tool) => `<span>${escapeHtml(tool)}</span>`).join("")}
+    </div>
+  `;
+}
+
+function chatStatusClass(status) {
+  if (["ready", "connected", "idle"].includes(status)) return "gain";
+  if (["error", "missing", "terminated"].includes(status)) return "loss";
+  if (["disabled", "waiting_action", "running", "unavailable"].includes(status)) return "warning";
+  return "neutral";
+}
+
+function shortId(value) {
+  const text = String(value || "");
+  if (text.length <= 16) return text || "--";
+  return `${text.slice(0, 8)}...${text.slice(-4)}`;
+}
+
+function chatTime(value) {
+  if (!value) return "--";
+  return new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function chatEventLabel(type) {
+  return String(type || "event").replaceAll(".", " ");
+}
+
+function chatEventText(event) {
+  if (event.text) return event.text;
+  if (event.payload?.message) return event.payload.message;
+  if (event.payload?.name) return `Tool requested: ${event.payload.name}`;
+  return "";
+}
+
+function chatEventPayload(event) {
+  const payload = event.payload || {};
+  const interesting = {};
+  for (const key of ["name", "input", "result", "usage", "stop_reason", "thread_id"]) {
+    if (payload[key] !== undefined) interesting[key] = payload[key];
+  }
+  if (!Object.keys(interesting).length) return "";
+  return `<pre>${escapeHtml(JSON.stringify(interesting, null, 2))}</pre>`;
+}
+
+async function refreshChat() {
+  await loadChatState();
+  toast("Chat refreshed");
+}
+
+async function bootstrapChat() {
+  state.chat.isLoading = true;
+  renderChat();
+  try {
+    state.chat.resources = await api("/api/chat/bootstrap", {
+      method: "POST",
+      body: JSON.stringify({ force: true }),
+    });
+    await loadChatState();
+    toast("Managed Agents resources rebuilt");
+  } finally {
+    state.chat.isLoading = false;
+    renderChat();
+  }
+}
+
+async function createChatSession() {
+  const session = await api("/api/chat/sessions", {
+    method: "POST",
+    body: JSON.stringify({ title: `Trading Chat ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` }),
+  });
+  state.chat.activeSessionId = session.id;
+  await loadChatState();
+  startChatPolling();
+  toast("Chat session ready");
+}
+
+async function ensureChatSession() {
+  if (state.chat.activeSessionId) return state.chat.activeSessionId;
+  await createChatSession();
+  return state.chat.activeSessionId;
+}
+
+async function sendChatMessage() {
+  const input = $("#chat-message-input");
+  const message = input?.value.trim();
+  if (!message) throw new Error("Enter a chat message.");
+  const sessionId = await ensureChatSession();
+  state.chat.isSending = true;
+  renderChat();
+  try {
+    await api(`/api/chat/sessions/${encodeURIComponent(sessionId)}/messages`, {
+      method: "POST",
+      body: JSON.stringify({ message }),
+    });
+    input.value = "";
+    await loadChatState();
+    startChatPolling();
+  } finally {
+    state.chat.isSending = false;
+    renderChat();
+  }
+}
+
+async function defineChatOutcome() {
+  const description = $("#chat-outcome-description")?.value.trim();
+  const rubric = $("#chat-outcome-rubric")?.value.trim();
+  const maxIterations = Number($("#chat-outcome-iterations")?.value || 5);
+  if (!description || !rubric) throw new Error("Outcome and rubric are required.");
+  const sessionId = await ensureChatSession();
+  await api(`/api/chat/sessions/${encodeURIComponent(sessionId)}/outcomes`, {
+    method: "POST",
+    body: JSON.stringify({
+      description,
+      rubric,
+      max_iterations: maxIterations,
+    }),
+  });
+  await loadChatState();
+  startChatPolling();
+}
+
+async function confirmChatTool(actionTarget) {
+  const sessionId = state.chat.activeSessionId;
+  if (!sessionId) throw new Error("No active Chat session.");
+  await api(`/api/chat/sessions/${encodeURIComponent(sessionId)}/tool-confirmations`, {
+    method: "POST",
+    body: JSON.stringify({
+      tool_use_id: actionTarget.dataset.toolId,
+      allow: actionTarget.dataset.toolAllow === "true",
+      deny_message: actionTarget.dataset.toolAllow === "true" ? null : "Denied from HyperClaude UI.",
+    }),
+  });
+  await loadChatState();
+}
+
+async function interruptChat() {
+  const sessionId = state.chat.activeSessionId;
+  if (!sessionId) return;
+  await api(`/api/chat/sessions/${encodeURIComponent(sessionId)}/interrupt`, { method: "POST" });
+  await loadChatState();
+}
+
+async function archiveChat() {
+  const sessionId = state.chat.activeSessionId;
+  if (!sessionId) return;
+  await api(`/api/chat/sessions/${encodeURIComponent(sessionId)}/archive`, { method: "POST" });
+  state.chat.activeSessionId = null;
+  await loadChatState();
+}
+
+async function executeChatPlan() {
+  if (!state.plan?.id) throw new Error("No trade plan to execute.");
+  await executeTrade({ confirmed: true });
+  await loadChatState();
+}
+
+function startChatPolling() {
+  const session = selectedChatSession();
+  if (!session || !["running", "waiting_action"].includes(session.status)) {
+    stopChatPolling();
+    return;
+  }
+  if (chatRuntime.pollTimer) return;
+  chatRuntime.pollTimer = window.setInterval(() => {
+    const active = selectedChatSession();
+    if (!active || !["running", "waiting_action"].includes(active.status)) {
+      stopChatPolling();
+      return;
+    }
+    loadChatEvents(active.id).catch((error) => console.warn("Chat polling failed", error));
+  }, 1500);
+}
+
+function stopChatPolling() {
+  if (!chatRuntime.pollTimer) return;
+  window.clearInterval(chatRuntime.pollTimer);
+  chatRuntime.pollTimer = null;
+}
+
 function money(value, includeCurrency = true) {
   const formatted = Number(value || 0).toLocaleString(undefined, {
     minimumFractionDigits: 2,
@@ -2915,6 +3331,15 @@ async function setPositionProtection(asset) {
 }
 
 async function runAction(action, actionTarget) {
+  if (action === "chat-bootstrap") await bootstrapChat();
+  if (action === "chat-refresh") await refreshChat();
+  if (action === "chat-new-session") await createChatSession();
+  if (action === "chat-send-message") await sendChatMessage();
+  if (action === "chat-define-outcome") await defineChatOutcome();
+  if (action === "chat-confirm-tool") await confirmChatTool(actionTarget);
+  if (action === "chat-interrupt") await interruptChat();
+  if (action === "chat-archive") await archiveChat();
+  if (action === "chat-execute-plan") await executeChatPlan();
   if (action === "save-settings") await saveRuntime();
   if (action === "scan") {
     await saveRuntime();
@@ -2979,6 +3404,19 @@ document.addEventListener("click", async (event) => {
     event.stopPropagation();
     try {
       await copyWalletAddress(copyTarget.dataset.walletTarget);
+    } catch (error) {
+      toast(error.message);
+    }
+    return;
+  }
+  const chatSessionButton = event.target.closest("[data-chat-session]");
+  if (chatSessionButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    state.chat.activeSessionId = chatSessionButton.dataset.chatSession;
+    try {
+      await loadChatEvents(state.chat.activeSessionId);
+      startChatPolling();
     } catch (error) {
       toast(error.message);
     }
@@ -3055,7 +3493,7 @@ document.addEventListener("click", async (event) => {
     setAssetList(assetClear.dataset.assetClear, []);
     return;
   }
-  const networkButton = event.target.closest("[data-network]");
+  const networkButton = event.target.closest(".network-card[data-network]");
   if (networkButton) {
     try {
       await saveRuntime({ network: networkButton.dataset.network });

@@ -1,7 +1,10 @@
+import json
+
 from fastapi.testclient import TestClient
 
-from hyper_demo.api import app
+from hyper_demo.api import app, run_chat_custom_tool
 from hyper_demo.models import (
+    ManagedChatSession,
     OrderRecord,
     PrivyAgentWallet,
     ResearchReport,
@@ -9,9 +12,100 @@ from hyper_demo.models import (
     TradePlan,
 )
 from hyper_demo.services.hypertracker import MarketIntelligence
+from hyper_demo.services.managed_chat import ManagedTradingChatService
 from hyper_demo.services.market import MarketAsset, MarketPrice
 from hyper_demo.services.perplexity import FinanceContext
 from hyper_demo.storage import JsonStore
+
+
+class FakeManagedObject:
+    def __init__(self, item_id: str, version: int | None = None) -> None:
+        self.id = item_id
+        self.version = version
+
+
+class FakeManagedStream:
+    def __init__(self, events):
+        self.events = events
+
+    def __enter__(self):
+        return iter(self.events)
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+class FakeManagedEvents:
+    def __init__(self) -> None:
+        self.sent = []
+        self.stream_events = [
+            {
+                "type": "agent.message",
+                "content": [{"type": "text", "text": "Ready."}],
+            },
+            {"type": "session.status_idle", "stop_reason": {"type": "end_turn"}},
+        ]
+
+    def stream(self, session_id):
+        return FakeManagedStream(self.stream_events)
+
+    def send(self, session_id, *, events):
+        self.sent.append({"session_id": session_id, "events": events})
+        return FakeManagedObject("sent")
+
+
+class FakeManagedAnthropic:
+    def __init__(self) -> None:
+        self.beta = self
+        self.environments = self
+        self.skills = self
+        self.agents = self
+        self.sessions = self
+        self.vaults = self
+        self.credentials = self
+        self.memory_stores = self
+        self.memories = self
+        self.events = FakeManagedEvents()
+        self.created_environments = []
+        self.created_sessions = []
+        self.created_agents = []
+        self.created_skills = []
+        self.created_vaults = []
+        self.created_credentials = []
+        self._skill_count = 0
+        self._agent_count = 0
+        self._memory_count = 0
+        self._credential_count = 0
+
+    def create(self, *args, **kwargs):
+        if "environment" in kwargs.get("name", "").lower() or kwargs.get("config"):
+            self.created_environments.append(kwargs)
+            return FakeManagedObject("env_chat")
+        if kwargs.get("files") is not None:
+            self._skill_count += 1
+            self.created_skills.append(kwargs)
+            return FakeManagedObject(f"skill_{self._skill_count}", version=1)
+        if kwargs.get("model") is not None:
+            self._agent_count += 1
+            self.created_agents.append(kwargs)
+            return FakeManagedObject(f"agent_{self._agent_count}", version=1)
+        if kwargs.get("agent") is not None:
+            self.created_sessions.append(kwargs)
+            return FakeManagedObject("sess_chat")
+        if kwargs.get("display_name") and "bearer" not in kwargs.get("display_name", ""):
+            self.created_vaults.append(kwargs)
+            return FakeManagedObject("vault_chat")
+        if kwargs.get("auth") is not None:
+            self._credential_count += 1
+            self.created_credentials.append({"args": args, "kwargs": kwargs})
+            return FakeManagedObject(f"cred_{self._credential_count}")
+        if kwargs.get("name") is not None:
+            self._memory_count += 1
+            return FakeManagedObject(f"mem_{self._memory_count}")
+        return FakeManagedObject("created")
+
+    def update(self, *args, **kwargs):
+        return FakeManagedObject("updated")
 
 
 def test_agent_analyze_creates_trade_proposal(tmp_path, monkeypatch) -> None:
@@ -232,6 +326,288 @@ def test_agent_opportunities_use_testnet_gate_when_selected(tmp_path, monkeypatc
 
     assert response.status_code == 200
     assert any("testnet" in item["human_gate"].lower() for item in response.json())
+
+
+def test_chat_bootstrap_without_anthropic_key_is_disabled(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+    client = TestClient(app)
+
+    response = client.post("/api/chat/bootstrap", json={"force": True})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "disabled"
+    assert "ANTHROPIC_API_KEY" in payload["disabled_reason"]
+    session = client.post("/api/chat/sessions", json={"title": "Fallback"})
+    assert session.status_code == 200
+    assert session.json()["status"] == "disabled"
+
+
+def test_chat_bootstrap_creates_managed_resources_and_vaults(tmp_path, monkeypatch) -> None:
+    fake = FakeManagedAnthropic()
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-token")
+    monkeypatch.setenv("HYPERTRACKER_API_KEY", "hypertracker-secret")
+    monkeypatch.setenv("PERPLEXITY_API_KEY", "perplexity-secret")
+    monkeypatch.setenv(
+        "ANTHROPIC_CHAT_MCP_SERVERS",
+        json.dumps(
+            [
+                {"name": "hypertracker", "url": "https://mcp.example.com/hypertracker"},
+                {"name": "perplexity", "url": "https://mcp.example.com/perplexity"},
+            ]
+        ),
+    )
+    monkeypatch.setattr(ManagedTradingChatService, "_client", lambda self: fake)
+    client = TestClient(app)
+
+    response = client.post("/api/chat/bootstrap", json={"force": True})
+
+    assert response.status_code == 200, response.json()
+    payload = response.json()
+    dumped = json.dumps(payload)
+    assert payload["status"] == "ready"
+    assert payload["environment_id"] == "env_chat"
+    assert payload["coordinator_agent_id"] == "agent_6"
+    assert set(payload["skill_ids"]) == {
+        "hyperliquid-safety",
+        "source-quality",
+        "hypertracker-cli",
+        "trade-validation",
+        "self-improvement",
+    }
+    assert set(payload["memory_store_ids"]) == {"canon", "learning"}
+    assert payload["vault_ids"] == ["vault_chat"]
+    assert {item["name"] for item in payload["credentials"]} >= {"hypertracker", "perplexity"}
+    credential_statuses = {item["name"]: item for item in payload["credentials"]}
+    assert credential_statuses["hypertracker"]["kind"] == "vault"
+    assert credential_statuses["hypertracker"]["status"] == "connected"
+    assert credential_statuses["perplexity"]["kind"] == "vault"
+    assert credential_statuses["perplexity"]["status"] == "connected"
+    assert len(fake.created_vaults) == 1
+    assert len(fake.created_credentials) == 2
+    assert {
+        item["kwargs"]["auth"]["mcp_server_url"] for item in fake.created_credentials
+    } == {
+        "https://mcp.example.com/hypertracker",
+        "https://mcp.example.com/perplexity",
+    }
+    assert payload["mcp_servers"] == [
+        {
+            "name": "hypertracker",
+            "type": "url",
+            "url": "https://mcp.example.com/hypertracker",
+        },
+        {
+            "name": "perplexity",
+            "type": "url",
+            "url": "https://mcp.example.com/perplexity",
+        },
+    ]
+    environment_hosts = fake.created_environments[-1]["config"]["networking"]["allowed_hosts"]
+    assert "mcp.example.com" in environment_hosts
+    coordinator_agent = fake.created_agents[-1]
+    assert coordinator_agent["mcp_servers"] == payload["mcp_servers"]
+    assert {
+        tool["mcp_server_name"]
+        for tool in coordinator_agent["tools"]
+        if tool["type"] == "mcp_toolset"
+    } == {"hypertracker", "perplexity"}
+    assert "trading_close_position" in payload["custom_tools"]
+    assert "hypertracker-secret" not in dumped
+    assert "perplexity-secret" not in dumped
+    assert len(fake.created_skills) == 5
+    skill_uploads = {
+        files[0][0].split("/")[0]: files[0][1]
+        for created_skill in fake.created_skills
+        if (files := created_skill["files"])
+    }
+    assert b"uv run demo hypertracker --asset BTC" in skill_uploads["hypertracker-cli"]
+    assert b"trading_hypertracker_intelligence" in skill_uploads["hypertracker-cli"]
+    for created_skill in fake.created_skills:
+        files = created_skill["files"]
+        assert len(files) == 1
+        uploaded_path, uploaded_body = files[0]
+        assert uploaded_path.count("/") == 1
+        assert uploaded_path.endswith("/SKILL.md")
+        assert uploaded_body.startswith(b"---\nname: ")
+        assert b"\ndescription: " in uploaded_body
+
+
+def test_chat_bootstrap_creates_vault_for_api_key_tools_without_mcp(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    fake = FakeManagedAnthropic()
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-token")
+    monkeypatch.setenv("HYPERTRACKER_API_KEY", "hypertracker-secret")
+    monkeypatch.setenv("PERPLEXITY_API_KEY", "perplexity-secret")
+    monkeypatch.setattr(ManagedTradingChatService, "_client", lambda self: fake)
+    client = TestClient(app)
+
+    response = client.post("/api/chat/bootstrap", json={"force": True})
+
+    assert response.status_code == 200, response.json()
+    payload = response.json()
+    dumped = json.dumps(payload)
+    assert payload["status"] == "ready"
+    assert payload["vault_ids"] == ["vault_chat"]
+    assert len(fake.created_vaults) == 1
+    assert fake.created_credentials == []
+    credential_statuses = {item["name"]: item for item in payload["credentials"]}
+    assert credential_statuses["hypertracker"]["kind"] == "vault"
+    assert credential_statuses["hypertracker"]["status"] == "unavailable"
+    assert credential_statuses["hypertracker"]["vault_id"] == "vault_chat"
+    assert "MCP_SERVER_URL" in credential_statuses["hypertracker"]["message"]
+    assert credential_statuses["perplexity"]["kind"] == "vault"
+    assert credential_statuses["perplexity"]["status"] == "unavailable"
+    assert credential_statuses["perplexity"]["vault_id"] == "vault_chat"
+    assert "hypertracker-secret" not in dumped
+    assert "perplexity-secret" not in dumped
+
+    session = client.post("/api/chat/sessions", json={"title": "Vault fallback"}).json()
+    assert session["vault_ids"] == ["vault_chat"]
+
+
+def test_chat_bootstrap_wires_perplexity_mcp_shortcut(tmp_path, monkeypatch) -> None:
+    fake = FakeManagedAnthropic()
+    mcp_url = "https://perplexity.tunnel.example.com/mcp"
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-token")
+    monkeypatch.setenv("HYPERTRACKER_API_KEY", "")
+    monkeypatch.setenv("PERPLEXITY_API_KEY", "perplexity-secret")
+    monkeypatch.setenv("PERPLEXITY_MCP_SERVER_URL", mcp_url)
+    monkeypatch.setattr(ManagedTradingChatService, "_client", lambda self: fake)
+    client = TestClient(app)
+
+    response = client.post("/api/chat/bootstrap", json={"force": True})
+
+    assert response.status_code == 200, response.json()
+    payload = response.json()
+    dumped = json.dumps(payload)
+    assert payload["status"] == "ready"
+    assert payload["mcp_servers"] == [
+        {"name": "perplexity", "type": "url", "url": mcp_url},
+    ]
+    assert payload["vault_ids"] == ["vault_chat"]
+    credentials = {item["name"]: item for item in payload["credentials"]}
+    assert credentials["perplexity"]["kind"] == "vault"
+    assert credentials["perplexity"]["status"] == "connected"
+    assert credentials["perplexity"]["mcp_server"] == "perplexity"
+    assert credentials["perplexity"]["credential_id"] == "cred_1"
+    assert fake.created_credentials == [
+        {
+            "args": ("vault_chat",),
+            "kwargs": {
+                "display_name": "perplexity bearer token",
+                "auth": {
+                    "type": "static_bearer",
+                    "token": "perplexity-secret",
+                    "mcp_server_url": mcp_url,
+                },
+                "metadata": {"app": "hyperclaude", "tool": "perplexity"},
+            },
+        }
+    ]
+    environment_hosts = fake.created_environments[-1]["config"]["networking"]["allowed_hosts"]
+    assert "perplexity.tunnel.example.com" in environment_hosts
+    coordinator_agent = fake.created_agents[-1]
+    assert coordinator_agent["mcp_servers"] == payload["mcp_servers"]
+    assert any(
+        tool["type"] == "mcp_toolset" and tool["mcp_server_name"] == "perplexity"
+        for tool in coordinator_agent["tools"]
+    )
+    assert "perplexity-secret" not in dumped
+
+
+def test_chat_session_attaches_vaults_and_memory_resources(tmp_path, monkeypatch) -> None:
+    fake = FakeManagedAnthropic()
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-token")
+    monkeypatch.setenv("ANTHROPIC_CHAT_VAULT_IDS", "vault_existing")
+    monkeypatch.setenv("HYPERTRACKER_API_KEY", "")
+    monkeypatch.setenv("PERPLEXITY_API_KEY", "")
+    monkeypatch.setattr(ManagedTradingChatService, "_client", lambda self: fake)
+    client = TestClient(app)
+    bootstrap = client.post("/api/chat/bootstrap", json={"force": True})
+    assert bootstrap.status_code == 200
+
+    response = client.post("/api/chat/sessions", json={"title": "Autonomous desk"})
+
+    assert response.status_code == 200
+    session = response.json()
+    assert session["claude_session_id"] == "sess_chat"
+    assert session["vault_ids"] == ["vault_existing"]
+    created = fake.created_sessions[-1]
+    assert created["vault_ids"] == ["vault_existing"]
+    assert {resource["access"] for resource in created["resources"]} == {"read_only", "read_write"}
+
+
+def test_chat_custom_tool_creates_valid_plan_without_leaking_secrets(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    fake = FakeManagedAnthropic()
+    fake.events.stream_events = [
+        {
+            "id": "custom_tool_1",
+            "type": "agent.custom_tool_use",
+            "name": "trading_create_plan",
+            "input": {
+                "asset": "BTC",
+                "side": "long",
+                "entry_type": "market",
+                "size_usdc": 12,
+                "leverage": 2,
+            },
+        },
+        {"type": "session.status_idle", "stop_reason": {"type": "end_turn"}},
+    ]
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-token")
+    monkeypatch.setenv("HYPERTRACKER_API_KEY", "hypertracker-secret")
+    monkeypatch.setattr(ManagedTradingChatService, "_client", lambda self: fake)
+    client = TestClient(app)
+    assert client.post("/api/chat/bootstrap", json={"force": True}).status_code == 200
+    session = client.post("/api/chat/sessions", json={"title": "Tool test"}).json()
+
+    response = client.post(
+        f"/api/chat/sessions/{session['id']}/messages",
+        json={"message": "Create a guarded BTC plan."},
+    )
+
+    assert response.status_code == 200, response.json()
+    plan = client.get("/api/state").json()["plan"]
+    assert plan["asset"] == "BTC"
+    assert plan["source"] == "manual"
+    events = client.get(f"/api/chat/sessions/{session['id']}/events").json()
+    event_dump = json.dumps(events)
+    assert any(event["type"] == "user.custom_tool_result" for event in events)
+    assert "hypertracker-secret" not in event_dump
+    sent_events = [
+        event
+        for request in fake.events.sent
+        for event in request["events"]
+        if event["type"] == "user.custom_tool_result"
+    ]
+    assert sent_events
+    assert sent_events[0]["custom_tool_use_id"] == "custom_tool_1"
+
+
+def test_chat_market_snapshot_serializes_dataclass_price(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    session = ManagedChatSession(title="Snapshot")
+
+    payload = run_chat_custom_tool(
+        session,
+        {"name": "trading_market_snapshot", "input": {"asset": "BTC", "interval": "1h"}},
+    )
+
+    assert "market_error" not in payload
+    assert payload["mark_price"]["asset"] == "BTC"
+    assert payload["mark_price"]["mark_price"] > 0
 
 
 def test_setup_check_reflects_hypertracker_status(tmp_path, monkeypatch) -> None:

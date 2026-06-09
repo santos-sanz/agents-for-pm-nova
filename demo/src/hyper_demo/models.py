@@ -378,6 +378,63 @@ class RunEvent(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
+class ManagedChatCredentialStatus(BaseModel):
+    name: str
+    kind: Literal["vault", "backend_env", "mcp"]
+    configured: bool = False
+    status: Literal["connected", "missing", "error", "unavailable"] = "missing"
+    vault_id: str | None = None
+    credential_id: str | None = None
+    mcp_server: str | None = None
+    message: str | None = None
+
+
+class ManagedChatResources(BaseModel):
+    id: str = "managed_chat_resources"
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+    status: Literal["disabled", "ready", "error"] = "disabled"
+    disabled_reason: str | None = None
+    environment_id: str | None = None
+    coordinator_agent_id: str | None = None
+    coordinator_agent_version: int | None = None
+    subagent_ids: dict[str, str] = Field(default_factory=dict)
+    skill_ids: dict[str, str] = Field(default_factory=dict)
+    skill_versions: dict[str, int] = Field(default_factory=dict)
+    memory_store_ids: dict[str, str] = Field(default_factory=dict)
+    vault_ids: list[str] = Field(default_factory=list)
+    credentials: list[ManagedChatCredentialStatus] = Field(default_factory=list)
+    mcp_servers: list[dict[str, Any]] = Field(default_factory=list)
+    custom_tools: list[str] = Field(default_factory=list)
+    error: str | None = None
+
+
+class ManagedChatSession(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("chat_session"))
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+    title: str
+    claude_session_id: str | None = None
+    status: Literal["disabled", "idle", "running", "waiting_action", "terminated", "error"] = "idle"
+    resource_id: str = "managed_chat_resources"
+    vault_ids: list[str] = Field(default_factory=list)
+    memory_store_ids: dict[str, str] = Field(default_factory=dict)
+    usage: dict[str, Any] = Field(default_factory=dict)
+    last_error: str | None = None
+
+
+class ManagedChatEvent(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("chat_event"))
+    created_at: datetime = Field(default_factory=utc_now)
+    session_id: str
+    type: str
+    level: Literal["info", "warning", "error"] = "info"
+    role: Literal["user", "agent", "tool", "system"] | None = None
+    text: str | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
+    requires_action: bool = False
+
+
 class DemoRun(BaseModel):
     id: str = Field(default_factory=lambda: new_id("run"))
     created_at: datetime = Field(default_factory=utc_now)
