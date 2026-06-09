@@ -7,9 +7,9 @@ from hyper_demo.adapters.hyperliquid import ExecutionBlocked, HyperliquidAdapter
 from hyper_demo.adapters.privy_hyperliquid import PrivyHyperliquidAdapter
 from hyper_demo.config import Settings, settings_for_runtime
 from hyper_demo.models import (
+    AgentTradeAnalysis,
     DemoRun,
     ExecutionDecision,
-    ProposalRequest,
     RiskProfileInput,
     RunEvent,
     RuntimeNetwork,
@@ -22,8 +22,16 @@ from hyper_demo.services.hypertracker import (
     enrich_research_with_market_intelligence,
 )
 from hyper_demo.services.market import MarketDataClient
-from hyper_demo.services.proposals import build_trade_plan
+from hyper_demo.services.perplexity import (
+    PerplexityFinanceClient,
+    enrich_research_with_finance_context,
+    finance_context_prompt,
+)
 from hyper_demo.services.risk import build_investor_profile
+from hyper_demo.services.technical_analysis import (
+    build_agent_trade_analysis,
+    trade_plan_from_candidate,
+)
 from hyper_demo.storage import JsonStore
 
 AGENT_RUN_ID = "agent"
@@ -32,6 +40,7 @@ AGENT_RUN_ID = "agent"
 @dataclass(frozen=True)
 class AgentTradeResult:
     plan: TradePlan
+    analysis: AgentTradeAnalysis | None = None
     order_id: str | None = None
     run_id: str | None = None
 
@@ -74,7 +83,30 @@ async def analyze_trade(
         )
     )
     store.save("profiles", profile)
-    report = await ManagedAgentResearchClient(effective_settings).research(normalized, profile)
+    finance_context = PerplexityFinanceClient(effective_settings).context_for_asset(normalized)
+    if finance_context.available:
+        append_agent_event(
+            store,
+            "Perplexity finance_search context added to research input.",
+            payload={
+                "asset": normalized,
+                "evidence_count": len(finance_context.evidence),
+                "source_count": len(finance_context.sources),
+            },
+        )
+    else:
+        append_agent_event(
+            store,
+            "Perplexity finance_search context unavailable.",
+            level="warning",
+            payload={"asset": normalized, "assumptions": finance_context.assumptions},
+        )
+    report = await ManagedAgentResearchClient(effective_settings).research(
+        normalized,
+        profile,
+        external_context=finance_context_prompt(finance_context),
+    )
+    report = enrich_research_with_finance_context(report, finance_context)
     intelligence = HyperTrackerClient(effective_settings).intelligence_for_asset(normalized)
     report = enrich_research_with_market_intelligence(report, intelligence)
     store.save("research", report)
@@ -84,30 +116,59 @@ async def analyze_trade(
             "HyperTracker market intelligence added to research.",
             payload={"asset": normalized, "evidence_count": len(intelligence.evidence)},
         )
-    plan = build_trade_plan(
-        ProposalRequest(asset=normalized, profile_id=profile.id, research_id=report.id),
+    market = MarketDataClient(effective_settings)
+    analysis = build_agent_trade_analysis(
+        normalized,
+        runtime,
         profile,
         report,
-        MarketDataClient(effective_settings),
+        market,
+    )
+    plan = trade_plan_from_candidate(
+        normalized,
+        profile,
+        report,
+        runtime,
+        analysis.best_candidate,
     )
     _apply_runtime_size_cap(plan, runtime)
     plan.network = runtime.network
-    plan.confidence = _confidence_from_report(
-        report.fallback_used,
-        len(report.evidence),
-        len(report.risks),
+    plan.confidence = round(
+        min(
+            0.95,
+            max(
+                0.1,
+                (plan.confidence * 0.75)
+                + (
+                    _confidence_from_report(
+                        report.fallback_used,
+                        len(report.evidence),
+                        len(report.risks),
+                    )
+                    * 0.25
+                ),
+            ),
+        ),
+        2,
     )
-    plan.thesis = report.thesis
-    plan.evidence = report.evidence
-    plan.agent_session_id = report.agent_session_id
-    plan.raw_agent_output = report.raw_agent_output
+    plan.execution_decision = ExecutionDecision.proposed
+    plan.execution_message = "Proposed for manual review. Execute is required to submit orders."
     store.save("plans", plan)
+    analysis.plan_id = plan.id
+    analysis.best_candidate.confidence = plan.confidence
+    store.save("analysis", analysis)
     append_agent_event(
         store,
-        f"Trade proposal created for {normalized}.",
-        payload={"plan_id": plan.id, "side": plan.side, "confidence": plan.confidence},
+        f"Trade analysis created for {normalized}.",
+        payload={
+            "analysis_id": analysis.id,
+            "plan_id": plan.id,
+            "side": plan.side,
+            "entry_type": plan.entry_type,
+            "confidence": plan.confidence,
+        },
     )
-    return maybe_execute_trade(plan, runtime, store, effective_settings)
+    return AgentTradeResult(plan=plan, analysis=analysis)
 
 
 async def run_proactive_scan(

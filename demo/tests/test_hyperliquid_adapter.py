@@ -75,7 +75,7 @@ def test_execute_plan_blocks_asset_outside_allowlist() -> None:
         invalidation_criteria=[],
     )
 
-    with pytest.raises(ExecutionBlocked, match="not in HYPERLIQUID_ALLOWED_ASSETS"):
+    with pytest.raises(ExecutionBlocked, match="not in the runtime allowed assets"):
         HyperliquidAdapter(settings).execute_plan(plan, confirmed=True)
 
 

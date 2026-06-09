@@ -1,13 +1,14 @@
 import pytest
 from pydantic import ValidationError
 
-from hyper_demo.config import Settings, settings_for_runtime
+from hyper_demo.config import Settings, runtime_from_settings, settings_for_runtime
 from hyper_demo.models import RuntimeSettings
 
 
 def test_settings_reject_mainnet_urls_in_testnet_mode() -> None:
     with pytest.raises(ValidationError):
         Settings(
+            DEMO_TRADING_MODE="testnet",
             HYPERLIQUID_BASE_URL="https://api.hyperliquid.xyz",
             HYPERLIQUID_WS_URL="wss://api.hyperliquid-testnet.xyz/ws",
         )
@@ -24,6 +25,7 @@ def test_settings_reject_testnet_string_in_mainnet_path() -> None:
 def test_settings_reject_non_testnet_websocket_host() -> None:
     with pytest.raises(ValidationError):
         Settings(
+            DEMO_TRADING_MODE="testnet",
             HYPERLIQUID_BASE_URL="https://api.hyperliquid-testnet.xyz",
             HYPERLIQUID_WS_URL="wss://api.hyperliquid.xyz/hyperliquid-testnet",
         )
@@ -31,6 +33,7 @@ def test_settings_reject_non_testnet_websocket_host() -> None:
 
 def test_settings_accept_testnet_urls() -> None:
     settings = Settings(
+        DEMO_TRADING_MODE="testnet",
         HYPERLIQUID_BASE_URL="https://api.hyperliquid-testnet.xyz",
         HYPERLIQUID_WS_URL="wss://api.hyperliquid-testnet.xyz/ws",
         HYPERTRACKER_BASE_URL="https://ht-api.coinmarketman.com",
@@ -48,19 +51,37 @@ def test_settings_reject_non_https_hypertracker_url() -> None:
         Settings(HYPERTRACKER_BASE_URL="http://ht-api.coinmarketman.com")
 
 
+def test_settings_reject_unknown_perplexity_url() -> None:
+    with pytest.raises(ValidationError):
+        Settings(PERPLEXITY_BASE_URL="https://example.com/v1")
+
+
+def test_settings_reject_perplexity_url_without_v1_path() -> None:
+    with pytest.raises(ValidationError):
+        Settings(PERPLEXITY_BASE_URL="https://api.perplexity.ai")
+
+
 def test_hypertracker_credentials_ignore_empty_and_placeholders() -> None:
     assert not Settings(HYPERTRACKER_API_KEY="").has_hypertracker_credentials
     assert not Settings(HYPERTRACKER_API_KEY="replace-me").has_hypertracker_credentials
     assert Settings(HYPERTRACKER_API_KEY="token").has_hypertracker_credentials
 
 
-def test_settings_reject_mainnet_guarded_without_enable_flag() -> None:
-    with pytest.raises(ValidationError):
-        Settings(
-            DEMO_TRADING_MODE="mainnet_guarded",
-            HYPERLIQUID_BASE_URL="https://api.hyperliquid.xyz",
-            HYPERLIQUID_WS_URL="wss://api.hyperliquid.xyz/ws",
-        )
+def test_perplexity_credentials_ignore_empty_and_placeholders() -> None:
+    assert not Settings(PERPLEXITY_API_KEY="").has_perplexity_credentials
+    assert not Settings(PERPLEXITY_API_KEY="replace-me").has_perplexity_credentials
+    assert Settings(PERPLEXITY_API_KEY="token").has_perplexity_credentials
+
+
+def test_settings_accept_mainnet_guarded_without_enable_flag() -> None:
+    settings = Settings(
+        DEMO_TRADING_MODE="mainnet_guarded",
+        HYPERLIQUID_BASE_URL="https://api.hyperliquid.xyz",
+        HYPERLIQUID_WS_URL="wss://api.hyperliquid.xyz/ws",
+    )
+
+    assert settings.hyperliquid_environment == "mainnet"
+    assert settings.hyperliquid_mainnet_enabled is False
 
 
 def test_settings_accept_mainnet_guarded_when_explicitly_enabled() -> None:
@@ -82,6 +103,23 @@ def test_runtime_derives_testnet_urls() -> None:
     assert settings.demo_trading_mode == "testnet"
     assert settings.hyperliquid_base_url == "https://api.hyperliquid-testnet.xyz"
     assert settings.hyperliquid_ws_url == "wss://api.hyperliquid-testnet.xyz/ws"
+
+
+def test_runtime_network_defaults_to_prodnet() -> None:
+    assert RuntimeSettings().network == "prodnet"
+
+
+def test_runtime_bootstrap_uses_env_allowed_assets() -> None:
+    settings = Settings(
+        HYPERLIQUID_ALLOWED_ASSETS="BTC,xyz:SPCX",
+        HYPERLIQUID_MAX_ORDER_USDC=42,
+    )
+
+    runtime = runtime_from_settings(settings)
+
+    assert runtime.allowed_assets == ["BTC", "xyz:SPCX"]
+    assert runtime.watchlist == ["BTC", "xyz:SPCX"]
+    assert runtime.max_order_usdc == 42
 
 
 def test_runtime_asset_lists_sync_by_default() -> None:

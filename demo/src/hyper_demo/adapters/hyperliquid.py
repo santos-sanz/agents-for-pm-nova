@@ -22,8 +22,8 @@ class PreparedOrder:
     is_buy: bool
     size: float
     entry_price: float
-    stop_loss: float
-    take_profit: float
+    stop_loss: float | None
+    take_profit: float | None
 
 
 class HyperliquidAdapter:
@@ -105,12 +105,10 @@ class HyperliquidAdapter:
             raise ExecutionBlocked(
                 "Hyperliquid credentials are missing. Configure .env.local or use replay mode."
             )
-        if not plan.stop_loss or not plan.take_profit:
-            raise ExecutionBlocked("Stop-loss and take-profit are required before execution.")
         asset = normalize_asset_symbol(plan.asset)
         if asset not in self.settings.allowed_assets_set:
             raise ExecutionBlocked(
-                f"{asset} is not in HYPERLIQUID_ALLOWED_ASSETS."
+                f"{asset} is not in the runtime allowed assets."
             )
         if plan.size_usdc > self.settings.hyperliquid_max_order_usdc:
             raise ExecutionBlocked(
@@ -173,14 +171,24 @@ class HyperliquidAdapter:
             prepared.stop_loss,
             {"trigger": {"triggerPx": str(prepared.stop_loss), "isMarket": True, "tpsl": "sl"}},
             reduce_only=True,
-        )
-        take_profit = exchange.order(
-            prepared.coin,
-            closing_is_buy,
-            prepared.size,
-            prepared.take_profit,
-            {"trigger": {"triggerPx": str(prepared.take_profit), "isMarket": True, "tpsl": "tp"}},
-            reduce_only=True,
+        ) if prepared.stop_loss else None
+        take_profit = (
+            exchange.order(
+                prepared.coin,
+                closing_is_buy,
+                prepared.size,
+                prepared.take_profit,
+                {
+                    "trigger": {
+                        "triggerPx": str(prepared.take_profit),
+                        "isMarket": True,
+                        "tpsl": "tp",
+                    }
+                },
+                reduce_only=True,
+            )
+            if prepared.take_profit
+            else None
         )
         return {"entry": entry, "stop_loss": stop, "take_profit": take_profit}
 

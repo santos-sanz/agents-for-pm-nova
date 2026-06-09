@@ -1,7 +1,8 @@
 # Rebuild Guide: HyperClaude
 
 This guide recreates the demo from a clean clone. The demo is Hyperliquid-only and defaults
-to testnet auto-execution when credentials and guardrails pass.
+to guarded mainnet proposals. Real execution remains behind explicit environment enablement,
+manual confirmation, and the mainnet confirmation phrase.
 
 ## 1. Install
 
@@ -21,7 +22,7 @@ HYPERLIQUID_API_WALLET_PRIVATE_KEY=...
 HYPERLIQUID_MAX_ORDER_USDC=100
 HYPERLIQUID_ALLOWED_ASSETS=BTC,ETH,SOL,HYPE
 HYPERLIQUID_MAINNET_ENABLED=false
-DEMO_TRADING_MODE=testnet
+DEMO_TRADING_MODE=mainnet_guarded
 DEMO_REQUIRE_CONFIRMATION=true
 ```
 
@@ -33,7 +34,7 @@ uv run demo setup-check
 
 Expected:
 
-- Trading mode is `testnet`.
+- Trading mode is `mainnet_guarded`.
 - Claude is configured if `ANTHROPIC_API_KEY` is present.
 - Hyperliquid is configured if account address and API wallet key are present.
 
