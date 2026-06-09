@@ -192,8 +192,18 @@ async function executePlan(input) {
       address: input.agentWalletAddress,
     }),
   });
+  const leverage = Math.max(1, Math.min(Number(plan.leverage || 1), Number(meta.maxLeverage || 50)));
+  const leverageUpdate = await client.updateLeverage({
+    asset: index,
+    isCross: true,
+    leverage,
+  });
 
-  const entryPrice = formatPrice(plan.entryPrice, szDecimals);
+  const rawEntryPrice =
+    plan.entryType === "market"
+      ? Number(plan.entryPrice) * (isBuy ? 1.005 : 0.995)
+      : Number(plan.entryPrice);
+  const entryPrice = formatPrice(rawEntryPrice, szDecimals);
   const entry = await client.order({
     grouping: "na",
     orders: [
@@ -208,54 +218,180 @@ async function executePlan(input) {
     ],
   });
 
-  const stopTrigger = formatPrice(plan.stopLoss, szDecimals);
-  const takeProfitTrigger = formatPrice(plan.takeProfit, szDecimals);
-  const stopLoss = await client.order({
-    grouping: "na",
-    orders: [
-      {
-        a: index,
-        b: closingIsBuy,
-        s: size,
-        p: stopTrigger,
-        r: true,
-        t: {
-          trigger: {
-            isMarket: true,
-            tpsl: "sl",
-            triggerPx: stopTrigger,
+  const stopLoss = plan.stopLoss
+    ? await client.order({
+        grouping: "na",
+        orders: [
+          {
+            a: index,
+            b: closingIsBuy,
+            s: size,
+            p: formatPrice(plan.stopLoss, szDecimals),
+            r: true,
+            t: {
+              trigger: {
+                isMarket: true,
+                tpsl: "sl",
+                triggerPx: formatPrice(plan.stopLoss, szDecimals),
+              },
+            },
           },
-        },
-      },
-    ],
-  });
-  const takeProfit = await client.order({
-    grouping: "na",
-    orders: [
-      {
-        a: index,
-        b: closingIsBuy,
-        s: size,
-        p: takeProfitTrigger,
-        r: true,
-        t: {
-          trigger: {
-            isMarket: true,
-            tpsl: "tp",
-            triggerPx: takeProfitTrigger,
+        ],
+      })
+    : null;
+  const takeProfit = plan.takeProfit
+    ? await client.order({
+        grouping: "na",
+        orders: [
+          {
+            a: index,
+            b: closingIsBuy,
+            s: size,
+            p: formatPrice(plan.takeProfit, szDecimals),
+            r: true,
+            t: {
+              trigger: {
+                isMarket: true,
+                tpsl: "tp",
+                triggerPx: formatPrice(plan.takeProfit, szDecimals),
+              },
+            },
           },
-        },
-      },
-    ],
-  });
+        ],
+      })
+    : null;
 
   return {
     entry,
     stopLoss,
     takeProfit,
     entryOrderId: extractOrderId(entry),
-    stopOrderId: extractOrderId(stopLoss),
-    takeProfitOrderId: extractOrderId(takeProfit),
+    stopOrderId: stopLoss ? extractOrderId(stopLoss) : null,
+    takeProfitOrderId: takeProfit ? extractOrderId(takeProfit) : null,
+    leverageUpdate,
+  };
+}
+
+async function placeProtectionOrder(client, index, szDecimals, size, closingIsBuy, price, kind) {
+  if (!price) return null;
+  const triggerPx = formatPrice(price, szDecimals);
+  return client.order({
+    grouping: "na",
+    orders: [
+      {
+        a: index,
+        b: closingIsBuy,
+        s: size,
+        p: triggerPx,
+        r: true,
+        t: {
+          trigger: {
+            isMarket: true,
+            tpsl: kind,
+            triggerPx,
+          },
+        },
+      },
+    ],
+  });
+}
+
+async function setProtection(input) {
+  const privy = privyClient();
+  const transport = transportFor(input.network || "testnet");
+  const { index, meta } = await assetContext(transport, input.asset);
+  const szDecimals = Number(meta.szDecimals || 5);
+  const size = formatSize(input.size, szDecimals);
+  const closingIsBuy = input.side === "short";
+  if (!input.takeProfit && !input.stopLoss) {
+    throw new Error("takeProfit or stopLoss is required");
+  }
+
+  const client = new hl.ExchangeClient({
+    transport,
+    wallet: viemAccount(privy, {
+      id: input.agentWalletId,
+      address: input.agentWalletAddress,
+    }),
+  });
+  const stopLoss = await placeProtectionOrder(
+    client,
+    index,
+    szDecimals,
+    size,
+    closingIsBuy,
+    input.stopLoss,
+    "sl",
+  );
+  const takeProfit = await placeProtectionOrder(
+    client,
+    index,
+    szDecimals,
+    size,
+    closingIsBuy,
+    input.takeProfit,
+    "tp",
+  );
+  return {
+    stopLoss,
+    takeProfit,
+    stopOrderId: stopLoss ? extractOrderId(stopLoss) : null,
+    takeProfitOrderId: takeProfit ? extractOrderId(takeProfit) : null,
+  };
+}
+
+async function setLeverage(input) {
+  const privy = privyClient();
+  const transport = transportFor(input.network || "testnet");
+  const { index, meta } = await assetContext(transport, input.asset);
+  const client = new hl.ExchangeClient({
+    transport,
+    wallet: viemAccount(privy, {
+      id: input.agentWalletId,
+      address: input.agentWalletAddress,
+    }),
+  });
+  const leverage = Math.max(1, Math.min(Number(input.leverage || 1), Number(meta.maxLeverage || 50)));
+  return client.updateLeverage({
+    asset: index,
+    isCross: input.isCross !== false,
+    leverage,
+  });
+}
+
+async function closePosition(input) {
+  const privy = privyClient();
+  const transport = transportFor(input.network || "testnet");
+  const { index, meta, context } = await assetContext(transport, input.asset);
+  const szDecimals = Number(meta.szDecimals || 5);
+  const size = formatSize(input.size, szDecimals);
+  const isClosingLong = input.side === "long";
+  const mark = Number(context?.markPx || input.markPrice || 0);
+  if (!mark) throw new Error(`Reference price unavailable for ${input.asset}`);
+  const client = new hl.ExchangeClient({
+    transport,
+    wallet: viemAccount(privy, {
+      id: input.agentWalletId,
+      address: input.agentWalletAddress,
+    }),
+  });
+  const closePrice = formatPrice(mark * (isClosingLong ? 0.995 : 1.005), szDecimals);
+  const close = await client.order({
+    grouping: "na",
+    orders: [
+      {
+        a: index,
+        b: !isClosingLong,
+        s: size,
+        p: closePrice,
+        r: true,
+        t: { limit: { tif: "Ioc" } },
+      },
+    ],
+  });
+  return {
+    close,
+    closeOrderId: extractOrderId(close),
   };
 }
 
@@ -323,6 +459,9 @@ try {
   let output;
   if (command === "setup-agent") output = await setupAgent(input);
   else if (command === "execute-plan") output = await executePlan(input);
+  else if (command === "set-protection") output = await setProtection(input);
+  else if (command === "set-leverage") output = await setLeverage(input);
+  else if (command === "close-position") output = await closePosition(input);
   else if (command === "wallet-state") output = await walletState(input);
   else if (command === "deposit-master") output = await depositMaster(input);
   else throw new Error(`Unknown command: ${command}`);

@@ -21,6 +21,66 @@ SCRIPT_PATH = Path(__file__).resolve().parents[3] / "scripts" / "privy_hyperliqu
 DEMO_ROOT = SCRIPT_PATH.parent.parent
 
 
+def _sanitized_exchange_reason(detail: str) -> str | None:
+    for raw_line in detail.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        normalized = line.lower()
+        if (
+            normalized.startswith("at ")
+            or "node_modules" in normalized
+            or "file:///" in normalized
+            or "/users/" in normalized
+            or "traceback" in normalized
+        ):
+            continue
+        if "apirequesterror" in normalized:
+            line = line.split("ApiRequestError:", 1)[-1].strip()
+        elif normalized.startswith("error "):
+            line = line[6:].strip()
+        if line and line.lower() not in {"error", "unknown error"}:
+            return line[:240]
+    return None
+
+
+def _friendly_helper_error(detail: str) -> str:
+    normalized = detail.lower()
+    if "minimum value of $10" in normalized or "minimum value of 10" in normalized:
+        return (
+            "Order too small. Hyperliquid requires a minimum order value of 10 USDC. "
+            "Increase Size to at least 10 USDC and try again."
+        )
+    if "insufficient" in normalized and ("margin" in normalized or "balance" in normalized):
+        return (
+            "Not enough available margin for this order. Reduce Size or Leverage, "
+            "or add more collateral before trying again."
+        )
+    if "reduce only" in normalized and "position" in normalized:
+        return "Reduce-only order blocked because there is no matching open position to reduce."
+    if "price" in normalized and ("invalid" in normalized or "tick" in normalized):
+        return (
+            "Invalid price for this market. Adjust the limit price closer to "
+            "the current mark price."
+        )
+    if "invalid safe integer" in normalized:
+        return (
+            "Invalid leverage. Hyperliquid only accepts whole-number leverage. "
+            "Use 1x, 2x, 3x, and so on."
+        )
+    reason = _sanitized_exchange_reason(detail)
+    if reason:
+        return (
+            "Hyperliquid rejected this order before execution. "
+            f"Exchange reason: {reason}. "
+            "Check Size, Leverage, available margin, and TP/SL prices, then try again."
+        )
+    return (
+        "Hyperliquid rejected this order before execution. Check Size, Leverage, "
+        "available margin, and TP/SL prices, then try again."
+    )
+
+
 class PrivyHyperliquidAdapter:
     """Hyperliquid execution through Privy server wallets and agent wallets."""
 
@@ -91,6 +151,7 @@ class PrivyHyperliquidAdapter:
                     "entryType": plan.entry_type,
                     "entryPrice": prepared.entry_price,
                     "size": prepared.size,
+                    "leverage": plan.leverage,
                     "stopLoss": prepared.stop_loss,
                     "takeProfit": prepared.take_profit,
                 },
@@ -112,10 +173,7 @@ class PrivyHyperliquidAdapter:
             take_profit_order_id=_extract_order_id(result.get("takeProfit")),
             raw_response=result,
             status="submitted",
-            message=(
-                "Submitted entry, stop-loss, and take-profit orders through "
-                "Privy Hyperliquid agent wallet."
-            ),
+            message="Submitted order through Privy Hyperliquid agent wallet.",
         )
 
     def wallet_state(self, agent: PrivyAgentWallet) -> dict[str, Any]:
@@ -126,6 +184,75 @@ class PrivyHyperliquidAdapter:
                 "network": agent.network.value,
                 "masterWalletAddress": agent.master_wallet_address,
                 "agentWalletAddress": agent.agent_wallet_address,
+            },
+        )
+
+    def close_position(
+        self,
+        agent: PrivyAgentWallet,
+        asset: str,
+        size: float,
+        side: TradeSide,
+        position_value_usdc: float,
+        confirmed: bool,
+    ) -> OrderRecord:
+        self._validate_privy_config()
+        if not confirmed:
+            raise ExecutionBlocked("Confirm position close before submitting a reduce-only order.")
+        result = self._run_helper(
+            "close-position",
+            {
+                "network": agent.network.value,
+                "agentWalletId": agent.agent_wallet_id,
+                "agentWalletAddress": agent.agent_wallet_address,
+                "asset": asset,
+                "size": size,
+                "side": side.value,
+            },
+        )
+        exchange_name = (
+            "hyperliquid-mainnet"
+            if agent.network == RuntimeNetwork.prodnet
+            else "hyperliquid-testnet"
+        )
+        return OrderRecord(
+            plan_id="manual_position_close",
+            exchange=exchange_name,
+            asset=asset,
+            side=TradeSide.short if side == TradeSide.long else TradeSide.long,
+            size_usdc=position_value_usdc,
+            entry_order_id=_extract_order_id(result.get("close")),
+            raw_response=result,
+            status="submitted",
+            message=f"Submitted reduce-only close order for {asset}.",
+        )
+
+    def set_position_protection(
+        self,
+        agent: PrivyAgentWallet,
+        asset: str,
+        size: float,
+        side: TradeSide,
+        take_profit: float | None,
+        stop_loss: float | None,
+        confirmed: bool,
+    ) -> dict[str, Any]:
+        self._validate_privy_config()
+        if not confirmed:
+            raise ExecutionBlocked("Confirm TP/SL before submitting reduce-only trigger orders.")
+        if take_profit is None and stop_loss is None:
+            raise ExecutionBlocked("Set at least one take profit or stop loss price.")
+        return self._run_helper(
+            "set-protection",
+            {
+                "network": agent.network.value,
+                "agentWalletId": agent.agent_wallet_id,
+                "agentWalletAddress": agent.agent_wallet_address,
+                "asset": asset,
+                "size": size,
+                "side": side.value,
+                "takeProfit": take_profit,
+                "stopLoss": stop_loss,
             },
         )
 
@@ -231,7 +358,7 @@ class PrivyHyperliquidAdapter:
             raise ExecutionBlocked("Privy Hyperliquid helper timed out.") from exc
         if completed.returncode != 0:
             detail = completed.stderr.strip() or completed.stdout.strip() or "unknown error"
-            raise ExecutionBlocked(f"Privy Hyperliquid helper failed: {detail}")
+            raise ExecutionBlocked(_friendly_helper_error(detail))
         try:
             payload = json.loads(completed.stdout)
         except json.JSONDecodeError as exc:

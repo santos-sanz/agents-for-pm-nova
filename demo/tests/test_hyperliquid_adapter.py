@@ -2,6 +2,7 @@ import pytest
 from pydantic import SecretStr
 
 from hyper_demo.adapters.hyperliquid import ExecutionBlocked, HyperliquidAdapter
+from hyper_demo.adapters.privy_hyperliquid import _friendly_helper_error
 from hyper_demo.config import Settings
 from hyper_demo.models import OrderRecord, TradePlan
 
@@ -25,6 +26,41 @@ def test_execute_plan_reports_malformed_private_key() -> None:
 
     with pytest.raises(ExecutionBlocked, match="wallet configuration is invalid"):
         HyperliquidAdapter(settings).execute_plan(plan, confirmed=True)
+
+
+def test_privy_helper_error_keeps_exchange_reason_without_stack() -> None:
+    message = _friendly_helper_error(
+        "ERROR ApiRequestError: Order must have minimum value of $10. asset=0\n"
+        "    at assertSuccessResponse "
+        "(/Users/demo/node_modules/@nktkas/hyperliquid/esm/api/exchange.js:83:15)\n"
+        "    at async executePlan (file:///Users/demo/scripts/privy_hyperliquid.mjs:207:17)"
+    )
+
+    assert "minimum order value of 10 USDC" in message
+    assert "node_modules" not in message
+    assert "file:///" not in message
+
+
+def test_privy_helper_unknown_error_adds_sanitized_exchange_reason() -> None:
+    message = _friendly_helper_error(
+        "ERROR ApiRequestError: Trigger price would immediately execute\n"
+        "    at assertSuccessResponse "
+        "(/Users/demo/node_modules/@nktkas/hyperliquid/esm/api/exchange.js:83:15)"
+    )
+
+    assert "Exchange reason: Trigger price would immediately execute." in message
+    assert "node_modules" not in message
+    assert "/Users/" not in message
+
+
+def test_privy_helper_maps_fractional_leverage_error() -> None:
+    message = _friendly_helper_error(
+        "ERROR ValidationError: × Invalid safe integer: Received 2.5.\n"
+        "    at executePlan (/Users/demo/node_modules/helper.js:1:1)"
+    )
+
+    assert "whole-number leverage" in message
+    assert "node_modules" not in message
 
 
 def test_execute_plan_blocks_size_above_guardrail() -> None:

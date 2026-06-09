@@ -47,6 +47,7 @@ DEMO_ROOT = APP_ROOT.parents[1]
 LIGHTWEIGHT_CHARTS_ROOT = DEMO_ROOT / "node_modules" / "lightweight-charts" / "dist"
 ARBITRUM_RPC_URL = "https://arb1.arbitrum.io/rpc"
 ARBITRUM_USDC_ADDRESS = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"
+HYPERLIQUID_MIN_ORDER_USDC = 10
 
 app = FastAPI(title="HyperClaude", version="0.2.0")
 app.mount("/static", StaticFiles(directory=STATIC_ROOT), name="static")
@@ -61,9 +62,23 @@ if LIGHTWEIGHT_CHARTS_ROOT.exists():
 class AgentAnalyzeRequest(BaseModel):
     asset: str
     context: str | None = None
+    risk_appetite: Literal["conservative", "balanced", "aggressive"] = "balanced"
+    close_window: Literal["15m", "1h", "4h", "1d"] = "1h"
+    available_usdc: float | None = None
+    max_leverage: int | None = None
 
 
 class TradeExecutionRequest(BaseModel):
+    confirmed: bool = False
+
+
+class ClosePositionRequest(BaseModel):
+    confirmed: bool = False
+
+
+class PositionProtectionRequest(BaseModel):
+    take_profit: float | None = None
+    stop_loss: float | None = None
     confirmed: bool = False
 
 
@@ -292,6 +307,75 @@ def get_privy_agent_wallet(store: JsonStore, runtime: RuntimeSettings) -> Any:
     if legacy_agent and legacy_agent.network == runtime.network:
         return legacy_agent
     return None
+
+
+def append_trade_error_event(
+    store: JsonStore,
+    message: str,
+    payload: dict[str, Any] | None = None,
+) -> None:
+    store.append_event(
+        RunEvent(
+            run_id=AGENT_RUN_ID,
+            level="warning",
+            message=message,
+            payload=payload or {},
+        )
+    )
+
+
+def wallet_state_for_runtime(
+    store: JsonStore,
+    runtime: RuntimeSettings,
+    settings: Settings,
+) -> dict[str, Any]:
+    if settings.privy_execution_enabled:
+        agent = get_privy_agent_wallet(store, runtime)
+        if not agent:
+            raise ExecutionBlocked("Initialize a Privy Hyperliquid agent wallet first.")
+        return PrivyHyperliquidAdapter(settings).wallet_state(agent)
+    return HyperliquidAdapter(settings).wallet_state()
+
+
+def validate_available_margin(
+    store: JsonStore,
+    runtime: RuntimeSettings,
+    settings: Settings,
+    request: ManualTradePlanRequest,
+) -> dict[str, Any] | None:
+    if not settings.privy_execution_enabled and not settings.has_hyperliquid_credentials:
+        return None
+    try:
+        wallet = wallet_state_for_runtime(store, runtime, settings)
+    except ExecutionBlocked as exc:
+        append_trade_error_event(
+            store,
+            f"Wallet state unavailable before manual order: {exc}",
+            {"asset": request.asset, "size_usdc": request.size_usdc},
+        )
+        raise
+    withdrawable = float(wallet.get("withdrawable_usdc") or 0)
+    margin_required = request.size_usdc / max(request.leverage, 1)
+    if margin_required > withdrawable:
+        message = (
+            "Order margin exceeds wallet withdrawable balance "
+            f"({margin_required:.2f} USDC required, {withdrawable:.2f} USDC available)."
+        )
+        append_trade_error_event(
+            store,
+            message,
+            {
+                "asset": request.asset,
+                "size_usdc": request.size_usdc,
+                "leverage": request.leverage,
+                "margin_required_usdc": round(margin_required, 6),
+                "withdrawable_usdc": withdrawable,
+                "account_address": wallet.get("account_address"),
+                "agent_address": wallet.get("agent_address"),
+            },
+        )
+        raise HTTPException(status_code=400, detail=message)
+    return wallet
 
 
 def setup_check(settings: Settings | None = None) -> SetupCheck:
@@ -561,8 +645,34 @@ def update_runtime_settings(update: RuntimeSettingsUpdate) -> RuntimeSettings:
 async def api_agent_analyze(request: AgentAnalyzeRequest):
     store = get_store()
     runtime = get_runtime(store)
+    settings = settings_for_runtime(runtime)
+    asset = normalize_asset_symbol(request.asset)
+    market = MarketDataClient(settings)
+    available_usdc = _available_usdc_for_agent_input(store, runtime, settings)
+    if request.available_usdc is not None:
+        available_usdc = max(0.0, min(available_usdc, request.available_usdc))
+    max_leverage = int(min(10.0, _max_leverage_for_asset(asset, market)))
+    if request.max_leverage is not None:
+        max_leverage = int(max(1, min(max_leverage, request.max_leverage)))
+    preference_context = (
+        f"Auto mode preferences: risk appetite={request.risk_appetite}; "
+        f"preferred close window={request.close_window}. "
+        f"Available trading input={available_usdc:.2f} USDC; "
+        f"{asset} max supported leverage={max_leverage}x. "
+        "Return several executable proposals that respect Hyperliquid validation, "
+        "integer leverage, minimum order value, available margin, max leverage, "
+        "and TP/SL directionality."
+    )
+    context = "\n".join([item for item in [preference_context, request.context] if item])
     try:
-        result = await analyze_trade(request.asset, runtime, store, request.context)
+        result = await analyze_trade(
+            asset,
+            runtime,
+            store,
+            context,
+            risk_appetite=request.risk_appetite,
+            close_window=request.close_window,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {
@@ -589,6 +699,117 @@ async def api_proactive_scan():
     }
 
 
+@app.post("/api/agent/proposals/{candidate_index}/approve")
+def api_approve_agent_proposal(candidate_index: int):
+    store = get_store()
+    runtime = get_runtime(store)
+    settings = settings_for_runtime(runtime)
+    analysis = store.latest("analysis")
+    if not analysis:
+        raise HTTPException(
+            status_code=404,
+            detail="Run auto analysis before approving a proposal.",
+        )
+    if candidate_index < 0 or candidate_index >= len(analysis.candidates):
+        raise HTTPException(status_code=404, detail="Proposal not found.")
+    candidate = analysis.candidates[candidate_index]
+    asset = normalize_asset_symbol(analysis.asset)
+    market = MarketDataClient(settings)
+    mark = market.mark_price(asset)
+    mark_price = mark.mark_price
+    if mark.source == "fallback":
+        candles = analysis.candles_by_timeframe.get(candidate.timeframe) or []
+        if candles:
+            mark_price = candles[-1].close
+    entry_price, stop_loss, take_profit = _live_proposal_prices(
+        candidate,
+        mark_price=mark_price,
+    )
+    request = ManualTradePlanRequest(
+        asset=asset,
+        side=candidate.side,
+        entry_type=candidate.entry_type,
+        entry_price=entry_price,
+        size_usdc=candidate.size_usdc,
+        stop_loss=stop_loss,
+        take_profit=take_profit,
+        leverage=float(int(candidate.leverage)),
+    )
+    if request.size_usdc < HYPERLIQUID_MIN_ORDER_USDC:
+        raise HTTPException(
+            status_code=400,
+            detail="Proposal is below the 10 USDC minimum order value.",
+        )
+    if request.size_usdc > runtime.max_order_usdc:
+        raise HTTPException(status_code=400, detail="Proposal is above the runtime max order.")
+    max_leverage = int(min(10.0, _max_leverage_for_asset(asset, market)))
+    if request.leverage < 1 or request.leverage > max_leverage:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Proposal leverage must be between 1x and {max_leverage:g}x for {asset}.",
+        )
+    try:
+        validate_available_margin(store, runtime, settings, request)
+    except ExecutionBlocked as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    preflight_error = _manual_preflight_error(
+        request,
+        entry_price=entry_price,
+        mark_price=mark_price,
+    )
+    if preflight_error:
+        raise HTTPException(status_code=400, detail=preflight_error)
+    updated_candidate = candidate.model_copy(
+        update={
+            "entry_price": entry_price,
+            "stop_loss": stop_loss,
+            "take_profit": take_profit,
+            "max_loss_usdc": _manual_max_loss(candidate.size_usdc, entry_price, stop_loss),
+        }
+    )
+    plan = TradePlan(
+        asset=asset,
+        side=candidate.side,
+        size_usdc=candidate.size_usdc,
+        entry_type=candidate.entry_type,
+        entry_price=entry_price,
+        stop_loss=stop_loss,
+        take_profit=take_profit,
+        max_loss_usdc=updated_candidate.max_loss_usdc,
+        leverage=request.leverage,
+        rationale=candidate.rationale,
+        invalidation_criteria=[
+            "The selected timeframe flips direction against the approved proposal.",
+            "Stop-loss or take-profit placement can no longer be verified before execution.",
+        ],
+        confidence=candidate.confidence,
+        thesis=analysis.thesis,
+        evidence=[analysis.summary],
+        source="agent",
+        execution_decision="proposed",
+        network=runtime.network,
+        execution_message="Auto proposal approved. Submit is required to place the order.",
+    )
+    store.save("plans", plan)
+    analysis.plan_id = plan.id
+    analysis.candidates[candidate_index] = updated_candidate
+    analysis.best_candidate = updated_candidate
+    store.save("analysis", analysis)
+    store.append_event(
+        RunEvent(
+            run_id=AGENT_RUN_ID,
+            message=f"Auto proposal approved for {asset}.",
+            payload={
+                "plan_id": plan.id,
+                "candidate_index": candidate_index,
+                "side": candidate.side,
+                "timeframe": candidate.timeframe,
+            },
+        )
+    )
+    return {"plan": plan, "analysis": analysis}
+
+
 @app.get("/api/agent/events")
 def api_agent_events():
     return get_store().events_for_run(AGENT_RUN_ID)
@@ -605,16 +826,142 @@ def _max_leverage_for_asset(asset: str, market: MarketDataClient) -> float:
     try:
         for item in market.available_assets():
             if normalize_asset_symbol(item.symbol) == asset and item.max_leverage > 0:
-                return float(item.max_leverage)
+                return float(int(item.max_leverage))
     except Exception:
         return 10.0
     return 10.0
+
+
+def _available_usdc_for_agent_input(
+    store: JsonStore,
+    runtime: RuntimeSettings,
+    settings: Settings,
+) -> float:
+    if not settings.privy_execution_enabled and not settings.has_hyperliquid_credentials:
+        return float(runtime.max_order_usdc)
+    try:
+        wallet = wallet_state_for_runtime(store, runtime, settings)
+    except ExecutionBlocked:
+        return float(runtime.max_order_usdc)
+    withdrawable = wallet.get("withdrawable_usdc")
+    try:
+        available = float(withdrawable)
+    except (TypeError, ValueError):
+        return float(runtime.max_order_usdc)
+    return max(0.0, min(float(runtime.max_order_usdc), available))
+
+
+def _live_proposal_prices(
+    candidate: Any,
+    *,
+    mark_price: float,
+) -> tuple[float, float | None, float | None]:
+    entry_price = float(candidate.entry_price)
+    stop_loss = candidate.stop_loss
+    take_profit = candidate.take_profit
+    if candidate.entry_type != "market":
+        return entry_price, stop_loss, take_profit
+
+    live_entry = float(mark_price)
+    if entry_price <= 0 or live_entry <= 0:
+        return live_entry, stop_loss, take_profit
+
+    stop_distance = (
+        abs(entry_price - float(stop_loss)) / entry_price if stop_loss is not None else None
+    )
+    take_distance = (
+        abs(float(take_profit) - entry_price) / entry_price if take_profit is not None else None
+    )
+    if candidate.side == TradeSide.short:
+        live_stop = live_entry * (1 + stop_distance) if stop_distance is not None else None
+        live_take = live_entry * (1 - take_distance) if take_distance is not None else None
+    else:
+        live_stop = live_entry * (1 - stop_distance) if stop_distance is not None else None
+        live_take = live_entry * (1 + take_distance) if take_distance is not None else None
+    return (
+        round(live_entry, 6),
+        round(live_stop, 6) if live_stop is not None else None,
+        round(live_take, 6) if live_take is not None else None,
+    )
 
 
 def _manual_max_loss(size_usdc: float, entry_price: float, stop_loss: float | None) -> float:
     if not stop_loss:
         return 0.0
     return round(abs(entry_price - stop_loss) / entry_price * size_usdc, 2)
+
+
+def _estimated_liquidation_price(
+    side: TradeSide,
+    entry_price: float,
+    leverage: float,
+) -> float | None:
+    if entry_price <= 0 or leverage <= 1:
+        return None
+    move = 1 / leverage
+    price = entry_price * (1 + move) if side == TradeSide.short else entry_price * (1 - move)
+    return max(0.0, price)
+
+
+def _manual_preflight_error(
+    request: ManualTradePlanRequest,
+    *,
+    entry_price: float,
+    mark_price: float,
+) -> str | None:
+    if request.stop_loss is None and request.take_profit is None:
+        return None
+    side = request.side
+    liquidation_price = _estimated_liquidation_price(side, entry_price, request.leverage)
+    if side == TradeSide.long:
+        if request.take_profit is not None and (
+            request.take_profit <= entry_price or request.take_profit <= mark_price
+        ):
+            return (
+                "Take Profit would be invalid for this Long. Set Take Profit above both "
+                "the entry price and the current mark price."
+            )
+        if request.stop_loss is not None and (
+            request.stop_loss >= entry_price or request.stop_loss >= mark_price
+        ):
+            return (
+                "Stop Loss would be invalid for this Long. Set Stop Loss below both "
+                "the entry price and the current mark price."
+            )
+        if (
+            request.stop_loss is not None
+            and liquidation_price is not None
+            and request.stop_loss <= liquidation_price
+        ):
+            return (
+                "Stop Loss is beyond the estimated liquidation price for this Long. "
+                f"Move Stop Loss above {liquidation_price:g} before submitting."
+            )
+    if side == TradeSide.short:
+        if request.take_profit is not None and (
+            request.take_profit >= entry_price or request.take_profit >= mark_price
+        ):
+            return (
+                "Take Profit would be invalid for this Short. Set Take Profit below both "
+                "the entry price and the current mark price."
+            )
+        if request.stop_loss is not None and (
+            request.stop_loss <= entry_price or request.stop_loss <= mark_price
+        ):
+            return (
+                "Stop Loss would be invalid for this Short. Set Stop Loss above both "
+                "the entry price and the current mark price."
+            )
+        if (
+            request.stop_loss is not None
+            and liquidation_price is not None
+            and request.stop_loss >= liquidation_price
+        ):
+            return (
+                "Stop Loss is beyond the estimated liquidation price for this Short. "
+                f"Move Stop Loss below {liquidation_price:g} before submitting."
+            )
+    return None
 
 
 @app.post("/api/trades/manual-plan", response_model=TradePlan)
@@ -625,23 +972,119 @@ def api_create_manual_trade_plan(request: ManualTradePlanRequest) -> TradePlan:
     market = MarketDataClient(settings)
     asset = normalize_asset_symbol(request.asset)
     if asset not in settings.allowed_assets_set:
+        append_trade_error_event(
+            store,
+            f"Manual trade plan blocked: {asset} is not allowed.",
+            {"asset": asset, "allowed_assets": sorted(settings.allowed_assets_set)},
+        )
         raise HTTPException(
             status_code=400,
             detail=f"{asset} is not in the runtime allowed assets.",
         )
     if request.size_usdc <= 0:
+        append_trade_error_event(
+            store,
+            "Manual trade plan blocked: order size must be greater than zero.",
+            {"asset": asset, "size_usdc": request.size_usdc},
+        )
         raise HTTPException(status_code=400, detail="Order size must be greater than zero.")
+    if request.size_usdc < HYPERLIQUID_MIN_ORDER_USDC:
+        message = (
+            "Order too small. Hyperliquid requires a minimum order value of "
+            f"{HYPERLIQUID_MIN_ORDER_USDC} USDC. Increase Size and try again."
+        )
+        append_trade_error_event(
+            store,
+            message,
+            {
+                "asset": asset,
+                "size_usdc": request.size_usdc,
+                "minimum_order_usdc": HYPERLIQUID_MIN_ORDER_USDC,
+            },
+        )
+        raise HTTPException(status_code=400, detail=message)
     if request.size_usdc > runtime.max_order_usdc:
+        append_trade_error_event(
+            store,
+            "Manual trade plan blocked: order size exceeds runtime max order.",
+            {
+                "asset": asset,
+                "size_usdc": request.size_usdc,
+                "max_order_usdc": runtime.max_order_usdc,
+            },
+        )
         raise HTTPException(status_code=400, detail="Order size exceeds the runtime max order.")
-    max_leverage = min(10.0, _max_leverage_for_asset(asset, market))
+    max_leverage = int(min(10.0, _max_leverage_for_asset(asset, market)))
+    if not float(request.leverage).is_integer():
+        append_trade_error_event(
+            store,
+            f"Manual trade plan blocked: leverage must be a whole number for {asset}.",
+            {"asset": asset, "leverage": request.leverage},
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Leverage must be a whole number because Hyperliquid only accepts "
+                "integer leverage."
+            ),
+        )
     if request.leverage < 1 or request.leverage > max_leverage:
+        append_trade_error_event(
+            store,
+            f"Manual trade plan blocked: invalid leverage for {asset}.",
+            {"asset": asset, "leverage": request.leverage, "max_leverage": max_leverage},
+        )
         raise HTTPException(
             status_code=400,
             detail=f"Leverage must be between 1x and {max_leverage:g}x for {asset}.",
         )
     if request.entry_type == "limit" and not request.entry_price:
+        append_trade_error_event(
+            store,
+            "Manual trade plan blocked: limit order missing entry price.",
+            {"asset": asset},
+        )
         raise HTTPException(status_code=400, detail="Limit orders require an entry price.")
-    entry_price = request.entry_price or market.mark_price(asset).mark_price
+    validate_available_margin(store, runtime, settings, request)
+    mark_price = market.mark_price(asset).mark_price
+    entry_price = request.entry_price or mark_price
+    preflight_error = _manual_preflight_error(
+        request,
+        entry_price=entry_price,
+        mark_price=mark_price,
+    )
+    if preflight_error:
+        append_trade_error_event(
+            store,
+            f"Manual trade plan blocked: {preflight_error}",
+            {
+                "asset": asset,
+                "side": request.side,
+                "entry_price": entry_price,
+                "mark_price": mark_price,
+                "take_profit": request.take_profit,
+                "stop_loss": request.stop_loss,
+                "leverage": request.leverage,
+            },
+        )
+        raise HTTPException(status_code=400, detail=preflight_error)
+    if request.entry_type == "limit" and abs(entry_price - mark_price) / mark_price > 0.95:
+        append_trade_error_event(
+            store,
+            "Manual trade plan blocked: limit price too far from reference.",
+            {
+                "asset": asset,
+                "entry_price": entry_price,
+                "mark_price": mark_price,
+            },
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Limit price is more than 95% away from the current reference price "
+                f"({mark_price:g}). Adjust the entry price before submitting."
+            ),
+        )
     try:
         plan = TradePlan(
             asset=asset,
@@ -666,6 +1109,11 @@ def api_create_manual_trade_plan(request: ManualTradePlanRequest) -> TradePlan:
             execution_message="Manual plan created. Execute is required to submit orders.",
         )
     except ValueError as exc:
+        append_trade_error_event(
+            store,
+            f"Manual trade plan blocked: {exc}",
+            request.model_dump(mode="json"),
+        )
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     store.save("plans", plan)
     store.append_event(
@@ -702,6 +1150,30 @@ def api_execute_trade(plan_id: str, request: TradeExecutionRequest):
     }
 
 
+@app.post("/api/trades/manual-submit")
+def api_submit_manual_trade(request: ManualTradePlanRequest):
+    plan = api_create_manual_trade_plan(request)
+    store = get_store()
+    runtime = get_runtime(store)
+    try:
+        result = manual_execute_trade(
+            plan,
+            runtime,
+            store,
+            confirmed=True,
+            confirmation_phrase=None,
+        )
+    except (ExecutionBlocked, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    order = store.get("orders", result.order_id) if result.order_id else None
+    return {
+        "plan": result.plan,
+        "order": order,
+        "order_id": result.order_id,
+        "run_id": result.run_id,
+    }
+
+
 @app.post("/api/trades/{plan_id}/reject", response_model=TradePlan)
 def api_reject_trade(plan_id: str):
     store = get_store()
@@ -715,16 +1187,252 @@ def api_reject_trade(plan_id: str):
 def get_wallet_state():
     runtime = get_runtime()
     try:
+        store = get_store()
         settings = settings_for_runtime(runtime)
-        if settings.privy_execution_enabled:
-            store = get_store()
-            agent = get_privy_agent_wallet(store, runtime)
-            if not agent:
-                raise ExecutionBlocked("Initialize a Privy Hyperliquid agent wallet first.")
-            return PrivyHyperliquidAdapter(settings).wallet_state(agent)
-        return HyperliquidAdapter(settings_for_runtime(runtime)).wallet_state()
+        return wallet_state_for_runtime(store, runtime, settings)
     except (ExecutionBlocked, ValueError) as exc:
+        append_trade_error_event(get_store(), f"Wallet state request failed: {exc}")
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/orders")
+def get_orders_state():
+    store = get_store()
+    runtime = get_runtime(store)
+    settings = settings_for_runtime(runtime)
+    try:
+        wallet = wallet_state_for_runtime(store, runtime, settings)
+    except (ExecutionBlocked, ValueError):
+        wallet = {"open_positions": [], "open_orders": []}
+    submitted_orders = [order for order in store.list("orders") if order.status == "submitted"]
+    enriched_orders = []
+    for order in submitted_orders:
+        payload = order.model_dump(mode="json")
+        plan = store.get("plans", order.plan_id)
+        if plan:
+            payload["plan"] = plan.model_dump(mode="json")
+        enriched_orders.append(payload)
+    return {
+        "orders": enriched_orders,
+        "positions": wallet.get("open_positions") or [],
+        "open_orders": wallet.get("open_orders") or [],
+        "wallet": {
+            "account_address": wallet.get("account_address"),
+            "agent_address": wallet.get("agent_address"),
+            "withdrawable_usdc": wallet.get("withdrawable_usdc"),
+            "total_margin_used_usdc": wallet.get("total_margin_used_usdc"),
+        },
+    }
+
+
+def _position_for_asset(wallet: dict[str, Any], asset: str) -> dict[str, Any] | None:
+    normalized_asset = normalize_asset_symbol(asset)
+    return next(
+        (
+            item.get("position")
+            for item in wallet.get("open_positions", [])
+            if normalize_asset_symbol(item.get("position", {}).get("coin")) == normalized_asset
+        ),
+        None,
+    )
+
+
+def _position_mark_price(position: dict[str, Any]) -> float:
+    for key in ("markPx", "mark_price", "markPrice"):
+        value = float(position.get(key) or 0)
+        if value > 0:
+            return value
+    signed_size = abs(float(position.get("szi") or 0))
+    position_value = abs(float(position.get("positionValue") or 0))
+    if signed_size > 0 and position_value > 0:
+        return position_value / signed_size
+    return float(position.get("entryPx") or 0)
+
+
+def _latest_position_order(store: JsonStore, asset: str) -> OrderRecord | None:
+    normalized_asset = normalize_asset_symbol(asset)
+    orders = [
+        order
+        for order in store.list("orders")
+        if order.status == "submitted"
+        and normalize_asset_symbol(order.asset) == normalized_asset
+        and order.plan_id != "manual_position_close"
+    ]
+    if not orders:
+        return None
+    return sorted(orders, key=lambda item: item.created_at)[-1]
+
+
+def _validate_position_protection(
+    side: TradeSide,
+    entry_price: float,
+    mark_price: float,
+    take_profit: float | None,
+    stop_loss: float | None,
+) -> None:
+    if take_profit is None and stop_loss is None:
+        raise ExecutionBlocked("Set at least one take profit or stop loss price.")
+    reference = mark_price or entry_price
+    if side == TradeSide.long:
+        if take_profit is not None and (take_profit <= entry_price or take_profit <= reference):
+            raise ExecutionBlocked("Long take profit must be above entry and current price.")
+        if stop_loss is not None and (stop_loss >= entry_price or stop_loss >= reference):
+            raise ExecutionBlocked("Long stop loss must be below entry and current price.")
+    if side == TradeSide.short:
+        if take_profit is not None and (take_profit >= entry_price or take_profit >= reference):
+            raise ExecutionBlocked("Short take profit must be below entry and current price.")
+        if stop_loss is not None and (stop_loss <= entry_price or stop_loss <= reference):
+            raise ExecutionBlocked("Short stop loss must be above entry and current price.")
+
+
+@app.post("/api/positions/{asset}/close")
+def close_position(asset: str, request: ClosePositionRequest):
+    store = get_store()
+    runtime = get_runtime(store)
+    settings = settings_for_runtime(runtime)
+    normalized_asset = normalize_asset_symbol(asset)
+    try:
+        if not request.confirmed:
+            raise ExecutionBlocked("Confirm position close before submitting a reduce-only order.")
+        if not settings.privy_execution_enabled:
+            raise ExecutionBlocked("Position close is currently configured for Privy execution.")
+        agent = get_privy_agent_wallet(store, runtime)
+        if not agent:
+            raise ExecutionBlocked("Initialize a Privy Hyperliquid agent wallet first.")
+        wallet = wallet_state_for_runtime(store, runtime, settings)
+        position = _position_for_asset(wallet, normalized_asset)
+        if not position:
+            raise ExecutionBlocked(f"No open {normalized_asset} position to close.")
+        signed_size = float(position.get("szi") or 0)
+        if signed_size == 0:
+            raise ExecutionBlocked(f"No open {normalized_asset} position to close.")
+        side = TradeSide.long if signed_size > 0 else TradeSide.short
+        order = PrivyHyperliquidAdapter(settings).close_position(
+            agent=agent,
+            asset=normalized_asset,
+            size=abs(signed_size),
+            side=side,
+            position_value_usdc=abs(float(position.get("positionValue") or 0)),
+            confirmed=request.confirmed,
+        )
+    except (ExecutionBlocked, ValueError) as exc:
+        append_trade_error_event(
+            store,
+            f"Position close blocked: {exc}",
+            {"asset": normalized_asset},
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    store.save("orders", order)
+    store.append_event(
+        RunEvent(
+            run_id=AGENT_RUN_ID,
+            level="info",
+            message=f"Submitted reduce-only close order for {normalized_asset}.",
+            payload={
+                "asset": normalized_asset,
+                "order_id": order.id,
+                "entry_order_id": order.entry_order_id,
+            },
+        )
+    )
+    return {"order": order, "wallet": wallet_state_for_runtime(store, runtime, settings)}
+
+
+@app.post("/api/positions/{asset}/protection")
+def set_position_protection(asset: str, request: PositionProtectionRequest):
+    store = get_store()
+    runtime = get_runtime(store)
+    settings = settings_for_runtime(runtime)
+    normalized_asset = normalize_asset_symbol(asset)
+    try:
+        if not request.confirmed:
+            raise ExecutionBlocked("Confirm TP/SL before submitting reduce-only trigger orders.")
+        if not settings.privy_execution_enabled:
+            raise ExecutionBlocked("TP/SL updates are currently configured for Privy execution.")
+        agent = get_privy_agent_wallet(store, runtime)
+        if not agent:
+            raise ExecutionBlocked("Initialize a Privy Hyperliquid agent wallet first.")
+        wallet = wallet_state_for_runtime(store, runtime, settings)
+        position = _position_for_asset(wallet, normalized_asset)
+        if not position:
+            raise ExecutionBlocked(f"No open {normalized_asset} position to protect.")
+        signed_size = float(position.get("szi") or 0)
+        if signed_size == 0:
+            raise ExecutionBlocked(f"No open {normalized_asset} position to protect.")
+        side = TradeSide.long if signed_size > 0 else TradeSide.short
+        entry_price = float(position.get("entryPx") or 0)
+        if entry_price <= 0:
+            raise ExecutionBlocked(f"Entry price unavailable for {normalized_asset}.")
+        mark_price = _position_mark_price(position)
+        _validate_position_protection(
+            side,
+            entry_price,
+            mark_price,
+            request.take_profit,
+            request.stop_loss,
+        )
+        protection = PrivyHyperliquidAdapter(settings).set_position_protection(
+            agent=agent,
+            asset=normalized_asset,
+            size=abs(signed_size),
+            side=side,
+            take_profit=request.take_profit,
+            stop_loss=request.stop_loss,
+            confirmed=request.confirmed,
+        )
+    except (ExecutionBlocked, ValueError) as exc:
+        append_trade_error_event(
+            store,
+            f"TP/SL update blocked: {exc}",
+            {"asset": normalized_asset},
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    order = _latest_position_order(store, normalized_asset)
+    plan = store.get("plans", order.plan_id) if order else None
+    if plan:
+        plan = plan.model_copy(
+            update={
+                "take_profit": (
+                    request.take_profit if request.take_profit is not None else plan.take_profit
+                ),
+                "stop_loss": request.stop_loss if request.stop_loss is not None else plan.stop_loss,
+            }
+        )
+        store.save("plans", plan)
+    if order:
+        order = order.model_copy(
+            update={
+                "take_profit_order_id": protection.get("takeProfitOrderId")
+                or order.take_profit_order_id,
+                "stop_order_id": protection.get("stopOrderId") or order.stop_order_id,
+                "raw_response": {
+                    **order.raw_response,
+                    "protection": protection,
+                },
+            }
+        )
+        store.save("orders", order)
+    store.append_event(
+        RunEvent(
+            run_id=AGENT_RUN_ID,
+            level="info",
+            message=f"Updated TP/SL protection for {normalized_asset}.",
+            payload={
+                "asset": normalized_asset,
+                "take_profit": request.take_profit,
+                "stop_loss": request.stop_loss,
+                "take_profit_order_id": protection.get("takeProfitOrderId"),
+                "stop_order_id": protection.get("stopOrderId"),
+            },
+        )
+    )
+    return {
+        "protection": protection,
+        "order": order,
+        "plan": plan,
+        "wallet": wallet_state_for_runtime(store, runtime, settings),
+    }
 
 
 @app.get("/api/runs/{run_id}")

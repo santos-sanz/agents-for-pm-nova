@@ -47,5 +47,12 @@ def test_agent_trade_analysis_ranks_candidates_inside_limits() -> None:
     assert analysis.best_candidate.size_usdc <= 75
     assert analysis.best_candidate.leverage <= 10
     assert len(analysis.candidates) >= 4
-    assert {candidate.side for candidate in analysis.candidates} == {"long", "short"}
+    for candidate in analysis.candidates:
+        mark = analysis.candles_by_timeframe[candidate.timeframe][-1].close
+        if candidate.side == "long":
+            assert candidate.stop_loss < min(candidate.entry_price, mark)
+            assert candidate.take_profit > max(candidate.entry_price, mark)
+        else:
+            assert candidate.take_profit < min(candidate.entry_price, mark)
+            assert candidate.stop_loss > max(candidate.entry_price, mark)
     assert {signal.interval for signal in analysis.timeframes} == {"15m", "1h", "4h", "1d"}
