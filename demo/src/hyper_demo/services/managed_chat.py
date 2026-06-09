@@ -1214,40 +1214,68 @@ class ManagedTradingChatService:
         return skill_ids, skill_versions
 
     def _create_memory_stores(self, client: Any) -> dict[str, str]:
-        canon = client.beta.memory_stores.create(
+        canon, canon_created = self._ensure_memory_store(
+            client,
             name="HyperClaude Trading Canon",
             description=(
                 "Read-only operating canon: guardrails, allowed exchange boundaries, "
                 "and trading safety principles."
             ),
-            metadata={"app": "hyperclaude", "kind": "canon"},
+            kind="canon",
         )
-        learning = client.beta.memory_stores.create(
+        learning, learning_created = self._ensure_memory_store(
+            client,
             name="HyperClaude Conversation Learning",
             description=(
                 "Read-write user preferences, rejected ideas, post-trade lessons, "
                 "and proposed process improvements. Never store secrets."
             ),
-            metadata={"app": "hyperclaude", "kind": "learning"},
+            kind="learning",
         )
         ids = {"canon": _object_id(canon), "learning": _object_id(learning)}
-        self._seed_memory(
-            client,
-            ids["canon"],
-            "/canon/safety.md",
-            SKILL_SPECS["hyperliquid-safety"][1],
-        )
-        self._seed_memory(
-            client,
-            ids["learning"],
-            "/learning/README.md",
-            (
-                "# Conversation Learning\n\n"
-                "Store user preferences, repeated mistakes, rejected setups, and post-trade "
-                "lessons here. Do not store API keys, private keys, cookies, or credentials.\n"
-            ),
-        )
+        if canon_created:
+            self._seed_memory(
+                client,
+                ids["canon"],
+                "/canon/safety.md",
+                SKILL_SPECS["hyperliquid-safety"][1],
+            )
+        if learning_created:
+            self._seed_memory(
+                client,
+                ids["learning"],
+                "/learning/README.md",
+                (
+                    "# Conversation Learning\n\n"
+                    "Store user preferences, repeated mistakes, rejected setups, and post-trade "
+                    "lessons here. Do not store API keys, private keys, cookies, or credentials.\n"
+                ),
+            )
         return ids
+
+    def _ensure_memory_store(
+        self,
+        client: Any,
+        *,
+        name: str,
+        description: str,
+        kind: str,
+    ) -> tuple[Any, bool]:
+        store = _find_latest_named_resource(
+            client.beta.memory_stores,
+            name,
+            metadata={"app": "hyperclaude", "kind": kind},
+        )
+        if store:
+            return store, False
+        return (
+            client.beta.memory_stores.create(
+                name=name,
+                description=description,
+                metadata={"app": "hyperclaude", "kind": kind},
+            ),
+            True,
+        )
 
     def _seed_memory(self, client: Any, store_id: str, path: str, content: str) -> None:
         try:

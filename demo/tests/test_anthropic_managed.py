@@ -5,13 +5,14 @@ from types import SimpleNamespace
 from pydantic import SecretStr
 
 from hyper_demo.adapters.anthropic_managed import (
+    CHAT_MEMORY_STORE_NAMES,
     RESEARCH_AGENT_NAME,
     RESEARCH_ENVIRONMENT_NAME,
     ManagedAgentResearchClient,
     _duplicates_to_remove,
 )
 from hyper_demo.config import Settings
-from hyper_demo.services.managed_chat import _find_latest_named_resource
+from hyper_demo.services.managed_chat import ManagedTradingChatService, _find_latest_named_resource
 from hyper_demo.storage import JsonStore
 
 
@@ -131,3 +132,78 @@ def test_chat_resource_lookup_filters_by_metadata_and_keeps_latest() -> None:
 
     assert resource
     assert resource.id == "agent_new"
+
+
+def test_chat_memory_stores_reuse_existing_latest_stores(tmp_path) -> None:
+    settings = Settings(DEMO_STATE_DIR=tmp_path)
+    service = ManagedTradingChatService(JsonStore(settings), settings)
+    memory_stores = FakeListApi(
+        [
+            SimpleNamespace(
+                id="canon_old",
+                name="HyperClaude Trading Canon",
+                created_at="2026-06-01T00:00:00Z",
+                metadata={"app": "hyperclaude", "kind": "canon"},
+            ),
+            SimpleNamespace(
+                id="canon_new",
+                name="HyperClaude Trading Canon",
+                created_at="2026-06-02T00:00:00Z",
+                metadata={"app": "hyperclaude", "kind": "canon"},
+            ),
+            SimpleNamespace(
+                id="learning_new",
+                name="HyperClaude Conversation Learning",
+                created_at="2026-06-02T00:00:00Z",
+                metadata={"app": "hyperclaude", "kind": "learning"},
+            ),
+        ]
+    )
+    memories = SimpleNamespace(create=lambda *args, **kwargs: None)
+    remote = SimpleNamespace(
+        beta=SimpleNamespace(
+            memory_stores=SimpleNamespace(
+                list=memory_stores.list,
+                create=memory_stores.create,
+                memories=memories,
+            )
+        )
+    )
+
+    ids = service._create_memory_stores(remote)
+
+    assert ids == {"canon": "canon_new", "learning": "learning_new"}
+    assert memory_stores.created == []
+
+
+def test_memory_store_duplicates_keep_newest_per_store_name() -> None:
+    items = [
+        SimpleNamespace(
+            id="canon_old",
+            name=CHAT_MEMORY_STORE_NAMES[0],
+            created_at="2026-06-01T00:00:00Z",
+        ),
+        SimpleNamespace(
+            id="canon_new",
+            name=CHAT_MEMORY_STORE_NAMES[0],
+            created_at="2026-06-02T00:00:00Z",
+        ),
+        SimpleNamespace(
+            id="learning_old",
+            name=CHAT_MEMORY_STORE_NAMES[1],
+            created_at="2026-06-01T00:00:00Z",
+        ),
+        SimpleNamespace(
+            id="learning_new",
+            name=CHAT_MEMORY_STORE_NAMES[1],
+            created_at="2026-06-02T00:00:00Z",
+        ),
+    ]
+
+    removed = [
+        item
+        for name in CHAT_MEMORY_STORE_NAMES
+        for item in _duplicates_to_remove(items, name, keep=1)
+    ]
+
+    assert [item.id for item in removed] == ["canon_old", "learning_old"]

@@ -26,6 +26,10 @@ CHAT_AGENT_NAMES = [
     "HyperClaude Toolsmith",
     "HyperClaude Chat Coordinator",
 ]
+CHAT_MEMORY_STORE_NAMES = [
+    "HyperClaude Trading Canon",
+    "HyperClaude Conversation Learning",
+]
 
 SYSTEM_PROMPT = """You are an educational investment analysis agent for a live demo.
 
@@ -229,6 +233,7 @@ class ManagedAgentResearchClient:
         client = Anthropic(api_key=api_key.get_secret_value() if api_key else None)
         all_agents = _list_all(client.beta.agents)
         all_environments = _list_all(client.beta.environments)
+        all_memory_stores = _list_all(client.beta.memory_stores)
         research_agents = _duplicates_to_remove(all_agents, RESEARCH_AGENT_NAME, keep)
         chat_agents = [
             item
@@ -241,6 +246,11 @@ class ManagedAgentResearchClient:
             keep,
         )
         chat_environments = _duplicates_to_remove(all_environments, CHAT_ENVIRONMENT_NAME, keep)
+        chat_memory_stores = [
+            item
+            for name in CHAT_MEMORY_STORE_NAMES
+            for item in _duplicates_to_remove(all_memory_stores, name, keep)
+        ]
         result: dict[str, Any] = {
             "dry_run": dry_run,
             "keep": keep,
@@ -248,6 +258,7 @@ class ManagedAgentResearchClient:
             "chat_agents": [_object_id(item) for item in chat_agents],
             "research_environments": [_object_id(item) for item in research_environments],
             "chat_environments": [_object_id(item) for item in chat_environments],
+            "chat_memory_stores": [_object_id(item) for item in chat_memory_stores],
         }
         if dry_run:
             return result
@@ -260,6 +271,12 @@ class ManagedAgentResearchClient:
                 client.beta.environments.delete(environment_id)
             except Exception:
                 client.beta.environments.archive(environment_id)
+        for memory_store in chat_memory_stores:
+            memory_store_id = _object_id(memory_store)
+            try:
+                client.beta.memory_stores.delete(memory_store_id)
+            except Exception:
+                client.beta.memory_stores.archive(memory_store_id)
         return result
 
     def _prompt(
