@@ -364,12 +364,18 @@
                 <h1 id="chat-session-title">Chat</h1>
               </div>
               <div class="chat-head-actions">
+                <span id="chat-session-status" class="pill neutral">idle</span>
                 <button type="button" data-action="chat-new-session">New session</button>
                 <button type="button" data-action="chat-interrupt">Interrupt</button>
                 <button type="button" data-action="chat-archive">Archive</button>
               </div>
             </div>
             <div id="chat-events-list" class="chat-events-list"></div>
+            <div class="chat-suggestions" aria-label="Quick chat prompts">
+              <button type="button" data-chat-prompt="Summarize my wallet, open positions, protection orders, and main risks.">Portfolio brief</button>
+              <button type="button" data-chat-prompt="Analyze the allowed assets, use the available context, and propose several intraday trades without executing any of them.">Propose trades</button>
+              <button type="button" data-chat-prompt="Formally validate the latest stored plan and tell me whether it can be executed under the current guardrails.">Validate plan</button>
+            </div>
             <div class="chat-composer">
               <label class="field">
                 Message
@@ -384,7 +390,7 @@
 
     <div id="toast" role="status" aria-live="polite"></div>
     <script src="/vendor/lightweight-charts/lightweight-charts.standalone.production.js"></script>
-    <script src="/static/app.js?v=hyperclaude-managed-chat-20260609-4"></script>
+    <script src="/static/app.js?v=hyperclaude-managed-chat-20260609-5"></script>
     <script type="module" src="/static/privy.js?v=hyperclaude-integrated-funding-20260609-4"></script>
   </body>
 </html>

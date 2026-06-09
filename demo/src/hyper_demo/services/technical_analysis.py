@@ -297,23 +297,31 @@ def trade_plan_from_candidate(
     runtime: RuntimeSettings,
     candidate: TradeCandidate,
 ) -> TradePlan:
+    stop_loss = candidate.stop_loss if candidate.leverage >= 10 else None
+    max_loss_usdc = candidate.max_loss_usdc if stop_loss is not None else 0.0
+    rationale = candidate.rationale
+    if stop_loss is None:
+        rationale = (
+            f"{rationale} No stop-loss is attached because leverage is below 10x; "
+            "use active monitoring, thesis invalidation, and take-profit for the intraday exit."
+        )
     return TradePlan(
         asset=asset,
         side=candidate.side,
         size_usdc=candidate.size_usdc,
         entry_type=candidate.entry_type,
         entry_price=candidate.entry_price,
-        stop_loss=candidate.stop_loss,
+        stop_loss=stop_loss,
         take_profit=candidate.take_profit,
-        max_loss_usdc=candidate.max_loss_usdc,
+        max_loss_usdc=max_loss_usdc,
         leverage=candidate.leverage,
         profile_id=profile.id,
         research_id=report.id,
-        rationale=candidate.rationale,
+        rationale=rationale,
         invalidation_criteria=report.why_not_invest[:3]
         or [
             "The selected timeframe flips direction against the trade.",
-            "Stop-loss or take-profit placement cannot be verified before execution.",
+            "Take-profit or thesis invalidation cannot be verified before execution.",
         ],
         confidence=candidate.confidence,
         thesis=report.thesis,
