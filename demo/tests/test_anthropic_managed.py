@@ -6,10 +6,13 @@ from pydantic import SecretStr
 
 from hyper_demo.adapters.anthropic_managed import (
     CHAT_MEMORY_STORE_NAMES,
+    CHAT_SKILL_TITLES,
     RESEARCH_AGENT_NAME,
     RESEARCH_ENVIRONMENT_NAME,
     ManagedAgentResearchClient,
+    _delete_skill_with_versions,
     _duplicates_to_remove,
+    _skill_duplicates_to_remove,
 )
 from hyper_demo.config import Settings
 from hyper_demo.services.managed_chat import ManagedTradingChatService, _find_latest_named_resource
@@ -34,6 +37,26 @@ class FakeListApi:
         )
         self.items.append(item)
         return item
+
+
+class FakeSkillVersionsApi:
+    def __init__(self) -> None:
+        self.deleted_versions: list[tuple[str, str]] = []
+
+    def list(self, skill_id: str, limit: int = 100) -> SimpleNamespace:
+        return SimpleNamespace(data=[SimpleNamespace(version=1), SimpleNamespace(version=2)])
+
+    def delete(self, version: str, *, skill_id: str) -> None:
+        self.deleted_versions.append((skill_id, version))
+
+
+class FakeSkillsApi:
+    def __init__(self) -> None:
+        self.versions = FakeSkillVersionsApi()
+        self.deleted_skills: list[str] = []
+
+    def delete(self, skill_id: str) -> None:
+        self.deleted_skills.append(skill_id)
 
 
 def test_research_resources_reuse_latest_matching_agent_and_environment(tmp_path) -> None:
@@ -136,7 +159,7 @@ def test_chat_resource_lookup_filters_by_metadata_and_keeps_latest() -> None:
 
 def test_chat_memory_stores_reuse_existing_latest_stores(tmp_path) -> None:
     settings = Settings(DEMO_STATE_DIR=tmp_path)
-    service = ManagedTradingChatService(JsonStore(settings), settings)
+    service = ManagedTradingChatService(settings, JsonStore(settings))
     memory_stores = FakeListApi(
         [
             SimpleNamespace(
@@ -207,3 +230,98 @@ def test_memory_store_duplicates_keep_newest_per_store_name() -> None:
     ]
 
     assert [item.id for item in removed] == ["canon_old", "learning_old"]
+
+
+def test_skill_duplicates_keep_newest_matching_base_title() -> None:
+    items = [
+        SimpleNamespace(
+            id="skill_old",
+            display_title=f"{CHAT_SKILL_TITLES[0]} (managed-chat-old)",
+            created_at="2026-06-01T00:00:00Z",
+        ),
+        SimpleNamespace(
+            id="skill_new",
+            display_title=CHAT_SKILL_TITLES[0],
+            created_at="2026-06-02T00:00:00Z",
+        ),
+        SimpleNamespace(
+            id="skill_other",
+            display_title="Unrelated Skill",
+            created_at="2026-06-03T00:00:00Z",
+        ),
+    ]
+
+    removed = _skill_duplicates_to_remove(items, CHAT_SKILL_TITLES[0], keep=1)
+
+    assert [item.id for item in removed] == ["skill_old"]
+
+
+def test_chat_skills_reuse_existing_latest_titles(tmp_path) -> None:
+    settings = Settings(DEMO_STATE_DIR=tmp_path)
+    service = ManagedTradingChatService(settings, JsonStore(settings))
+    skills = FakeListApi(
+        [
+            SimpleNamespace(
+                id=f"skill_{index}",
+                display_title=title,
+                created_at=f"2026-06-0{index + 1}T00:00:00Z",
+                version=index + 1,
+            )
+            for index, title in enumerate(CHAT_SKILL_TITLES)
+        ]
+    )
+    remote = SimpleNamespace(beta=SimpleNamespace(skills=skills))
+
+    skill_ids, skill_versions = service._create_skills(remote)
+
+    assert set(skill_ids) == {
+        "hyperliquid-safety",
+        "source-quality",
+        "hypertracker-cli",
+        "trade-validation",
+        "formal-order-validation",
+        "self-improvement",
+    }
+    assert skill_ids["hyperliquid-safety"] == "skill_0"
+    assert skill_versions["self-improvement"] == 6
+    assert skills.created == []
+
+
+def test_managed_vault_id_reuses_remote_vault_when_local_state_missing(tmp_path) -> None:
+    settings = Settings(DEMO_STATE_DIR=tmp_path)
+    service = ManagedTradingChatService(settings, JsonStore(settings))
+    vaults = FakeListApi(
+        [
+            SimpleNamespace(
+                id="vault_old",
+                display_name="HyperClaude API-Key Tools",
+                created_at="2026-06-01T00:00:00Z",
+                metadata={"app": "hyperclaude", "component": "managed-chat"},
+            ),
+            SimpleNamespace(
+                id="vault_new",
+                display_name="HyperClaude API-Key Tools",
+                created_at="2026-06-02T00:00:00Z",
+                metadata={"app": "hyperclaude", "component": "managed-chat"},
+            ),
+        ]
+    )
+    remote = SimpleNamespace(beta=SimpleNamespace(vaults=vaults))
+
+    vault_id = service._managed_vault_id(remote)
+
+    assert vault_id == "vault_new"
+    assert vaults.created == []
+
+
+def test_delete_skill_removes_versions_first() -> None:
+    skills = FakeSkillsApi()
+    client = SimpleNamespace(beta=SimpleNamespace(skills=skills))
+
+    _delete_skill_with_versions(client, "skill_demo")
+
+    assert skills.versions.deleted_versions == [
+        ("skill_demo", "1"),
+        ("skill_demo", "2"),
+    ]
+    assert skills.deleted_skills == ["skill_demo"]

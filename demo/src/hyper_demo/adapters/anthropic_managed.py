@@ -30,6 +30,15 @@ CHAT_MEMORY_STORE_NAMES = [
     "HyperClaude Trading Canon",
     "HyperClaude Conversation Learning",
 ]
+CHAT_SKILL_TITLES = [
+    "Hyperliquid Trading Safety",
+    "Market Source Quality",
+    "HyperTracker CLI Workflow",
+    "Trade Plan Validation",
+    "Formal Autonomous Order Validation",
+    "Trading Self Improvement",
+]
+CHAT_VAULT_NAME = "HyperClaude API-Key Tools"
 
 SYSTEM_PROMPT = """You are an educational investment analysis agent for a live demo.
 
@@ -234,6 +243,8 @@ class ManagedAgentResearchClient:
         all_agents = _list_all(client.beta.agents)
         all_environments = _list_all(client.beta.environments)
         all_memory_stores = _list_all(client.beta.memory_stores)
+        all_skills = _list_all(client.beta.skills)
+        all_vaults = _list_all(client.beta.vaults)
         research_agents = _duplicates_to_remove(all_agents, RESEARCH_AGENT_NAME, keep)
         chat_agents = [
             item
@@ -251,6 +262,12 @@ class ManagedAgentResearchClient:
             for name in CHAT_MEMORY_STORE_NAMES
             for item in _duplicates_to_remove(all_memory_stores, name, keep)
         ]
+        chat_skills = [
+            item
+            for title in CHAT_SKILL_TITLES
+            for item in _skill_duplicates_to_remove(all_skills, title, keep)
+        ]
+        chat_vaults = _duplicates_to_remove(all_vaults, CHAT_VAULT_NAME, keep)
         result: dict[str, Any] = {
             "dry_run": dry_run,
             "keep": keep,
@@ -259,6 +276,8 @@ class ManagedAgentResearchClient:
             "research_environments": [_object_id(item) for item in research_environments],
             "chat_environments": [_object_id(item) for item in chat_environments],
             "chat_memory_stores": [_object_id(item) for item in chat_memory_stores],
+            "chat_skills": [_object_id(item) for item in chat_skills],
+            "chat_vaults": [_object_id(item) for item in chat_vaults],
         }
         if dry_run:
             return result
@@ -277,6 +296,14 @@ class ManagedAgentResearchClient:
                 client.beta.memory_stores.delete(memory_store_id)
             except Exception:
                 client.beta.memory_stores.archive(memory_store_id)
+        for skill in chat_skills:
+            _delete_skill_with_versions(client, _object_id(skill))
+        for vault in chat_vaults:
+            vault_id = _object_id(vault)
+            try:
+                client.beta.vaults.delete(vault_id)
+            except Exception:
+                client.beta.vaults.archive(vault_id)
         return result
 
     def _prompt(
@@ -418,14 +445,47 @@ def _created_sort_key(obj: Any) -> str:
     return str(getattr(obj, "created_at", "") or "")
 
 
-def _list_all(api: Any) -> list[Any]:
-    page = api.list(limit=100)
+def _list_all(api: Any, *args: Any) -> list[Any]:
+    page = api.list(*args, limit=100)
     if hasattr(page, "data"):
         return list(page.data)
     return list(page)
 
 
 def _duplicates_to_remove(items: list[Any], name: str, keep: int) -> list[Any]:
-    named = [item for item in items if getattr(item, "name", None) == name]
+    named = [item for item in items if _resource_name(item) == name]
     sorted_items = sorted(named, key=_created_sort_key, reverse=True)
     return sorted_items[keep:]
+
+
+def _skill_duplicates_to_remove(items: list[Any], title: str, keep: int) -> list[Any]:
+    named = [
+        item
+        for item in items
+        if _resource_name(item) == title or _resource_name(item).startswith(f"{title} (")
+    ]
+    sorted_items = sorted(named, key=_created_sort_key, reverse=True)
+    return sorted_items[keep:]
+
+
+def _resource_name(item: Any) -> str:
+    for attr in ("name", "display_name", "display_title", "title"):
+        value = getattr(item, attr, None)
+        if value:
+            return str(value)
+    return ""
+
+
+def _delete_skill_with_versions(client: Any, skill_id: str) -> None:
+    versions = _list_all(client.beta.skills.versions, skill_id)
+    for version in versions:
+        client.beta.skills.versions.delete(_version_id(version), skill_id=skill_id)
+    client.beta.skills.delete(skill_id)
+
+
+def _version_id(item: Any) -> str:
+    for attr in ("version", "id"):
+        value = getattr(item, attr, None)
+        if value is not None:
+            return str(value)
+    return str(item)

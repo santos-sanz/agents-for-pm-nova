@@ -9,7 +9,6 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
-from uuid import uuid4
 
 from anthropic.lib import files_from_dir
 
@@ -1194,19 +1193,20 @@ class ManagedTradingChatService:
     def _create_skills(self, client: Any) -> tuple[dict[str, str], dict[str, int]]:
         skill_ids: dict[str, str] = {}
         skill_versions: dict[str, int] = {}
-        build_suffix = f"{CHAT_AGENT_RUN_LABEL}-{uuid4().hex[:8]}"
         with tempfile.TemporaryDirectory(prefix="hyperclaude-skills-") as tmp:
             root = Path(tmp)
             for slug, (title, body) in SKILL_SPECS.items():
-                skill_dir = root / slug
-                skill_dir.mkdir()
-                skill_path = skill_dir / "SKILL.md"
-                content = _skill_markdown(slug, body)
-                skill_path.write_text(content, encoding="utf-8")
-                skill = client.beta.skills.create(
-                    display_title=f"{title} ({build_suffix})",
-                    files=files_from_dir(skill_dir),
-                )
+                skill = _find_latest_titled_resource(client.beta.skills, title)
+                if not skill:
+                    skill_dir = root / slug
+                    skill_dir.mkdir()
+                    skill_path = skill_dir / "SKILL.md"
+                    content = _skill_markdown(slug, body)
+                    skill_path.write_text(content, encoding="utf-8")
+                    skill = client.beta.skills.create(
+                        display_title=title,
+                        files=files_from_dir(skill_dir),
+                    )
                 skill_ids[slug] = _object_id(skill)
                 version = _object_version(skill)
                 if version is not None:
@@ -1365,6 +1365,13 @@ class ManagedTradingChatService:
         existing = self._existing_managed_vault_id()
         if existing:
             return existing
+        remote = _find_latest_named_resource(
+            client.beta.vaults,
+            "HyperClaude API-Key Tools",
+            metadata={"app": "hyperclaude", "component": CHAT_AGENT_RUN_LABEL},
+        )
+        if remote:
+            return _object_id(remote)
         vault = client.beta.vaults.create(
             display_name="HyperClaude API-Key Tools",
             metadata={"app": "hyperclaude", "component": CHAT_AGENT_RUN_LABEL},
@@ -1709,7 +1716,18 @@ def _find_latest_named_resource(
     matches = [
         item
         for item in _list_resource_page(api)
-        if getattr(item, "name", None) == name and _metadata_matches(item, metadata or {})
+        if _resource_name(item) == name and _metadata_matches(item, metadata or {})
+    ]
+    if not matches:
+        return None
+    return sorted(matches, key=_created_sort_key)[-1]
+
+
+def _find_latest_titled_resource(api: Any, title: str) -> Any | None:
+    matches = [
+        item
+        for item in _list_resource_page(api)
+        if _resource_name(item) == title or _resource_name(item).startswith(f"{title} (")
     ]
     if not matches:
         return None
@@ -1721,6 +1739,14 @@ def _list_resource_page(api: Any) -> list[Any]:
     if hasattr(page, "data"):
         return list(page.data)
     return list(page)
+
+
+def _resource_name(item: Any) -> str:
+    for attr in ("name", "display_name", "display_title", "title"):
+        value = getattr(item, attr, None)
+        if value:
+            return str(value)
+    return ""
 
 
 def _metadata_matches(item: Any, expected: dict[str, str]) -> bool:
