@@ -6,6 +6,7 @@
   "dependencies": {
     "@nktkas/hyperliquid": "^0.32.2",
     "@privy-io/node": "^0.20.0",
+    "lightweight-charts": "^5.2.0",
     "viem": "^2.52.2"
   }
 }

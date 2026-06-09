@@ -43,11 +43,19 @@ from hyper_demo.storage import JsonStore
 
 APP_ROOT = Path(__file__).resolve().parent
 STATIC_ROOT = APP_ROOT / "static"
+DEMO_ROOT = APP_ROOT.parents[1]
+LIGHTWEIGHT_CHARTS_ROOT = DEMO_ROOT / "node_modules" / "lightweight-charts" / "dist"
 ARBITRUM_RPC_URL = "https://arb1.arbitrum.io/rpc"
 ARBITRUM_USDC_ADDRESS = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"
 
 app = FastAPI(title="HyperClaude", version="0.2.0")
 app.mount("/static", StaticFiles(directory=STATIC_ROOT), name="static")
+if LIGHTWEIGHT_CHARTS_ROOT.exists():
+    app.mount(
+        "/vendor/lightweight-charts",
+        StaticFiles(directory=LIGHTWEIGHT_CHARTS_ROOT),
+        name="lightweight-charts",
+    )
 
 
 class AgentAnalyzeRequest(BaseModel):
@@ -57,7 +65,6 @@ class AgentAnalyzeRequest(BaseModel):
 
 class TradeExecutionRequest(BaseModel):
     confirmed: bool = False
-    confirmation_phrase: str | None = None
 
 
 class ManualTradePlanRequest(BaseModel):
@@ -74,7 +81,6 @@ class ManualTradePlanRequest(BaseModel):
 class MasterDepositRequest(BaseModel):
     amount_usdc: float
     confirmed: bool = False
-    confirmation_phrase: str | None = None
 
 
 class SetupCheck(BaseModel):
@@ -140,7 +146,7 @@ def managed_agent_opportunities(
     assets = ", ".join(runtime.watchlist[:5]) or "the configured watchlist"
     network_label = "mainnet" if runtime.network == RuntimeNetwork.prodnet else "testnet"
     execution_gate = (
-        "Require wallet confirmation, risk check, and CONFIRM MAINNET ORDER."
+        "Require wallet confirmation, risk check, and explicit mainnet enablement."
         if runtime.network == RuntimeNetwork.prodnet
         else "Require demo confirmation before any testnet submission."
     )
@@ -514,7 +520,7 @@ def deposit_privy_master(request: MasterDepositRequest) -> dict[str, Any]:
             agent,
             amount_usdc=request.amount_usdc,
             confirmed=request.confirmed,
-            confirmation_phrase=request.confirmation_phrase,
+            confirmation_phrase=None,
         )
     except (ExecutionBlocked, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -685,7 +691,7 @@ def api_execute_trade(plan_id: str, request: TradeExecutionRequest):
             runtime,
             store,
             confirmed=request.confirmed,
-            confirmation_phrase=request.confirmation_phrase,
+            confirmation_phrase=None,
         )
     except (ExecutionBlocked, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

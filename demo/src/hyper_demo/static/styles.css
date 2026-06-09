@@ -179,23 +179,6 @@ button:active {
   padding: 0 14px;
 }
 
-.status-strip {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-.status-strip span {
-  border: 1px solid var(--hairline);
-  border-radius: 999px;
-  padding: 7px 11px;
-  color: var(--body);
-  font-size: 11px;
-  font-weight: 800;
-  text-transform: uppercase;
-}
-
 .pill {
   border: 1px solid var(--line-strong);
   border-radius: 999px;
@@ -206,34 +189,16 @@ button:active {
   text-transform: uppercase;
 }
 
-.status-strip .wallet-status {
-  border-color: var(--hairline);
-  color: var(--body);
-}
-
-.status-strip .wallet-status.connected {
-  border-color: rgba(var(--green-rgb), 0.5);
-  color: var(--green-text);
-}
-
 .pill.gain,
 .gain b,
 .gain {
   color: var(--green);
 }
 
-.status-strip .testnet {
-  color: var(--green-text);
-}
-
 .pill.loss,
 .loss b,
 .loss {
   color: var(--orange);
-}
-
-.status-strip .prodnet {
-  color: var(--orange-text);
 }
 
 .pill.warning,
@@ -1380,10 +1345,6 @@ pre {
     flex: 1;
   }
 
-  .status-strip {
-    justify-content: flex-start;
-  }
-
   .hero,
   .panel,
   .events-panel {
@@ -1850,11 +1811,6 @@ body.trading-screen .app-nav {
   border-color: #22272b;
 }
 
-body.trading-screen .status-strip span {
-  border-color: #22272b;
-  color: #9aa3a7;
-}
-
 body.trading-screen .cockpit {
   display: block;
   width: 100%;
@@ -1985,7 +1941,7 @@ body.trading-screen .rail {
 
 .chart-toolbar {
   display: grid;
-  grid-template-columns: minmax(300px, 1fr) auto;
+  grid-template-columns: minmax(160px, 1fr) auto;
   gap: 12px;
   align-items: center;
   border-bottom: 1px solid #171a1d;
@@ -1994,7 +1950,7 @@ body.trading-screen .rail {
 
 .chart-toolbar .trading-search {
   display: grid;
-  grid-template-columns: 110px minmax(160px, 1fr) 110px;
+  grid-template-columns: minmax(120px, 180px);
   gap: 8px;
 }
 
@@ -2013,6 +1969,29 @@ body.trading-screen .rail {
   background: #2f8cff;
   color: #ffffff;
   border-color: #2f8cff;
+}
+
+.ai-assist-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 150px;
+  gap: 8px;
+  padding: 12px 14px 0;
+}
+
+.ai-assist-form input {
+  min-height: 36px;
+  border: 1px solid var(--hairline);
+  border-radius: 7px;
+  background: #ffffff;
+  color: var(--page-ink);
+  padding: 0 10px;
+}
+
+.ai-assist-form .primary {
+  min-height: 36px;
+  background: var(--page-ink);
+  border-color: var(--page-ink);
+  color: #ffffff;
 }
 
 .timeframe-tabs {
@@ -2082,6 +2061,22 @@ body[data-loading-candles="true"] .chart-shell::after {
   background: #0b0d0e;
 }
 
+.chart-attribution {
+  position: absolute;
+  right: 12px;
+  bottom: 8px;
+  z-index: 3;
+  color: rgba(24, 23, 21, 0.68);
+  font-size: 11px;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.chart-attribution:hover {
+  color: var(--page-ink);
+  text-decoration: underline;
+}
+
 .chart-empty {
   inset: 18px;
   border-color: #23292e;
@@ -2118,7 +2113,7 @@ body[data-loading-candles="true"] .chart-shell::after {
 .ticket-top h2 {
   margin: 6px 0 0;
   color: #ffffff;
-  font-size: 15px;
+  font-size: 16px;
 }
 
 .best-bet {
@@ -2193,16 +2188,16 @@ body[data-loading-candles="true"] .chart-shell::after {
 
 .ticket {
   display: grid;
-  gap: 12px;
+  gap: 10px;
   padding: 0 12px 12px;
 }
 
 .manual-order-section {
   display: grid;
-  gap: 8px;
+  gap: 10px;
   border: 1px solid #202529;
   background: #111519;
-  padding: 9px;
+  padding: 10px;
 }
 
 .manual-order-section label {
@@ -2217,12 +2212,14 @@ body[data-loading-candles="true"] .chart-shell::after {
 .manual-order-section input,
 .manual-order-section select {
   width: 100%;
-  min-height: 32px;
+  min-height: 40px;
   border: 1px solid #23292e;
   border-radius: 6px;
   background: #090a0b;
   color: #ffffff;
-  padding: 0 9px;
+  padding: 0 10px;
+  font-size: 15px;
+  font-weight: 800;
 }
 
 .manual-order-section input[type="range"] {
@@ -2242,6 +2239,137 @@ body[data-loading-candles="true"] .chart-shell::after {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px;
+}
+
+.order-ticket-core {
+  border-color: rgba(var(--green-rgb), 0.36);
+  background: #ffffff;
+}
+
+.order-ticket-core .manual-order-section label,
+.order-ticket-core label,
+.order-ticket-core span,
+.order-ticket-core small {
+  color: var(--body);
+}
+
+.order-ticket-meta,
+.order-footprint {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.order-footprint {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.order-ticket-meta div,
+.order-footprint div {
+  display: grid;
+  gap: 3px;
+  min-height: 42px;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  background: var(--surface-soft);
+  padding: 7px;
+}
+
+.order-ticket-meta span,
+.order-footprint span {
+  color: var(--body);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.order-ticket-meta b,
+.order-footprint b {
+  color: var(--page-ink);
+  font-size: 13px;
+}
+
+.trade-segment,
+.size-presets {
+  display: grid;
+  gap: 8px;
+}
+
+.trade-segment {
+  grid-template-columns: 1fr 1fr;
+}
+
+.size-presets {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.trade-segment button,
+.size-presets button {
+  min-height: 42px;
+  border: 1px solid var(--hairline);
+  border-radius: 7px;
+  background: #ffffff;
+  color: var(--page-ink);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.side-picker button:first-child.active {
+  border-color: var(--green);
+  background: rgba(var(--green-rgb), 0.16);
+  color: var(--green-text);
+}
+
+.side-picker button:last-child.active {
+  border-color: #7f2f2f;
+  background: #7f2f2f;
+  color: #ffffff;
+}
+
+.trade-segment:not(.side-picker) button.active,
+.size-presets button.active {
+  border-color: var(--green);
+  background: rgba(var(--green-rgb), 0.14);
+  color: var(--page-ink);
+}
+
+.primary-number {
+  display: grid;
+  gap: 5px;
+}
+
+.primary-number span {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid var(--hairline);
+  border-radius: 7px;
+  background: #ffffff;
+}
+
+.primary-number span input {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.primary-number > input {
+  border-color: var(--hairline);
+  background: #ffffff;
+  color: var(--page-ink);
+}
+
+.primary-number em {
+  padding-right: 10px;
+  color: var(--body);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 900;
+}
+
+.order-status-card {
+  background: var(--surface-soft);
 }
 
 .ticket-label {
@@ -2293,7 +2421,7 @@ body[data-loading-candles="true"] .chart-shell::after {
 
 .ticket-panel .button-row {
   display: grid;
-  grid-template-columns: 1fr 1fr 0.8fr;
+  grid-template-columns: 0.8fr 1.2fr 0.8fr;
 }
 
 .ticket-panel .danger {
@@ -2454,11 +2582,6 @@ body.trading-screen .app-nav {
   border-color: var(--hairline);
 }
 
-body.trading-screen .status-strip span {
-  border-color: var(--hairline);
-  color: var(--body);
-}
-
 .trade-workbench {
   background: var(--canvas);
 }
@@ -2495,11 +2618,24 @@ body.trading-screen .status-strip span {
 .manual-order-section,
 .manual-order-section input,
 .manual-order-section select,
+.trade-segment button,
+.size-presets button,
+.order-ticket-meta div,
+.order-footprint div,
+.primary-number span,
 .provided-grid div,
 .ticket-panel .field input {
   border-color: var(--hairline);
-  background: #ffffff;
   color: var(--page-ink);
+}
+
+.trade-segment button,
+.size-presets button,
+.order-ticket-core,
+.order-ticket-meta div,
+.order-footprint div,
+.primary-number span {
+  background: #ffffff;
 }
 
 .market-rail button.active,
@@ -2530,6 +2666,9 @@ body.trading-screen .status-strip span {
 .manual-mode-banner span,
 .manual-order-section label,
 .manual-order-section small,
+.order-ticket-meta span,
+.order-footprint span,
+.primary-number em,
 .provided-grid span,
 .ticket-section-head em,
 .timeframe-card em,
@@ -2660,6 +2799,7 @@ body[data-loading-candles="true"] .chart-shell::after {
   }
 
   .chart-toolbar .trading-search,
+  .ai-assist-form,
   .timeframe-cards,
   .candidate {
     grid-template-columns: 1fr;
@@ -2700,4 +2840,309 @@ body[data-loading-candles="true"] .chart-shell::after {
   .ticket-panel .button-row [data-action="reject"] {
     grid-column: span 2;
   }
+}
+
+/* Contrast hardening for the manual trading cockpit. Keep this last so it wins older theme rules. */
+body.trading-screen .market-rail button {
+  background: #111519;
+  color: #f7faf8;
+}
+
+body.trading-screen .market-rail button.active,
+body.trading-screen .market-rail button:hover {
+  background: #e0e4d5;
+  color: #141413;
+}
+
+body.trading-screen .market-rail button b,
+body.trading-screen .market-rail button small {
+  color: inherit;
+}
+
+body.trading-screen .market-rail button:not(.active) .asset-icon,
+body.trading-screen .market-rail button:not(.active) .asset-icon span {
+  background: #f7faf8;
+  color: #111519;
+}
+
+body.trading-screen .market-rail button.active .asset-icon,
+body.trading-screen .market-rail button.active .asset-icon span {
+  background: #141413;
+  color: #ffffff;
+}
+
+body.trading-screen .chart-toolbar input,
+body.trading-screen .timeframe-tabs button {
+  background: #111519;
+  color: #f7faf8;
+}
+
+body.trading-screen .timeframe-tabs button.active,
+body.trading-screen .timeframe-tabs button:hover {
+  background: #e0e4d5;
+  color: #141413;
+}
+
+body.trading-screen #decision-pill.pill.neutral {
+  background: #e0e4d5;
+  color: #141413;
+}
+
+body.trading-screen .best-bet.empty p,
+body.trading-screen .best-bet.empty,
+body.trading-screen .ticket-panel .check-row,
+body.trading-screen .empty-assets {
+  color: #3d3d3a;
+}
+
+body.trading-screen .order-status-card .ticket-label,
+body.trading-screen .order-status-card .ticket-section-head em {
+  color: #3d3d3a;
+}
+
+body.trading-screen .order-status-card .provided-grid div {
+  background: #ffffff;
+}
+
+body.trading-screen .order-status-card .provided-grid span {
+  color: #3d3d3a;
+}
+
+body.trading-screen .order-status-card .provided-grid b {
+  color: #141413;
+}
+
+/* Settings-aligned trading surface. This supersedes the older dark exchange skin. */
+body.trading-screen {
+  background: var(--canvas);
+  color: var(--page-ink);
+}
+
+body.trading-screen .topbar {
+  background: rgba(250, 249, 245, 0.94);
+  border-bottom: 1px solid var(--hairline);
+  color: var(--page-ink);
+}
+
+body.trading-screen .brand,
+body.trading-screen .brand small {
+  color: var(--page-ink);
+}
+
+body.trading-screen .brand-mark {
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  background: var(--green);
+  color: var(--on-accent);
+}
+
+body.trading-screen .app-nav {
+  background: var(--surface-card);
+  border-color: var(--hairline);
+}
+
+body.trading-screen .cockpit {
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 18px 24px 28px;
+}
+
+body.trading-screen .mainstage {
+  gap: 16px;
+}
+
+body.trading-screen .events-panel,
+body.trading-screen .rail {
+  display: none;
+}
+
+body.trading-screen .trade-workbench {
+  min-height: auto;
+  overflow: hidden;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  background: var(--surface-soft);
+  box-shadow: var(--shadow);
+}
+
+body.trading-screen .market-rail {
+  background: var(--surface-card);
+  border-bottom: 1px solid var(--hairline);
+  padding: 10px 14px;
+}
+
+body.trading-screen .market-rail button {
+  min-height: 36px;
+  border-color: var(--hairline);
+  background: #ffffff;
+  color: var(--page-ink);
+}
+
+body.trading-screen .market-rail button.active,
+body.trading-screen .market-rail button:hover {
+  border-color: var(--green);
+  background: rgba(var(--green-rgb), 0.16);
+  color: var(--page-ink);
+}
+
+body.trading-screen .market-rail button .asset-icon,
+body.trading-screen .market-rail button .asset-icon span {
+  background: var(--surface);
+  color: var(--ink);
+}
+
+body.trading-screen .dreamcash-board {
+  grid-template-columns: minmax(0, 1fr) 380px;
+  min-height: 680px;
+}
+
+body.trading-screen .market-pane,
+body.trading-screen .trade-side,
+body.trading-screen .side-card,
+body.trading-screen .ticket-panel,
+body.trading-screen .bottom-table {
+  background: var(--surface-soft);
+}
+
+body.trading-screen .market-pane {
+  border-right: 1px solid var(--hairline);
+  border-radius: 0;
+}
+
+body.trading-screen .market-header,
+body.trading-screen .chart-toolbar,
+body.trading-screen .ticket-top,
+body.trading-screen .bottom-table {
+  border-color: var(--hairline);
+}
+
+body.trading-screen .pair-title {
+  border-color: var(--hairline);
+}
+
+body.trading-screen .pair-title h1,
+body.trading-screen .market-stats b,
+body.trading-screen .ticket-top h2 {
+  color: var(--page-ink);
+}
+
+body.trading-screen .market-stats div {
+  border-color: var(--hairline);
+}
+
+body.trading-screen .market-stats span {
+  color: var(--body);
+}
+
+body.trading-screen .chart-toolbar input,
+body.trading-screen .timeframe-tabs button {
+  border-color: var(--hairline);
+  background: #ffffff;
+  color: var(--page-ink);
+}
+
+body.trading-screen .timeframe-tabs button.active,
+body.trading-screen .timeframe-tabs button:hover {
+  border-color: var(--green);
+  background: rgba(var(--green-rgb), 0.16);
+  color: var(--page-ink);
+}
+
+body.trading-screen .chart-shell,
+body.trading-screen #candle-chart {
+  background: var(--surface-soft);
+}
+
+body.trading-screen .ticket-panel {
+  border-left: 1px solid var(--hairline);
+  border-radius: 0;
+}
+
+body.trading-screen .ticket-top {
+  min-height: 64px;
+  padding: 0 16px;
+}
+
+body.trading-screen .best-bet {
+  padding: 14px 16px;
+}
+
+body.trading-screen .ticket {
+  padding: 0 16px 16px;
+}
+
+body.trading-screen .manual-order-section,
+body.trading-screen .order-status-card {
+  border-color: var(--hairline);
+  background: #ffffff;
+}
+
+body.trading-screen .ticket-panel .check-row,
+body.trading-screen .ticket-panel .button-row {
+  margin-right: 16px;
+  margin-left: 16px;
+}
+
+body.trading-screen .bottom-table {
+  background: var(--surface-soft);
+  border-radius: 0 0 12px 12px;
+}
+
+body.trading-screen .ai-assist-form input {
+  background: #ffffff;
+  color: var(--page-ink);
+}
+
+/* Trading visual consistency pass: remove dark exchange leftovers. */
+body.trading-screen .market-pane {
+  border-width: 0 1px 0 0;
+  border-style: solid;
+  border-color: var(--hairline);
+}
+
+body.trading-screen .chart-shell {
+  border-color: transparent;
+}
+
+body.trading-screen .chart-toolbar,
+body.trading-screen .ai-assist-form {
+  border-color: var(--hairline);
+}
+
+body.trading-screen #decision-pill.pill.neutral {
+  border-color: var(--hairline);
+}
+
+body.trading-screen .manual-order-section,
+body.trading-screen .order-status-card,
+body.trading-screen .manual-mode-banner,
+body.trading-screen .best-metrics div,
+body.trading-screen .provided-grid div,
+body.trading-screen .order-ticket-meta div,
+body.trading-screen .order-footprint div {
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+}
+
+body.trading-screen .manual-order-section,
+body.trading-screen .order-status-card {
+  box-shadow: none;
+}
+
+body.trading-screen .ticket-panel .button-row [data-action="create-manual-plan"],
+body.trading-screen .ticket-panel .button-row [data-action="reject"] {
+  background: #ffffff;
+  border-color: var(--hairline);
+  color: var(--page-ink);
+}
+
+body.trading-screen .ticket-panel .button-row [data-action="create-manual-plan"]:hover,
+body.trading-screen .ticket-panel .button-row [data-action="reject"]:hover {
+  background: var(--surface-card);
+  border-color: var(--green);
+}
+
+body.trading-screen .chart-attribution {
+  color: rgba(24, 23, 21, 0.72);
 }

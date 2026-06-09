@@ -1,16 +1,19 @@
 # Rebuild Guide: HyperClaude
 
 This guide recreates the demo from a clean clone. The demo is Hyperliquid-only and defaults
-to guarded mainnet proposals. Real execution remains behind explicit environment enablement,
-manual confirmation, and the mainnet confirmation phrase.
+to guarded mainnet proposals. Real execution remains behind explicit environment enablement
+and manual confirmation.
 
 ## 1. Install
 
 ```bash
 cd demo
 uv sync
+npm install
 cp .env.example .env
 ```
+
+The browser UI serves TradingView Lightweight Charts from the demo npm dependencies.
 
 Fill `.env` with Claude and Hyperliquid values:
 
@@ -79,8 +82,7 @@ HYPERLIQUID_ALLOWED_ASSETS=BTC,ETH,SOL,HYPE
 DEMO_REQUIRE_CONFIRMATION=true
 ```
 
-The browser requires the confirmation checkbox and the exact phrase
-`CONFIRM MAINNET ORDER` before prodnet execution.
+The browser requires the confirmation checkbox before prodnet execution.
 
 ## 6. Validation
 

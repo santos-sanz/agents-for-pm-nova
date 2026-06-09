@@ -204,7 +204,7 @@ def maybe_execute_trade(
 ) -> AgentTradeResult:
     if runtime.network == RuntimeNetwork.prodnet:
         plan.execution_decision = ExecutionDecision.waiting_confirmation
-        plan.execution_message = "Prodnet requires manual confirmation and the mainnet phrase."
+        plan.execution_message = "Prodnet requires manual confirmation."
         store.save("plans", plan)
         append_agent_event(
             store,

@@ -108,7 +108,7 @@ def test_agent_opportunities_are_ambitious_and_runtime_aware(tmp_path, monkeypat
     assert {item["horizon"] for item in opportunities} == {"now", "next", "moonshot"}
     assert any("xyz:SPCX" in item["owner_loop"] for item in opportunities)
     assert any("HyperTracker positioning" in item["tools"] for item in opportunities)
-    assert any("CONFIRM MAINNET ORDER" in item["human_gate"] for item in opportunities)
+    assert any("explicit mainnet enablement" in item["human_gate"] for item in opportunities)
 
 
 def test_agent_opportunities_use_testnet_gate_when_selected(tmp_path, monkeypatch) -> None:
@@ -400,7 +400,7 @@ def test_prodnet_analysis_still_only_proposes(tmp_path, monkeypatch) -> None:
     assert response.json()["plan"]["network"] == "prodnet"
 
 
-def test_prodnet_confirmation_requires_phrase(tmp_path, monkeypatch) -> None:
+def test_prodnet_confirmation_executes_without_phrase(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("HYPERLIQUID_MAINNET_ENABLED", "true")
     monkeypatch.setenv("HYPERLIQUID_ACCOUNT_ADDRESS", "0x0000000000000000000000000000000000000000")
@@ -423,12 +423,31 @@ def test_prodnet_confirmation_requires_phrase(tmp_path, monkeypatch) -> None:
         network="prodnet",
     )
     store.save("plans", plan)
+
+    def fake_execute(self, submitted_plan, confirmed, confirmation_phrase=None):
+        assert submitted_plan.id == plan.id
+        assert confirmed is True
+        assert confirmation_phrase is None
+        return OrderRecord(
+            plan_id=submitted_plan.id,
+            exchange="hyperliquid-mainnet",
+            asset=submitted_plan.asset,
+            side=submitted_plan.side,
+            size_usdc=submitted_plan.size_usdc,
+            status="submitted",
+            message="Submitted test order.",
+        )
+
+    monkeypatch.setattr(
+        "hyper_demo.services.trading_agent.HyperliquidAdapter.execute_plan",
+        fake_execute,
+    )
     client = TestClient(app)
 
     response = client.post(f"/api/trades/{plan.id}/execute", json={"confirmed": True})
 
-    assert response.status_code == 400
-    assert "CONFIRM MAINNET ORDER" in response.json()["detail"]
+    assert response.status_code == 200
+    assert response.json()["plan"]["status"] == "executed"
 
 
 def test_runtime_accepts_prodnet_selection_when_execution_disabled(tmp_path, monkeypatch) -> None:

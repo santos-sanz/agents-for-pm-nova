@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>HyperClaude</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%236fa874'/%3E%3Ctext x='32' y='40' text-anchor='middle' font-family='Arial' font-size='24' font-weight='700' fill='%2310110f'%3EHC%3C/text%3E%3C/svg%3E" />
-    <link rel="stylesheet" href="/static/styles.css?v=hyperclaude-trading-ui-20260609-7" />
+    <link rel="stylesheet" href="/static/styles.css?v=hyperclaude-trading-ui-20260609-17" />
   </head>
   <body class="trading-screen" data-screen="trading">
     <header class="topbar">
@@ -20,14 +20,6 @@
         <button class="active" data-screen="trading">Trading</button>
         <button data-screen="settings">Settings</button>
       </nav>
-      <div class="status-strip">
-        <span id="claude-status">Claude: checking</span>
-        <span id="hypertracker-status">HyperTracker: checking</span>
-        <span id="perplexity-status">Perplexity: checking</span>
-        <span id="hyperliquid-status">Hyperliquid: checking</span>
-        <span id="network-status">mainnet guarded</span>
-        <span id="wallet-status" class="wallet-status">No wallet</span>
-      </div>
     </header>
 
     <main class="cockpit">
@@ -53,11 +45,9 @@
               </div>
 
               <div class="chart-toolbar">
-                <form id="analyze-form" class="trading-search">
+                <div class="trading-search">
                   <input id="asset-input" aria-label="Asset" placeholder="BTC" value="BTC" autocomplete="off" />
-                  <input id="context-input" aria-label="Context" placeholder="Optional context" />
-                  <button class="primary" type="submit">Analyze</button>
-                </form>
+                </div>
                 <div class="timeframe-tabs" aria-label="Chart timeframe">
                   <button type="button" class="active" data-timeframe="15m">15m</button>
                   <button type="button" data-timeframe="1h">1h</button>
@@ -67,8 +57,9 @@
               </div>
 
               <div class="chart-shell">
-                <canvas id="candle-chart" width="960" height="520" aria-label="Candlestick chart"></canvas>
+                <div id="candle-chart" role="img" aria-label="Candlestick chart"></div>
                 <div id="chart-empty" class="chart-empty">Run analysis to load candles.</div>
+                <a class="chart-attribution" href="https://www.tradingview.com/" target="_blank" rel="noopener noreferrer">Charts by TradingView</a>
               </div>
             </article>
 
@@ -76,8 +67,8 @@
               <section class="side-card ticket-panel">
                 <div class="ticket-top">
                   <div>
-                    <span id="decision-pill" class="pill neutral">no proposal</span>
-                    <h2 id="ticket-title">Manual execution</h2>
+                    <span id="decision-pill" class="pill neutral">manual draft</span>
+                    <h2 id="ticket-title">Order ticket</h2>
                   </div>
                 </div>
                 <div id="best-bet" class="best-bet empty"></div>
@@ -86,13 +77,9 @@
                   <input id="execute-confirm" type="checkbox" />
                   Confirm order submission
                 </label>
-                <label class="field">
-                  Mainnet phrase
-                  <input id="mainnet-phrase" placeholder="CONFIRM MAINNET ORDER" />
-                </label>
                 <div class="button-row">
-                  <button class="primary" type="button" data-action="create-manual-plan">Create plan</button>
-                  <button class="danger" data-action="execute">Execute</button>
+                  <button type="button" data-action="create-manual-plan">Review</button>
+                  <button class="danger" data-action="submit-manual-order">Submit order</button>
                   <button data-action="reject">Reject</button>
                 </div>
               </section>
@@ -101,10 +88,14 @@
 
           <section class="bottom-table">
             <div class="table-tabs">
-              <button type="button" class="active">Agent Signal</button>
+              <button type="button" class="active">AI Assist</button>
               <button type="button">Candidates</button>
               <button type="button">Guardrails</button>
             </div>
+            <form id="analyze-form" class="ai-assist-form">
+              <input id="context-input" aria-label="Context" placeholder="Optional AI context" />
+              <button class="primary" type="submit">AI assist</button>
+            </form>
             <p id="analysis-status">Enter a Hyperliquid market and run analysis.</p>
             <div id="timeframe-cards" class="timeframe-cards"></div>
             <div id="candidate-list" class="candidate-list"></div>
@@ -150,7 +141,7 @@
               </button>
               <button id="prodnet-button" class="network-card" data-network="prodnet">
                 <span>Mainnet</span>
-                <b>Requires explicit enablement and confirmation phrase.</b>
+                <b>Requires explicit enablement and manual confirmation.</b>
               </button>
             </div>
           </section>
@@ -261,7 +252,8 @@
     </main>
 
     <div id="toast" role="status" aria-live="polite"></div>
-    <script src="/static/app.js?v=hyperclaude-trading-ui-20260609-16"></script>
+    <script src="/vendor/lightweight-charts/lightweight-charts.standalone.production.js"></script>
+    <script src="/static/app.js?v=hyperclaude-trading-ui-20260609-23"></script>
     <script type="module" src="/static/privy.js?v=hyperclaude-integrated-funding-20260609-4"></script>
   </body>
 </html>

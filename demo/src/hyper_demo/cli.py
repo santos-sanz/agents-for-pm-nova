@@ -9,10 +9,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from hyper_demo.adapters.hyperliquid import (
-    MAINNET_CONFIRMATION_PHRASE,
-    ExecutionBlocked,
-)
+from hyper_demo.adapters.hyperliquid import ExecutionBlocked
 from hyper_demo.api import setup_check
 from hyper_demo.config import get_settings, settings_for_runtime
 from hyper_demo.services.metrics import compute_portfolio_metrics
@@ -78,7 +75,7 @@ def execute_command(
         str | None,
         typer.Option(
             "--confirmation-phrase",
-            help=f'Required in mainnet_guarded mode: "{MAINNET_CONFIRMATION_PHRASE}".',
+            help="Deprecated; order execution now uses explicit confirmation only.",
         ),
     ] = None,
 ) -> None:
