@@ -82,10 +82,16 @@ const state = {
     source: null,
     destination: null,
   },
+  tradingDepositBalances: {
+    master: null,
+    hyperliquid: null,
+  },
   transferResult: null,
   externalTransferResult: null,
+  tradingDepositResult: null,
   isSubmittingTransfer: false,
   isSubmittingExternalTransfer: false,
+  isSubmittingTradingDeposit: false,
   external_withdrawal_address: "",
   chat: {
     resources: null,
@@ -873,6 +879,7 @@ function renderScreen() {
   if (state.screen === "transfer") {
     refreshTransferBalances().catch((error) => toast(error.message));
     refreshExternalTransferBalances().catch((error) => toast(error.message));
+    refreshTradingDepositBalances().catch((error) => toast(error.message));
   }
 }
 
@@ -3479,6 +3486,7 @@ function renderTransferScreen() {
   const transferButton = $('[data-action="transfer-usdc-to-master"]');
   if (transferButton) transferButton.disabled = !canTransfer || state.isSubmittingTransfer;
   renderTransferResult();
+  renderTradingDepositScreen();
 }
 
 function renderTransferResult() {
@@ -3548,6 +3556,82 @@ function renderExternalTransferScreen() {
   renderExternalTransferResult();
 }
 
+function renderTradingDepositScreen() {
+  const summary = $("#trading-deposit-summary");
+  if (!summary) return;
+  const agent = activePrivyAgent();
+  const masterAddress = agent?.master_wallet_address || "";
+  const masterBalance = state.tradingDepositBalances.master || state.transferBalances.destination;
+  const hyperliquidWallet = state.tradingDepositBalances.hyperliquid || state.wallet;
+  const withdrawable = Number(hyperliquidWallet?.withdrawable_usdc);
+  const masterUsdc = Number(masterBalance?.usdc);
+  const canDeposit = Boolean(
+    agent?.network === "prodnet" &&
+      masterAddress &&
+      Number.isFinite(masterUsdc) &&
+      masterUsdc >= 5,
+  );
+  const amountInput = $("#trading-deposit-usdc-amount");
+  if (amountInput && Number.isFinite(masterUsdc) && masterUsdc > 0 && !amountInput.dataset.touched) {
+    amountInput.value = formatFundingInputValue(masterUsdc);
+    amountInput.max = String(masterUsdc);
+  }
+  const status = $("#trading-deposit-status");
+  if (status) {
+    status.textContent = state.isSubmittingTradingDeposit
+      ? "submitting"
+      : canDeposit
+      ? "ready"
+      : Number.isFinite(masterUsdc) && masterUsdc > 0
+      ? "min 5 USDC"
+      : "blocked";
+    status.className = `pill ${canDeposit ? "gain" : "warning"}`;
+  }
+  summary.innerHTML = `
+    <div class="transfer-route">
+      <div>
+        <span>Master wallet on Arbitrum</span>
+        <code>${escapeHtml(masterAddress || "Initialize prodnet master wallet")}</code>
+        <b>${masterBalance ? `${formatTokenAmount(masterBalance.usdc, 6)} USDC / ${formatTokenAmount(masterBalance.eth, 5)} ETH` : "Balance not loaded"}</b>
+      </div>
+      <div>
+        <span>Available in Hyperliquid</span>
+        <code>${escapeHtml(hyperliquidWallet?.account_address || masterAddress || "Wallet state not loaded")}</code>
+        <b>${Number.isFinite(withdrawable) ? `${formatTokenAmount(withdrawable, 6)} USDC withdrawable` : "Wallet state not loaded"}</b>
+      </div>
+    </div>
+    <div class="transfer-contract">
+      <span>Bridge</span><b>Hyperliquid Bridge2</b>
+      <span>Network</span><b>Arbitrum One</b>
+      <span>Minimum</span><b>5 USDC</b>
+    </div>
+    <div class="transfer-warning">USDC sent to the master wallet remains an Arbitrum token balance. It becomes trading collateral only after depositing the master wallet balance to Hyperliquid Bridge2.</div>
+  `;
+  const depositButton = $('[data-action="deposit-master-trading"]');
+  if (depositButton) {
+    depositButton.disabled = !canDeposit || state.isSubmittingTradingDeposit;
+  }
+  renderTradingDepositResult();
+}
+
+function renderTradingDepositResult() {
+  const target = $("#trading-deposit-result");
+  if (!target) return;
+  const result = state.tradingDepositResult;
+  target.hidden = !result;
+  if (!result) {
+    target.innerHTML = "";
+    return;
+  }
+  const hash = result.hash || "";
+  const reference = hash || result.actionId || result.status || "pending";
+  const href = hash ? transferExplorerUrl(hash) : "https://dashboard.privy.io";
+  target.innerHTML = `
+    <span>Submitted</span>
+    <a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(maskHash(reference))}</a>
+  `;
+}
+
 function renderExternalTransferResult() {
   const target = $("#external-transfer-result");
   if (!target) return;
@@ -3592,6 +3676,21 @@ async function refreshExternalTransferBalances() {
     destination: destinationBalance,
   };
   renderExternalTransferScreen();
+}
+
+async function refreshTradingDepositBalances() {
+  const master = activePrivyAgent()?.master_wallet_address;
+  const [masterBalance, hyperliquidWallet] = await Promise.all([
+    master ? api(`/api/wallet/arbitrum-balance/${encodeURIComponent(master)}`) : Promise.resolve(null),
+    api("/api/wallet").catch(() => null),
+  ]);
+  state.tradingDepositBalances = {
+    master: masterBalance,
+    hyperliquid: hyperliquidWallet,
+  };
+  if (hyperliquidWallet) state.wallet = hyperliquidWallet;
+  renderTradingDepositScreen();
+  renderTradingView();
 }
 
 function transferAmountInput() {
@@ -3779,8 +3878,8 @@ function openHyperliquidDeposit() {
   window.open("https://app.hyperliquid.xyz", "_blank", "noopener,noreferrer");
 }
 
-function requireFundingConfirmation() {
-  if (!$("#funding-confirm")?.checked) {
+function requireFundingConfirmation(confirmSelector = "#funding-confirm") {
+  if (!$(confirmSelector)?.checked) {
     throw new Error("Confirm wallet funding transactions first.");
   }
 }
@@ -3791,18 +3890,51 @@ function currentMasterAddress() {
   return address;
 }
 
-async function depositMasterToHyperliquid() {
-  requireFundingConfirmation();
-  const result = await api("/api/privy/deposit-master", {
-    method: "POST",
-    body: JSON.stringify({
-      amount_usdc: Number($("#funding-usdc-amount").value),
-      confirmed: true,
-    }),
-  });
-  await loadState();
-  const reference = result.hash || result.actionId || result.status || "submitted";
-  toast(`Master deposit submitted: ${maskHash(reference)}`);
+function depositMasterAmount(inputSelector = "#funding-usdc-amount") {
+  const amount = Number($(inputSelector)?.value || 0);
+  if (!Number.isFinite(amount) || amount < 5) {
+    throw new Error("Hyperliquid Bridge2 deposits require at least 5 USDC.");
+  }
+  const balance = Number(state.tradingDepositBalances.master?.usdc ?? state.transferBalances.destination?.usdc);
+  if (Number.isFinite(balance) && amount > balance) {
+    throw new Error("Amount exceeds master wallet USDC balance.");
+  }
+  return amount;
+}
+
+async function depositMasterToHyperliquid({
+  inputSelector = "#funding-usdc-amount",
+  confirmSelector = "#funding-confirm",
+  transferScreen = false,
+} = {}) {
+  requireFundingConfirmation(confirmSelector);
+  const amount = depositMasterAmount(inputSelector);
+  if (transferScreen) {
+    state.isSubmittingTradingDeposit = true;
+    state.tradingDepositResult = null;
+    renderTradingDepositScreen();
+  }
+  try {
+    const result = await api("/api/privy/deposit-master", {
+      method: "POST",
+      body: JSON.stringify({
+        amount_usdc: amount,
+        confirmed: true,
+      }),
+    });
+    await loadState();
+    if (transferScreen) {
+      state.tradingDepositResult = result;
+      await refreshTradingDepositBalances();
+    }
+    const reference = result.hash || result.actionId || result.status || "submitted";
+    toast(`Master deposit submitted: ${maskHash(reference)}`);
+  } finally {
+    if (transferScreen) {
+      state.isSubmittingTradingDeposit = false;
+      renderTradingDepositScreen();
+    }
+  }
 }
 
 function maskHash(hash) {
@@ -4365,8 +4497,16 @@ async function runAction(action, actionTarget) {
   if (action === "open-hyperliquid-deposit") openHyperliquidDeposit();
   if (action === "deposit-master-hyperliquid") await depositMasterToHyperliquid();
   if (action === "refresh-transfer-balances") await refreshTransferBalances();
+  if (action === "refresh-trading-deposit-balances") await refreshTradingDepositBalances();
   if (action === "validate-transfer-session") await validateTransferSession();
   if (action === "transfer-usdc-to-master") await transferUsdcToMaster();
+  if (action === "deposit-master-trading") {
+    await depositMasterToHyperliquid({
+      inputSelector: "#trading-deposit-usdc-amount",
+      confirmSelector: "#trading-deposit-confirm",
+      transferScreen: true,
+    });
+  }
   if (action === "refresh-external-transfer-balances") await refreshExternalTransferBalances();
   if (action === "validate-external-transfer-session") await validateExternalTransferSession();
   if (action === "transfer-usdc-to-external") await transferUsdcToExternal();
@@ -4556,7 +4696,8 @@ document.querySelectorAll(".ticket-panel [data-action]").forEach((button) => {
 document.addEventListener("input", (event) => {
   if (
     event.target?.id === "transfer-usdc-amount" ||
-    event.target?.id === "external-transfer-usdc-amount"
+    event.target?.id === "external-transfer-usdc-amount" ||
+    event.target?.id === "trading-deposit-usdc-amount"
   ) {
     event.target.dataset.touched = "true";
     return;

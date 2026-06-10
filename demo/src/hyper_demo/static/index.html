@@ -411,6 +411,31 @@
           </div>
           <div id="external-transfer-result" class="transfer-result" hidden></div>
         </section>
+        <section class="panel transfer-panel trading-deposit-panel">
+          <div class="panel-head">
+            <div>
+              <span class="eyebrow">Trading collateral</span>
+              <h1>Make funds tradable</h1>
+            </div>
+            <span id="trading-deposit-status" class="pill warning">pending</span>
+          </div>
+          <div id="trading-deposit-summary" class="transfer-summary"></div>
+          <div class="transfer-form">
+            <label class="field">
+              Amount USDC
+              <input id="trading-deposit-usdc-amount" type="number" min="5" step="0.000001" value="5" />
+            </label>
+            <label class="check-row compact-check">
+              <input id="trading-deposit-confirm" type="checkbox" />
+              Confirm Hyperliquid Bridge2 deposit
+            </label>
+            <div class="button-row">
+              <button type="button" class="primary" data-action="deposit-master-trading">Deposit master to Hyperliquid</button>
+              <button type="button" data-action="refresh-trading-deposit-balances">Refresh balances</button>
+            </div>
+          </div>
+          <div id="trading-deposit-result" class="transfer-result" hidden></div>
+        </section>
       </section>
 
       <section id="chat-screen" class="chat-screen" hidden>
@@ -448,7 +473,7 @@
 
     <div id="toast" role="status" aria-live="polite"></div>
     <script src="/vendor/lightweight-charts/lightweight-charts.standalone.production.js"></script>
-    <script src="/static/app.js?v=hyperclaude-privy-client-transfer-20260610-2"></script>
-    <script type="module" src="/static/privy.js?v=hyperclaude-privy-client-transfer-20260610-2"></script>
+    <script src="/static/app.js?v=hyperclaude-privy-client-transfer-20260610-3"></script>
+    <script type="module" src="/static/privy.js?v=hyperclaude-privy-client-transfer-20260610-3"></script>
   </body>
 </html>
