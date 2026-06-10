@@ -25,6 +25,10 @@ from hyper_demo.models import (
     RunEvent,
     RuntimeSettings,
     TradePlan,
+    WorkshopAllocationProposal,
+    WorkshopAssetVerification,
+    WorkshopResearchBrief,
+    WorkshopRiskProfile,
 )
 
 T = TypeVar("T", bound=BaseModel)
@@ -50,6 +54,10 @@ class JsonStore:
         "runtime": RuntimeSettings,
         "connected_wallet": ConnectedWallet,
         "privy_agent_wallet": PrivyAgentWallet,
+        "workshop_risk_profiles": WorkshopRiskProfile,
+        "workshop_asset_verifications": WorkshopAssetVerification,
+        "workshop_research": WorkshopResearchBrief,
+        "workshop_allocations": WorkshopAllocationProposal,
     }
 
     def __init__(self, settings: Settings | None = None) -> None:

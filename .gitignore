@@ -11,6 +11,7 @@ __pycache__/
 .env
 .env.*
 !.env.example
+!workshop/.env.example
 demo/.demo_state/
 demo/.ruff_cache/
 demo/.pytest_cache/

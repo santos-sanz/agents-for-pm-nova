@@ -555,20 +555,20 @@ def test_chat_create_deployment_posts_anthropic_payload(tmp_path, monkeypatch) -
     assert body["initial_events"][0]["type"] == "user.message"
     assert body["resources"] == [
         {
-            "type": "memory_store",
-            "memory_store_id": "mem_canon",
-            "access": "read_only",
-            "instructions": "Use as immutable trading safety canon.",
-        },
-        {
-            "type": "memory_store",
-            "memory_store_id": "mem_learning",
-            "access": "read_write",
-            "instructions": (
-                "Store non-secret user preferences, rejected setups, post-trade lessons, "
-                "and process improvements."
-            ),
-        },
+                "type": "memory_store",
+                "memory_store_id": "mem_canon",
+                "access": "read_only",
+                "instructions": "Use as immutable Nova Wealth Guard safety canon.",
+            },
+            {
+                "type": "memory_store",
+                "memory_store_id": "mem_learning",
+                "access": "read_write",
+                "instructions": (
+                    "Store non-secret user preferences, rejected allocations, source gaps, "
+                    "and process improvements."
+                ),
+            },
     ]
 
 
@@ -685,7 +685,8 @@ def test_chat_bootstrap_creates_managed_resources_and_vaults(tmp_path, monkeypat
         for tool in coordinator_agent["tools"]
         if tool["type"] == "mcp_toolset"
     } == {"hypertracker", "perplexity"}
-    assert "trading_close_position" in payload["custom_tools"]
+    assert "nova_allocate_portfolio" in payload["custom_tools"]
+    assert "nova_prepare_rebalance" in payload["custom_tools"]
     assert "hypertracker-secret" not in dumped
     assert "perplexity-secret" not in dumped
     assert len(fake.created_skills) == 6
@@ -695,7 +696,7 @@ def test_chat_bootstrap_creates_managed_resources_and_vaults(tmp_path, monkeypat
         if (files := created_skill["files"])
     }
     assert b"uv run demo hypertracker --asset BTC" in skill_uploads["hypertracker-cli"]
-    assert b"trading_hypertracker_intelligence" in skill_uploads["hypertracker-cli"]
+    assert b"nova_hypertracker_intelligence" in skill_uploads["hypertracker-cli"]
     for created_skill in fake.created_skills:
         files = created_skill["files"]
         assert len(files) == 1
@@ -778,10 +779,10 @@ def test_chat_bootstrap_wires_perplexity_mcp_shortcut(tmp_path, monkeypatch) -> 
                     "token": "perplexity-secret",
                     "mcp_server_url": mcp_url,
                 },
-                "metadata": {"app": "hyperclaude", "tool": "perplexity"},
-            },
-        }
-    ]
+                    "metadata": {"app": "nova-wealth-guard", "tool": "perplexity"},
+                },
+            }
+        ]
     environment_hosts = fake.created_environments[-1]["config"]["networking"]["allowed_hosts"]
     assert "perplexity.tunnel.example.com" in environment_hosts
     coordinator_agent = fake.created_agents[-1]
@@ -1614,6 +1615,140 @@ def test_workshop_page_serves_readiness_shell(tmp_path, monkeypatch) -> None:
     assert response.status_code == 200
     assert "Workshop readiness check" in response.text
     assert "/api/workshop/readiness" in response.text
+
+
+def test_workshop_portfolio_api_generates_conservative_allocation(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("HYPERLIQUID_ACCOUNT_ADDRESS", "0x0000000000000000000000000000000000000000")
+    monkeypatch.setenv("HYPERLIQUID_API_WALLET_PRIVATE_KEY", "test-private-key")
+    workshop_assets = DEFAULT_WORKSHOP_HYPERLIQUID_ALLOWED_ASSETS.split(",")
+
+    def fake_assets(self):
+        return [
+            MarketAsset(
+                symbol=asset.split(":", 1)[-1],
+                dex=asset.split(":", 1)[0] if ":" in asset else None,
+                max_leverage=20,
+                sz_decimals=5,
+                mark_price=100.0,
+                delisted=False,
+                icon_url="",
+            )
+            for asset in workshop_assets
+        ]
+
+    def fake_wallet_state(self):
+        return {
+            "account_address": "0x0000000000000000000000000000000000000000",
+            "collateral_usdc": 1000.0,
+            "withdrawable_usdc": 1000.0,
+            "open_positions": [],
+        }
+
+    def fake_submit_rebalance_order(
+        self,
+        *,
+        allocation_id,
+        asset,
+        side,
+        size_usdc,
+        mark_price,
+        size_decimals,
+        reduce_only,
+        confirmed,
+    ):
+        assert confirmed is True
+        assert reduce_only is False
+        assert mark_price == 100.0
+        assert size_decimals == 5
+        return OrderRecord(
+            plan_id=allocation_id,
+            exchange="hyperliquid-testnet",
+            asset=asset,
+            side=side,
+            size_usdc=size_usdc,
+            raw_response={"submitted": True},
+            message="Submitted test rebalance order.",
+        )
+
+    monkeypatch.setattr(
+        "hyper_demo.services.portfolio_manager.MarketDataClient.available_assets",
+        fake_assets,
+    )
+    monkeypatch.setattr(
+        "hyper_demo.services.portfolio_manager.HyperliquidAdapter.wallet_state",
+        fake_wallet_state,
+    )
+    monkeypatch.setattr(
+        "hyper_demo.services.portfolio_manager.HyperliquidAdapter.submit_rebalance_order",
+        fake_submit_rebalance_order,
+    )
+    store = JsonStore()
+    store.save(
+        "runtime",
+        RuntimeSettings(
+            network="testnet",
+            allowed_assets=workshop_assets,
+            sync_asset_lists=False,
+        ),
+    )
+    client = TestClient(app)
+
+    profile = client.post("/api/workshop/profile", json={"risk_score": 34})
+    assert profile.status_code == 200
+    assert profile.json()["band"] == "capital_preservation"
+
+    allocation = client.post("/api/workshop/allocate", json={"risk_score": 34})
+    assert allocation.status_code == 200, allocation.json()
+    payload = allocation.json()
+    total = payload["cash_pct"] + sum(position["target_pct"] for position in payload["positions"])
+    assert round(total, 2) == 100.0
+    assert payload["cash_pct"] >= 40
+    assert payload["validation_status"] == "validated"
+    assert all(position["target_pct"] >= 0 for position in payload["positions"])
+    assert {position["canonical_id"] for position in payload["positions"]} <= set(workshop_assets)
+
+    rebalance = client.post(
+        "/api/workshop/rebalance",
+        json={"allocation_id": payload["id"], "confirmed": False},
+    )
+    assert rebalance.status_code == 200
+    rebalance_payload = rebalance.json()
+    assert rebalance_payload["status"] == "pending_approval"
+    assert rebalance_payload["allocation_id"] == payload["id"]
+    assert rebalance_payload["orders"]
+    assert {order["display_label"] for order in rebalance_payload["orders"]} >= {"USDC"}
+
+    approval = client.post(
+        "/api/workshop/rebalance",
+        json={"allocation_id": payload["id"], "confirmed": True},
+    )
+    assert approval.status_code == 200, approval.json()
+    assert approval.json()["status"] == "submitted"
+    assert approval.json()["executable"] is True
+    assert approval.json()["submitted_orders"]
+    assert approval.json()["submitted_orders"][0]["exchange"] == "hyperliquid-testnet"
+    assert (
+        client.get("/api/state").json()["workshop_allocation"]["validation_status"]
+        == "submitted"
+    )
+
+    next_allocation = client.post("/api/workshop/allocate", json={"risk_score": 34}).json()
+    pending = client.post(
+        "/api/workshop/rebalance",
+        json={"allocation_id": next_allocation["id"], "confirmed": False},
+    )
+    assert pending.status_code == 200
+    rejection = client.post(
+        "/api/workshop/rebalance/reject",
+        json={"allocation_id": next_allocation["id"], "confirmed": False},
+    )
+    assert rejection.status_code == 200, rejection.json()
+    assert rejection.json()["status"] == "rejected"
+    assert client.get("/api/state").json()["workshop_allocation"]["validation_status"] == "rejected"
 
 
 def test_standalone_workshop_app_does_not_serve_main_cockpit(tmp_path, monkeypatch) -> None:

@@ -68,6 +68,55 @@ class HyperliquidAdapter:
             ),
         )
 
+    def submit_rebalance_order(
+        self,
+        *,
+        allocation_id: str,
+        asset: str,
+        side: TradeSide,
+        size_usdc: float,
+        mark_price: float,
+        size_decimals: int,
+        reduce_only: bool,
+        confirmed: bool,
+    ) -> OrderRecord:
+        self._validate_rebalance_execution(
+            asset=asset,
+            size_usdc=size_usdc,
+            mark_price=mark_price,
+            reduce_only=reduce_only,
+            confirmed=confirmed,
+        )
+        size = round(size_usdc / mark_price, max(0, min(size_decimals, 8)))
+        if size <= 0:
+            raise ExecutionBlocked("Rebalance order size rounds to zero.")
+        raw = self._submit_rebalance_with_sdk(
+            asset=asset,
+            is_buy=side == TradeSide.long,
+            size=size,
+            mark_price=mark_price,
+            reduce_only=reduce_only,
+        )
+        exchange_name = (
+            "hyperliquid-mainnet" if self.settings.is_mainnet_mode else "hyperliquid-testnet"
+        )
+        environment_label = "mainnet" if self.settings.is_mainnet_mode else "testnet"
+        return OrderRecord(
+            plan_id=allocation_id,
+            exchange=exchange_name,
+            asset=asset,
+            side=side,
+            size_usdc=round(size_usdc, 4),
+            entry_order_id=_extract_order_id(raw.get("rebalance")),
+            raw_response=raw,
+            status="submitted",
+            message=(
+                "Submitted rebalance "
+                f"{'reduce-only ' if reduce_only else ''}market order to "
+                f"Hyperliquid {environment_label}."
+            ),
+        )
+
     def wallet_state(self) -> dict[str, Any]:
         if not self.settings.hyperliquid_account_address:
             raise ExecutionBlocked("HYPERLIQUID_ACCOUNT_ADDRESS is required for wallet state.")
@@ -117,6 +166,37 @@ class HyperliquidAdapter:
                 raise ExecutionBlocked(
                     "Mainnet is disabled. Set HYPERLIQUID_MAINNET_ENABLED=true to proceed."
                 )
+
+    def _validate_rebalance_execution(
+        self,
+        *,
+        asset: str,
+        size_usdc: float,
+        mark_price: float,
+        reduce_only: bool,
+        confirmed: bool,
+    ) -> None:
+        if self.settings.demo_require_confirmation and not confirmed:
+            raise ExecutionBlocked(
+                "Explicit confirmation is required before submitting Hyperliquid orders."
+            )
+        if not self.settings.has_hyperliquid_credentials:
+            raise ExecutionBlocked(
+                "Hyperliquid credentials are missing. Configure .env.local or use replay mode."
+            )
+        if not reduce_only and asset not in self.settings.workshop_allowed_assets_set:
+            raise ExecutionBlocked(f"{asset} is not in the workshop allowed assets.")
+        if size_usdc > self.settings.hyperliquid_max_order_usdc:
+            raise ExecutionBlocked(
+                "Rebalance ticket exceeds HYPERLIQUID_MAX_ORDER_USDC "
+                f"({self.settings.hyperliquid_max_order_usdc} USDC)."
+            )
+        if mark_price <= 0:
+            raise ExecutionBlocked("Rebalance ticket is missing a valid mark price.")
+        if self.settings.is_mainnet_mode and not self.settings.hyperliquid_mainnet_enabled:
+            raise ExecutionBlocked(
+                "Mainnet is disabled. Set HYPERLIQUID_MAINNET_ENABLED=true to proceed."
+            )
 
     def _submit_with_sdk(self, plan: TradePlan, prepared: PreparedOrder) -> dict[str, Any]:
         try:
@@ -183,6 +263,41 @@ class HyperliquidAdapter:
             else None
         )
         return {"entry": entry, "stop_loss": stop, "take_profit": take_profit}
+
+    def _submit_rebalance_with_sdk(
+        self,
+        *,
+        asset: str,
+        is_buy: bool,
+        size: float,
+        mark_price: float,
+        reduce_only: bool,
+    ) -> dict[str, Any]:
+        try:
+            from eth_account import Account
+            from hyperliquid.exchange import Exchange
+        except ImportError as exc:  # pragma: no cover - dependency issue, not business logic.
+            raise ExecutionBlocked(f"Hyperliquid SDK dependency is not installed: {exc}") from exc
+
+        private_key = self.settings.hyperliquid_api_wallet_private_key
+        try:
+            account = Account.from_key(private_key.get_secret_value() if private_key else "")
+            exchange = Exchange(
+                account,
+                base_url=self.settings.hyperliquid_base_url,
+                account_address=self.settings.hyperliquid_account_address,
+            )
+        except (TypeError, ValueError) as exc:
+            raise ExecutionBlocked(
+                "Hyperliquid wallet configuration is invalid. "
+                "Check HYPERLIQUID_ACCOUNT_ADDRESS and HYPERLIQUID_API_WALLET_PRIVATE_KEY."
+            ) from exc
+
+        if reduce_only:
+            result = exchange.market_close(asset, sz=size, px=mark_price)
+        else:
+            result = exchange.market_open(asset, is_buy, size, px=mark_price)
+        return {"rebalance": result, "size": size, "reduce_only": reduce_only}
 
 
 HyperliquidTestnetAdapter = HyperliquidAdapter

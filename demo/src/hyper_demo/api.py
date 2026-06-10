@@ -12,7 +12,7 @@ from typing import Any, Literal
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from hyper_demo.adapters.hyperliquid import ExecutionBlocked, HyperliquidAdapter
 from hyper_demo.adapters.privy_hyperliquid import PrivyHyperliquidAdapter
@@ -36,6 +36,10 @@ from hyper_demo.models import (
     RuntimeSettingsUpdate,
     TradePlan,
     TradeSide,
+    WorkshopAllocationProposal,
+    WorkshopAssetVerification,
+    WorkshopResearchBrief,
+    WorkshopRiskProfile,
     normalize_asset_symbol,
 )
 from hyper_demo.services.formal_validation import (
@@ -49,6 +53,16 @@ from hyper_demo.services.metrics import compute_portfolio_metrics
 from hyper_demo.services.monitoring import HyperliquidWebsocketMonitor
 from hyper_demo.services.perplexity import PerplexityFinanceClient
 from hyper_demo.services.perplexity_mcp import PerplexityMcpServer
+from hyper_demo.services.portfolio_manager import (
+    WORKSHOP_RUN_ID,
+    allocate_workshop_portfolio,
+    guarded_rebalance_preview,
+    latest_or_default_profile,
+    reject_rebalance_preview,
+    research_workshop_portfolio,
+    save_workshop_risk_profile,
+    verify_workshop_assets,
+)
 from hyper_demo.services.risk import build_investor_profile
 from hyper_demo.services.technical_analysis import (
     build_agent_trade_analysis,
@@ -168,6 +182,19 @@ class MasterDepositRequest(BaseModel):
 
 class UserWalletTransferRequest(BaseModel):
     amount_usdc: float
+    confirmed: bool = False
+
+
+class WorkshopRiskProfileRequest(BaseModel):
+    risk_score: int = Field(ge=0, le=100)
+
+
+class WorkshopAllocationRequest(BaseModel):
+    risk_score: int | None = Field(default=None, ge=0, le=100)
+
+
+class WorkshopRebalanceRequest(BaseModel):
+    allocation_id: str
     confirmed: bool = False
 
 
@@ -593,6 +620,83 @@ def api_workshop_readiness() -> WorkshopReadiness:
     return workshop_readiness()
 
 
+@app.get("/api/workshop/profile", response_model=WorkshopRiskProfile | None)
+def get_workshop_profile() -> WorkshopRiskProfile | None:
+    return get_store().get("workshop_risk_profiles", "workshop_risk_profile")
+
+
+@app.post("/api/workshop/profile", response_model=WorkshopRiskProfile)
+def set_workshop_profile(request: WorkshopRiskProfileRequest) -> WorkshopRiskProfile:
+    try:
+        return save_workshop_risk_profile(request.risk_score, get_store())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/workshop/verify-assets", response_model=WorkshopAssetVerification)
+def api_workshop_verify_assets() -> WorkshopAssetVerification:
+    store = get_store()
+    runtime = get_runtime(store)
+    try:
+        return verify_workshop_assets(settings_for_runtime(runtime), store=store)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/workshop/research", response_model=WorkshopResearchBrief)
+def api_workshop_research(
+    request: WorkshopAllocationRequest,
+) -> WorkshopResearchBrief:
+    store = get_store()
+    runtime = get_runtime(store)
+    risk_score = (
+        request.risk_score
+        if request.risk_score is not None
+        else latest_or_default_profile(store).risk_score
+    )
+    return research_workshop_portfolio(risk_score, settings_for_runtime(runtime), store=store)
+
+
+@app.post("/api/workshop/allocate", response_model=WorkshopAllocationProposal)
+def api_workshop_allocate(
+    request: WorkshopAllocationRequest,
+) -> WorkshopAllocationProposal:
+    store = get_store()
+    runtime = get_runtime(store)
+    risk_score = (
+        request.risk_score
+        if request.risk_score is not None
+        else latest_or_default_profile(store).risk_score
+    )
+    try:
+        return allocate_workshop_portfolio(risk_score, settings_for_runtime(runtime), store=store)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/workshop/rebalance")
+def api_workshop_rebalance(request: WorkshopRebalanceRequest) -> dict[str, Any]:
+    store = get_store()
+    runtime = get_runtime(store)
+    try:
+        return guarded_rebalance_preview(
+            request.allocation_id,
+            confirmed=request.confirmed,
+            settings=settings_for_runtime(runtime),
+            store=store,
+        )
+    except ExecutionBlocked as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/workshop/rebalance/reject")
+def api_workshop_rebalance_reject(request: WorkshopRebalanceRequest) -> dict[str, Any]:
+    try:
+        return reject_rebalance_preview(request.allocation_id, store=get_store())
+    except ExecutionBlocked as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.get("/api/state")
 def api_state() -> dict[str, Any]:
     store = get_store()
@@ -605,6 +709,10 @@ def api_state() -> dict[str, Any]:
         setup.warnings.append(str(exc))
     return {
         "profile": store.latest("profiles"),
+        "workshop_profile": store.get("workshop_risk_profiles", "workshop_risk_profile"),
+        "workshop_verification": store.get("workshop_asset_verifications", "latest"),
+        "workshop_research": store.latest("workshop_research"),
+        "workshop_allocation": store.latest("workshop_allocations"),
         "analysis": store.latest("analysis"),
         "research": store.latest("research"),
         "plan": store.latest("plans"),
@@ -612,6 +720,7 @@ def api_state() -> dict[str, Any]:
         "run": store.latest("runs"),
         "runtime": runtime,
         "events": store.events_for_run(AGENT_RUN_ID),
+        "workshop_events": store.events_for_run(WORKSHOP_RUN_ID),
         "setup": setup,
         "connected_wallet": store.get("connected_wallet", "connected_wallet"),
         "privy_agent_wallet": get_privy_agent_wallet(store, runtime),
@@ -1516,6 +1625,82 @@ def run_chat_custom_tool(session: ManagedChatSession, event: dict[str, Any]) -> 
     runtime = get_runtime(store)
     settings = settings_for_runtime(runtime)
 
+    if name == "nova_portfolio_snapshot":
+        return _chat_nova_snapshot(store, runtime, settings)
+    if name == "nova_set_risk_profile":
+        profile = save_workshop_risk_profile(int(payload.get("risk_score")), store)
+        return {"profile": profile.model_dump(mode="json")}
+    if name == "nova_verify_assets":
+        verification = verify_workshop_assets(settings, store)
+        return {"verification": verification.model_dump(mode="json")}
+    if name == "nova_research_portfolio":
+        risk_score = payload.get("risk_score")
+        if risk_score is None:
+            risk_score = latest_or_default_profile(store).risk_score
+        brief = research_workshop_portfolio(int(risk_score), settings, store)
+        return {"research": brief.model_dump(mode="json")}
+    if name == "nova_allocate_portfolio":
+        risk_score = payload.get("risk_score")
+        if risk_score is None:
+            risk_score = latest_or_default_profile(store).risk_score
+        allocation = allocate_workshop_portfolio(int(risk_score), settings, store)
+        return {"allocation": allocation.model_dump(mode="json")}
+    if name == "nova_prepare_rebalance":
+        if bool(payload.get("confirmed")):
+            _require_chat_trade_action_approval(runtime, event)
+        result = guarded_rebalance_preview(
+            str(payload.get("allocation_id") or ""),
+            confirmed=bool(payload.get("confirmed")),
+            settings=settings,
+            store=store,
+        )
+        return _json_safe(result)
+    if name == "nova_hypertracker_intelligence":
+        intelligence = HyperTrackerClient(settings).intelligence_for_asset(
+            str(payload.get("asset") or "BTC")
+        )
+        return intelligence.__dict__
+    if name == "nova_perplexity_context":
+        context = PerplexityFinanceClient(settings).context_for_asset(
+            str(payload.get("asset") or "BTC")
+        )
+        return context.__dict__
+    if name == "nova_runtime_get_settings":
+        return {
+            "runtime": runtime.model_dump(mode="json"),
+            "setup": setup_check(settings).model_dump(mode="json"),
+            "workshop_assets": settings.workshop_allowed_assets_list,
+        }
+    if name == "nova_runtime_update_settings":
+        update = RuntimeSettingsUpdate.model_validate(
+            {
+                key: value
+                for key, value in payload.items()
+                if key
+                in {
+                    "network",
+                    "ui_mode",
+                    "execution_policy",
+                    "max_order_usdc",
+                    "allowed_assets",
+                    "watchlist",
+                    "sync_asset_lists",
+                }
+            }
+        )
+        updated = update_runtime_settings(update)
+        return {"runtime": updated.model_dump(mode="json")}
+    if name in {"nova_skill_proposal", "nova_tool_proposal", "nova_memory_note"}:
+        service = get_chat_service(store)
+        service.append_event(
+            session.id,
+            name,
+            str(payload.get("title") or payload.get("name") or payload.get("note") or name),
+            role="agent",
+            payload=payload,
+        )
+        return {"recorded": True, "proposal": _json_safe(payload)}
+
     if name == "trading_market_snapshot":
         return _chat_market_snapshot(store, runtime, settings, payload)
     if name == "trading_create_plan":
@@ -1662,6 +1847,34 @@ def _formal_validation_for_plan(
         max_leverage=max_leverage,
         minimum_order_usdc=HYPERLIQUID_MIN_ORDER_USDC,
     )
+
+
+def _chat_nova_snapshot(
+    store: JsonStore,
+    runtime: RuntimeSettings,
+    settings: Settings,
+) -> dict[str, Any]:
+    snapshot: dict[str, Any] = {
+        "runtime": runtime.model_dump(mode="json"),
+        "setup": setup_check(settings).model_dump(mode="json"),
+        "workshop_assets": settings.workshop_allowed_assets_list,
+        "profile": _json_safe(store.get("workshop_risk_profiles", "workshop_risk_profile")),
+        "verification": _json_safe(store.get("workshop_asset_verifications", "latest")),
+        "research": _json_safe(store.latest("workshop_research")),
+        "allocation": _json_safe(store.latest("workshop_allocations")),
+        "events": _json_safe(store.events_for_run(WORKSHOP_RUN_ID)[-20:]),
+    }
+    try:
+        snapshot["readiness"] = workshop_readiness(store).model_dump(mode="json")
+    except Exception as exc:
+        snapshot["readiness_error"] = str(exc)
+    try:
+        snapshot["wallet"] = _public_wallet_snapshot(
+            wallet_state_for_runtime(store, runtime, settings)
+        )
+    except (ExecutionBlocked, ValueError) as exc:
+        snapshot["wallet_error"] = str(exc)
+    return snapshot
 
 
 def _chat_market_snapshot(

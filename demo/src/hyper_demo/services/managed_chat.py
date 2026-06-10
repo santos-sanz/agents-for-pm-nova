@@ -26,7 +26,11 @@ from hyper_demo.storage import JsonStore
 
 CHAT_RESOURCE_ID = "managed_chat_resources"
 CHAT_DEPLOYMENT_ID = "managed_chat_deployment"
-CHAT_AGENT_RUN_LABEL = "managed-chat"
+CHAT_AGENT_RUN_LABEL = "nova-wealth-guard"
+CHAT_APP_METADATA = "nova-wealth-guard"
+CHAT_ENVIRONMENT_NAME = "nova-wealth-guard-managed-env"
+CHAT_COORDINATOR_NAME = "Nova Wealth Guard Coordinator"
+CHAT_DEFAULT_TITLE = "Nova Wealth Guard"
 ANTHROPIC_API_VERSION = "2023-06-01"
 MANAGED_AGENTS_BETA = "managed-agents-2026-04-01"
 ANTHROPIC_API_BASE_URL = "https://api.anthropic.com/v1"
@@ -50,72 +54,83 @@ ToolRunner = Callable[[ManagedChatSession, dict[str, Any]], dict[str, Any]]
 CUSTOM_TOOLS: list[dict[str, Any]] = [
     {
         "type": "custom",
-        "name": "trading_market_snapshot",
+        "name": "nova_portfolio_snapshot",
         "description": (
-            "Return a non-secret trading snapshot: runtime, setup status, wallet summary, "
-            "orders, positions, portfolio metrics, current mark price, and recent candles."
+            "Return the current non-secret Nova Wealth Guard snapshot: risk profile, "
+            "asset verification, research brief, allocation, readiness, and event log."
         ),
         "input_schema": {
             "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "custom",
+        "name": "nova_set_risk_profile",
+        "description": (
+            "Persist the user's single slider risk profile as a risk_score from 0 to 100."
+        ),
+        "input_schema": {
+            "type": "object",
+            "required": ["risk_score"],
             "properties": {
-                "asset": {"type": "string", "description": "Optional Hyperliquid asset."},
-                "interval": {"type": "string", "enum": ["15m", "1h", "4h", "1d"]},
+                "risk_score": {"type": "integer", "minimum": 0, "maximum": 100},
             },
             "additionalProperties": False,
         },
     },
     {
         "type": "custom",
-        "name": "trading_create_plan",
+        "name": "nova_verify_assets",
         "description": (
-            "Create a guarded trade plan through the same validation used by the order ticket. "
-            "This stores a proposal only and never submits an exchange order."
+            "Re-check every configured workshop Hyperliquid market against metadata before "
+            "research, allocation, or rebalance preparation."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    {
+        "type": "custom",
+        "name": "nova_research_portfolio",
+        "description": (
+            "Generate a source-backed portfolio research brief using Perplexity Finance, "
+            "Hyperliquid market data, and optional intelligence adapters."
         ),
         "input_schema": {
             "type": "object",
-            "required": ["asset", "side", "size_usdc"],
             "properties": {
-                "asset": {"type": "string"},
-                "side": {"type": "string", "enum": ["long", "short"]},
-                "size_usdc": {"type": "number", "minimum": 1},
-                "entry_type": {"type": "string", "enum": ["market", "limit"]},
-                "entry_price": {"type": "number"},
-                "stop_loss": {"type": "number"},
-                "take_profit": {"type": "number"},
-                "leverage": {"type": "number", "minimum": 1, "maximum": 10},
+                "risk_score": {"type": "integer", "minimum": 0, "maximum": 100},
             },
             "additionalProperties": False,
         },
     },
     {
         "type": "custom",
-        "name": "trading_validate_plan",
+        "name": "nova_allocate_portfolio",
         "description": (
-            "Run the formal autonomous-trade validation checklist against a stored plan. "
-            "Use before calling trading_execute_plan."
+            "Produce and persist a 100% long-only target allocation across active eligible "
+            "markets plus USDC, enforcing the user's risk profile and cash policy."
         ),
         "input_schema": {
             "type": "object",
-            "required": ["plan_id"],
             "properties": {
-                "plan_id": {"type": "string"},
+                "risk_score": {"type": "integer", "minimum": 0, "maximum": 100},
             },
             "additionalProperties": False,
         },
     },
     {
         "type": "custom",
-        "name": "trading_execute_plan",
+        "name": "nova_prepare_rebalance",
         "description": (
-            "Submit an already stored trade plan. Testnet execution is available only after "
-            "the formal validation checklist passes. Prodnet execution also requires explicit "
-            "host human approval; runtime ui_mode=robot is not a bypass."
+            "Prepare a rebalance preview for an already validated allocation. With confirmed=true "
+            "and explicit host approval, submit guarded rebalance orders through the host runtime."
         ),
         "input_schema": {
             "type": "object",
-            "required": ["plan_id", "confirmed"],
+            "required": ["allocation_id"],
             "properties": {
-                "plan_id": {"type": "string"},
+                "allocation_id": {"type": "string"},
                 "confirmed": {"type": "boolean"},
             },
             "additionalProperties": False,
@@ -123,7 +138,7 @@ CUSTOM_TOOLS: list[dict[str, Any]] = [
     },
     {
         "type": "custom",
-        "name": "trading_hypertracker_intelligence",
+        "name": "nova_hypertracker_intelligence",
         "description": (
             "Fetch HyperTracker positioning intelligence through the backend proxy. "
             "The API key never appears in tool input or output."
@@ -137,9 +152,9 @@ CUSTOM_TOOLS: list[dict[str, Any]] = [
     },
     {
         "type": "custom",
-        "name": "trading_perplexity_context",
+        "name": "nova_perplexity_context",
         "description": (
-            "Fetch Perplexity finance_search context through a backend proxy. "
+            "Fetch Perplexity Finance context through a backend proxy. "
             "The API key never appears in tool input or output."
         ),
         "input_schema": {
@@ -151,48 +166,10 @@ CUSTOM_TOOLS: list[dict[str, Any]] = [
     },
     {
         "type": "custom",
-        "name": "trading_close_position",
+        "name": "nova_memory_note",
         "description": (
-            "Close an open position through the guarded backend reduce-only flow. "
-            "Requires confirmed=true and existing Privy execution guardrails."
-        ),
-        "input_schema": {
-            "type": "object",
-            "required": ["asset", "confirmed"],
-            "properties": {
-                "asset": {"type": "string"},
-                "confirmed": {"type": "boolean"},
-            },
-            "additionalProperties": False,
-        },
-    },
-    {
-        "type": "custom",
-        "name": "trading_set_protection",
-        "description": (
-            "Set take-profit and/or stop-loss protection through the guarded backend "
-            "reduce-only trigger flow. Stop-loss updates are exceptional for sub-10x trades. "
-            "Requires confirmed=true."
-        ),
-        "input_schema": {
-            "type": "object",
-            "required": ["asset", "confirmed"],
-            "properties": {
-                "asset": {"type": "string"},
-                "confirmed": {"type": "boolean"},
-                "take_profit": {"type": "number"},
-                "stop_loss": {"type": "number"},
-            },
-            "additionalProperties": False,
-        },
-    },
-    {
-        "type": "custom",
-        "name": "trading_memory_note",
-        "description": (
-            "Record a non-secret lesson, post-trade observation, rejected idea, or process "
-            "improvement for the local audit trail. Durable Claude memory should still be "
-            "written by the agent to the read-write memory store."
+            "Record a non-secret portfolio-management lesson, rejected allocation idea, "
+            "coverage gap, or process improvement for the local audit trail."
         ),
         "input_schema": {
             "type": "object",
@@ -206,16 +183,19 @@ CUSTOM_TOOLS: list[dict[str, Any]] = [
     },
     {
         "type": "custom",
-        "name": "trading_runtime_get_settings",
-        "description": "Return current runtime guardrails, watchlist, network, and setup status.",
+        "name": "nova_runtime_get_settings",
+        "description": (
+            "Return current non-secret runtime guardrails, workshop asset universe, "
+            "network posture, and setup status."
+        ),
         "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
     },
     {
         "type": "custom",
-        "name": "trading_runtime_update_settings",
+        "name": "nova_runtime_update_settings",
         "description": (
-            "Update only safe runtime settings: network, max order size, allowed assets, "
-            "watchlist, and sync behavior. Exchange URLs and secrets cannot be changed."
+            "Update only safe runtime settings: network, max order size, and display "
+            "asset lists. Exchange URLs, workshop canonical markets, and secrets cannot be changed."
         ),
         "input_schema": {
             "type": "object",
@@ -231,7 +211,7 @@ CUSTOM_TOOLS: list[dict[str, Any]] = [
     },
     {
         "type": "custom",
-        "name": "trading_skill_proposal",
+        "name": "nova_skill_proposal",
         "description": (
             "Record a proposed new skill or improvement. The host may create safe skills, "
             "but no host code is executed from this proposal."
@@ -249,7 +229,7 @@ CUSTOM_TOOLS: list[dict[str, Any]] = [
     },
     {
         "type": "custom",
-        "name": "trading_tool_proposal",
+        "name": "nova_tool_proposal",
         "description": (
             "Record a proposed new host tool interface. The proposal is reviewable and "
             "does not execute arbitrary host code."
@@ -271,129 +251,132 @@ CUSTOM_TOOLS: list[dict[str, Any]] = [
 
 SKILL_SPECS: dict[str, tuple[str, str]] = {
     "hyperliquid-safety": (
-        "Hyperliquid Trading Safety",
-        """# Hyperliquid Trading Safety
+        "Nova Wealth Guard Safety",
+        """# Nova Wealth Guard Safety
 
-Use this skill before proposing, executing, closing, or protecting a Hyperliquid trade.
+Use this skill before researching, allocating, validating, or preparing a Hyperliquid
+portfolio rebalance.
 
-- Treat testnet as the default operating mode.
+- Preserve capital first, diversify second, seek moderate upside third.
+- Treat every output as educational and non-advisory.
+- Use USDC as cash and allow cash to be 0% to 100%.
+- Keep allocations long-only, non-negative, rounded consistently, and summing to 100%.
+- Use low or no leverage by default because eligible instruments are perpetual futures.
 - Treat prodnet as guarded: explicit environment enablement and UI confirmation are required.
 - Never ask for, store, print, or infer private keys, cookies, API keys, or seed phrases.
-- Use only configured allowlisted assets and the runtime max order size.
-- Validate entry direction, stop loss, take profit, leverage, minimum order value, and margin.
-- If risk is ambiguous, propose a smaller plan or ask for confirmation instead of executing.
+- Use only the configured workshop canonical market IDs plus USDC.
+- Exclude missing, halted, delisted, stale, or non-allowlisted markets.
+- Increase USDC when confidence is low, sources are stale, volatility is elevated, funding is
+  punitive, liquidity is thin, or agents disagree.
+- Rebalance preparation is not execution. Any exchange-changing action requires explicit host
+  confirmation and must not be triggered by robot mode alone.
 - Explain blocked actions plainly and preserve the audit trail.
 """,
     ),
     "source-quality": (
-        "Market Source Quality",
+        "Nova Source Quality",
         """# Market Source Quality
 
-Use this skill when researching catalysts, positioning, or macro context.
+Use this skill when researching macro conditions, eligible markets, source freshness,
+liquidity, funding, open interest, or portfolio confidence.
 
 - Separate live market data, source-backed research, model inference, and user preference.
 - Prefer Hyperliquid market data for price-sensitive claims.
-- Prefer HyperTracker for positioning and wallet-flow signals when available.
-- Prefer Perplexity finance_search for sourced public-market context when available.
-- Cite sources by product or URL and state coverage gaps for crypto perps or HIP-3 assets.
+- Prefer Perplexity Finance for sourced macro and public-market context when available.
+- Prefer HyperTracker for optional positioning and wallet-flow signals when available.
+- Cite sources by product or URL and include timestamps or freshness notes.
+- State coverage gaps for HIP-3 commodities, equity-index perps, funding, open interest, and
+  wallet data.
 - Penalize stale, circular, unsourced, or narrative-only evidence.
 """,
     ),
     "hypertracker-cli": (
-        "HyperTracker CLI Workflow",
-        """# HyperTracker CLI Workflow
+        "Nova Intelligence Workflow",
+        """# Nova Intelligence Workflow
 
-Use this skill when the agent needs HyperTracker positioning intelligence from the local demo CLI.
+Use this skill when the agent needs optional intelligence from local/backend adapters.
 
-Primary command:
+Primary local commands:
 
 ```bash
+cd demo && uv run demo verify-assets
 cd demo && uv run demo hypertracker --asset BTC
+cd demo && uv run demo allocate --risk-score 70
 ```
 
 Operating rules:
 
-- Use uppercase Hyperliquid asset symbols such as BTC, ETH, SOL, or HYPE.
+- Use canonical workshop market IDs for portfolio construction.
 - Never pass `HYPERTRACKER_API_KEY` on the command line, in chat, or in a tool argument.
 - Let the backend load credentials from `.env`, backend env, or Managed Agents Vault/MCP binding.
 - Treat the command output as JSON with `asset`, `available`, `evidence`, `risks`,
   `assumptions`, and `sources`.
 - If `available` is false, preserve the assumptions and do not invent HyperTracker data.
 - If a key is missing, tell the user HyperTracker is unavailable instead of asking for the key.
-- Use HyperTracker for positioning, long/short crowding, aggregate exposure, funding impact,
+- Use HyperTracker for optional positioning, crowding, aggregate exposure, funding impact,
   open-position count, and leaderboard wallet-flow clues.
-- Do not treat HyperTracker as a standalone buy/sell signal. Cross-check with
-  `trading_market_snapshot`, current price/candles, risk limits, and source-backed research.
-- Include HyperTracker findings as evidence or risk inputs in the trade plan rationale.
+- Do not treat HyperTracker as a standalone allocation signal. Cross-check with
+  `nova_portfolio_snapshot`, Hyperliquid metadata, risk limits, and source-backed research.
+- Include HyperTracker findings as evidence or risk inputs in the allocation explanation.
 - If shell access to the local repo is not available inside the Claude sandbox, call the
-  `trading_hypertracker_intelligence` custom tool instead.
+  `nova_hypertracker_intelligence` custom tool instead.
 - For MCP-backed HyperTracker, prefer the MCP tool only when its Vault status is connected;
   otherwise use the backend CLI/custom-tool path.
 
 Decision rubric:
 
-- Crowded long positioning increases downside squeeze risk and should reduce long confidence.
-- Crowded short positioning increases upside squeeze risk and should reduce short confidence.
-- Large aggregate exposure without confirming price action should be treated as risk, not proof.
-- Partial endpoint failures must lower confidence and be recorded in assumptions.
+- Thin liquidity, punitive funding, stale context, or large source gaps increase USDC.
+- Crowded exposure reduces confidence unless independent evidence supports the risk.
+- Partial endpoint failures must lower confidence and be recorded in coverage gaps.
 """,
     ),
     "trade-validation": (
-        "Trade Plan Validation",
-        """# Trade Plan Validation
+        "Portfolio Allocation Rules",
+        """# Portfolio Allocation Rules
 
-Use this skill before creating a trade plan.
+Use this skill before producing a target allocation.
 
-- Convert a thesis into a bounded plan: asset, side, size, entry type, entry price, leverage,
-  take profit, invalidation, confidence, and monitoring cadence.
-- Do not include a stop loss by default for trades below 10x leverage. For low-leverage
-  trades, prefer take-profit plus explicit thesis invalidation and active monitoring.
-- Use stop loss only when leverage is 10x or higher, when the user explicitly asks for it,
-  or when exchange/liquidation risk makes a hard exit necessary.
-- Keep leverage integer and at or below the asset maximum.
-- Reject plans that exceed runtime max order USDC or are outside the allowlist.
-- Reject plans where take profit or any exceptional stop loss is on the wrong side of
-  entry/current price.
-- Prefer plans that are easy to explain and easy to cancel.
+- Map the slider directly to `risk_score` from 0 to 100.
+- Risk score 0-35: minimum USDC 40%, max single asset 12%, max BTC 5%,
+  max equity-index exposure 30%, max commodity exposure 45%.
+- Risk score 36-70: minimum USDC 25%, max single asset 18%, max BTC 8%,
+  max equity-index exposure 45%, max commodity exposure 55%.
+- Risk score 71-100: minimum USDC 10%, max single asset 25%, max BTC 12%,
+  max equity-index exposure 60%, max commodity exposure 65%.
+- The safety agent may increase cash above the minimum.
+- Apply single-asset, category, BTC, leverage, liquidity, open-interest, and funding caps.
+- If evidence is weak or hostile, recommending 100% USDC is acceptable.
 """,
     ),
     "formal-order-validation": (
-        "Formal Autonomous Order Validation",
-        """# Formal Autonomous Order Validation
+        "Rebalance Approval Boundary",
+        """# Rebalance Approval Boundary
 
-Use this skill before validating or executing autonomous leveraged intraday trades.
+Use this skill before preparing or discussing a rebalance.
 
-- First create a stored plan with `trading_create_plan`; never execute directly from prose.
-- Run `trading_validate_plan` and only continue when `valid=true`.
-- Prodnet execution requires explicit host human approval; `ui_mode=robot` is not enough.
-- Prefer trades intended to close within minutes or hours, not multi-day investment theses.
-- Use integer leverage of at least 2x for autonomous intraday trades, while staying below the
-  asset max leverage and runtime limits.
-- Include take profit.
-- Do not include stop loss for trades below 10x leverage unless the user explicitly asks for
-  one or the agent can justify a hard exit as necessary. For sub-10x trades, rely on active
-  monitoring, thesis invalidation, small notional size, and manual/agent close actions.
-- Require stop loss for trades at 10x leverage or higher.
-- Use a notional size above the 10 USDC minimum with a buffer so exchange size rounding does
-  not produce an order below minimum.
-- Reject plans whose required margin exceeds wallet withdrawable USDC.
-- Reject trades with take profit or exceptional stop loss on the wrong side of both entry and
-  current mark.
-- If an exceptional stop loss is used, keep the planned loss small.
-- If validation fails, explain the failed checks and do not retry by increasing risk blindly.
+- First create a validated allocation with `nova_allocate_portfolio`.
+- Use `nova_prepare_rebalance` for a pending-approval preview first. Submit with
+  `confirmed=true` only when the host has explicitly confirmed the action.
+- Do not submit or simulate exchange-changing actions from prose, background jobs, chat, or
+  robot mode alone.
+- Validate active markets, account state, current positions, available margin, minimum order
+  sizes, expected slippage, and rebalance deltas before order construction.
+- Block arbitrary exchange URLs, non-allowlisted canonical IDs, delisted markets, missing
+  credentials, unsafe leverage, and any proposal that cannot be fully validated.
+- If credentials are missing, keep the allocation useful but mark it non-executable.
 """,
     ),
     "self-improvement": (
-        "Trading Self Improvement",
-        """# Trading Self Improvement
+        "Nova Process Improvement",
+        """# Nova Process Improvement
 
 Use this skill throughout the conversation.
 
-- Track rejected ideas, user corrections, false positives, and post-trade lessons.
+- Track rejected ideas, user corrections, source gaps, validation failures, and rehearsal lessons.
 - Propose new skills or tools when repeated gaps appear.
 - Do not mutate host code. Use skill/tool proposal custom tools for reviewable improvements.
 - Write durable learning only to the read-write memory store and never write secrets.
-- Use outcomes and rubrics for high-stakes analyses before proposing action.
+- Use outcomes and rubrics for high-stakes portfolio analyses before proposing action.
 """,
     ),
 }
@@ -411,69 +394,78 @@ SKILL_DESCRIPTIONS: dict[str, str] = {
     ),
     "trade-validation": "Use before converting a thesis into a bounded trade plan.",
     "formal-order-validation": (
-        "Use before validating or executing autonomous leveraged intraday trades."
+        "Use before preparing a rebalance or discussing exchange-changing actions."
     ),
     "self-improvement": (
-        "Use throughout trading conversations to capture lessons and propose safe improvements."
+        "Use throughout Nova conversations to capture lessons and propose safe improvements."
     ),
 }
 
 
 SUBAGENT_SPECS: dict[str, tuple[str, str]] = {
     "research": (
-        "HyperClaude Research Agent",
-        "Find source-backed catalysts, macro context, positioning, and coverage gaps.",
+        "Nova Wealth Guard Research Agent",
+        "Summarize macro context, asset signals, liquidity, funding, and coverage gaps.",
     ),
-    "risk": (
-        "HyperClaude Risk Sentinel",
-        "Stress-test every plan against liquidation, sizing, execution, and operational risk.",
+    "portfolio": (
+        "Nova Wealth Guard Portfolio Agent",
+        "Apply risk score, diversification rules, cash policy, and allocation math.",
     ),
-    "execution": (
-        "HyperClaude Execution Planner",
-        "Convert validated theses into order-ticket-compatible plans without bypassing guardrails.",
+    "safety": (
+        "Nova Wealth Guard Safety Agent",
+        "Validate active markets, caps, long-only math, credentials, and approval gates.",
     ),
     "auditor": (
-        "HyperClaude Outcome Auditor",
-        "Grade reasoning quality, evidence, safety, and auditability before actions are proposed.",
+        "Nova Wealth Guard Source Auditor",
+        "Grade source freshness, evidence quality, coverage gaps, and non-advisory language.",
     ),
     "toolsmith": (
-        "HyperClaude Toolsmith",
+        "Nova Wealth Guard Toolsmith",
         "Identify missing skills/tools and record reviewable improvement proposals.",
     ),
 }
 
 
-COORDINATOR_SYSTEM = """You are HyperClaude Chat, an autonomous Claude Managed Agents coordinator
-for a guarded Hyperliquid trading demo.
+COORDINATOR_SYSTEM = """You are Nova Wealth Guard, a Claude Managed Agents coordinator for a
+conservative, educational Hyperliquid USDC portfolio manager.
 
 Operate with maximum autonomy inside the Claude Managed Agents sandbox: research, calculate, write
 scratch files, use web tools, delegate to subagents, use memory, create outcome loops, and call the
-provided custom tools. You may self-improve during the conversation by proposing skills and tools.
+provided custom tools. You may self-improve by proposing skills and tools, but host code changes
+must remain reviewable.
+
+Product intent:
+- Preserve capital first, diversify second, seek moderate upside third.
+- Build 100% target allocations across USDC plus active eligible Hyperliquid markets.
+- Ask for only one initial risk input: a 0-100 score derived from the user's slider.
+- Default conservative even when the risk score is high because the instruments are perpetuals.
+- Be comfortable recommending 100% USDC when evidence is weak or conditions are hostile.
+- Never present output as personal financial advice.
 
 Hard boundaries:
 - Do not request, reveal, infer, or persist secrets.
 - Do not invent exchange access or arbitrary URLs.
 - Always respond in English, even when the user writes in another language.
-- Host-side trading actions are only available through custom tools and existing guardrails.
-- Prodnet execution requires explicit environment enablement and UI confirmation.
-- Prodnet execution, close actions, and protection changes require explicit host human approval;
-  runtime `ui_mode=robot` is not a bypass.
-- For trades below 10x leverage, do not attach stop loss by default. Prefer take profit,
-  explicit invalidation criteria, small notional size, and active monitoring. Stop loss is
-  reserved for 10x+ leverage, explicit user instruction, or necessary hard-exit risk control.
-- Testnet execution must still pass validation, sizing, leverage, margin, and asset allowlist
-  checks.
+- Use only the verified workshop canonical market IDs plus USDC.
+- Keep allocations long-only, non-negative, rounded consistently, and summing exactly to 100%.
+- Re-check Hyperliquid metadata before allocation and before rebalance preparation.
+- Prodnet execution requires explicit environment enablement and UI confirmation. Robot mode,
+  chat messages, and background jobs are not approval.
+- Keep private keys, API keys, cookies, browser data, raw wallet payloads, and generated local
+  state out of responses.
 
 Default workflow:
-1. Gather runtime, wallet, market, HyperTracker, and Perplexity context when relevant.
-   Use the HyperTracker CLI Workflow skill before relying on HyperTracker positioning data.
-2. Delegate research, risk, execution, auditor, or toolsmith work when it improves quality.
-3. Use outcomes/rubrics for high-stakes or uncertain plans.
-4. Create reviewable trade plans before execution.
-5. Run Formal Autonomous Order Validation before any autonomous execution.
-6. After each run, use `trading_memory_note` and the learning memory store to record non-secret
-   lessons from accurate calls, failed validations, rejected orders, exchange errors, and missed
-   assumptions.
+1. Call `nova_portfolio_snapshot` to understand current local state.
+2. If the user provides risk as x/10, convert it to risk_score=x*10 and call
+   `nova_set_risk_profile`.
+3. Call `nova_verify_assets` before research/allocation.
+4. Call `nova_research_portfolio` to collect source summaries and coverage gaps.
+5. Call `nova_allocate_portfolio` to produce the structured 100% allocation.
+6. Delegate research, portfolio, safety, auditor, or toolsmith work when it improves quality.
+7. Use `nova_prepare_rebalance` first for a pending-approval preview. Use `confirmed=true`
+   only when explicit host/user confirmation is present and all guardrails pass.
+8. After each run, use `nova_memory_note` and the learning memory store to record non-secret
+   lessons from source gaps, validation failures, rejected allocations, and missed assumptions.
 """
 
 
@@ -484,7 +476,14 @@ class ManagedTradingChatService:
         store: JsonStore | None = None,
         client_factory: Callable[[], Any] | None = None,
     ) -> None:
-        self.settings = settings or get_settings()
+        base_settings = settings or get_settings()
+        self.settings = (
+            base_settings.model_copy(
+                update={"anthropic_api_key": base_settings.workshop_anthropic_api_key}
+            )
+            if base_settings.has_workshop_anthropic_credentials
+            else base_settings
+        )
         self.store = store or JsonStore(self.settings)
         self.client_factory = client_factory
 
@@ -839,13 +838,13 @@ class ManagedTradingChatService:
         client = self._client()
         environment = _find_latest_named_resource(
             client.beta.environments,
-            "hyperclaude-trading-chat-env",
-            metadata={"app": "hyperclaude", "component": CHAT_AGENT_RUN_LABEL},
+            CHAT_ENVIRONMENT_NAME,
+            metadata={"app": CHAT_APP_METADATA, "component": CHAT_AGENT_RUN_LABEL},
         )
         if not environment:
             environment = client.beta.environments.create(
-                name="hyperclaude-trading-chat-env",
-                description="Sandbox for autonomous HyperClaude trading chat sessions.",
+                name=CHAT_ENVIRONMENT_NAME,
+                description="Sandbox for autonomous Nova Wealth Guard portfolio sessions.",
                 config={
                     "type": "cloud",
                     "networking": {
@@ -860,7 +859,7 @@ class ManagedTradingChatService:
                         "npm": ["typescript"],
                     },
                 },
-                metadata={"app": "hyperclaude", "component": CHAT_AGENT_RUN_LABEL},
+                metadata={"app": CHAT_APP_METADATA, "component": CHAT_AGENT_RUN_LABEL},
             )
         skill_ids, skill_versions = self._create_skills(client)
         memory_store_ids = self._create_memory_stores(client)
@@ -874,7 +873,7 @@ class ManagedTradingChatService:
             agent = _find_latest_named_resource(
                 client.beta.agents,
                 name,
-                metadata={"app": "hyperclaude", "role": slug},
+                metadata={"app": CHAT_APP_METADATA, "role": slug},
             )
             if not agent:
                 agent = client.beta.agents.create(
@@ -884,29 +883,30 @@ class ManagedTradingChatService:
                     system=f"{role}\n\n{COORDINATOR_SYSTEM}",
                     tools=tools[:1],
                     skills=skills,
-                    metadata={"app": "hyperclaude", "role": slug},
+                    metadata={"app": CHAT_APP_METADATA, "role": slug},
                 )
             subagent_ids[slug] = _object_id(agent)
 
         coordinator = _find_latest_named_resource(
             client.beta.agents,
-            "HyperClaude Chat Coordinator",
-            metadata={"app": "hyperclaude", "role": "coordinator"},
+            CHAT_COORDINATOR_NAME,
+            metadata={"app": CHAT_APP_METADATA, "role": "coordinator"},
         )
         if not coordinator:
             coordinator = client.beta.agents.create(
-                name="HyperClaude Chat Coordinator",
+                name=CHAT_COORDINATOR_NAME,
                 model=self.settings.managed_chat_model,
                 description=(
-                    "Autonomous Managed Agents trading coordinator with guarded custom tools, "
-                    "Vault-backed MCP support, memory, outcomes, and subagents."
+                    "Autonomous Managed Agents portfolio coordinator with guarded custom tools, "
+                    "Vault-backed MCP support, memory, outcomes, and a "
+                    "research/portfolio/safety team."
                 ),
                 system=COORDINATOR_SYSTEM,
                 tools=tools,
                 mcp_servers=mcp_servers,
                 skills=skills,
                 multiagent={"type": "coordinator", "agents": list(subagent_ids.values())},
-                metadata={"app": "hyperclaude", "role": "coordinator"},
+                metadata={"app": CHAT_APP_METADATA, "role": "coordinator"},
             )
 
         resources = ManagedChatResources(
@@ -934,13 +934,13 @@ class ManagedTradingChatService:
         session = client.beta.sessions.create(
             agent=resources.coordinator_agent_id or "",
             environment_id=resources.environment_id or "",
-            title=title or "HyperClaude Chat",
-            metadata={"app": "hyperclaude", "component": CHAT_AGENT_RUN_LABEL},
+            title=title or CHAT_DEFAULT_TITLE,
+            metadata={"app": CHAT_APP_METADATA, "component": CHAT_AGENT_RUN_LABEL},
             resources=self._session_resources(resources),
             vault_ids=resources.vault_ids,
         )
         record = ManagedChatSession(
-            title=title or "HyperClaude Chat",
+            title=title or CHAT_DEFAULT_TITLE,
             claude_session_id=_object_id(session),
             status="idle",
             vault_ids=resources.vault_ids,
@@ -977,7 +977,7 @@ class ManagedTradingChatService:
             },
             "resources": self._session_resources(resources),
             "vault_ids": resources.vault_ids,
-            "metadata": {"app": "hyperclaude", "component": CHAT_AGENT_RUN_LABEL},
+            "metadata": {"app": CHAT_APP_METADATA, "component": CHAT_AGENT_RUN_LABEL},
         }
         result = self._anthropic_json_request("POST", "/deployments", payload)
         deployment.anthropic_deployment_id = str(result.get("id") or "")
@@ -1193,7 +1193,7 @@ class ManagedTradingChatService:
     def _create_skills(self, client: Any) -> tuple[dict[str, str], dict[str, int]]:
         skill_ids: dict[str, str] = {}
         skill_versions: dict[str, int] = {}
-        with tempfile.TemporaryDirectory(prefix="hyperclaude-skills-") as tmp:
+        with tempfile.TemporaryDirectory(prefix="nova-wealth-guard-skills-") as tmp:
             root = Path(tmp)
             for slug, (title, body) in SKILL_SPECS.items():
                 skill = _find_latest_titled_resource(client.beta.skills, title)
@@ -1216,18 +1216,18 @@ class ManagedTradingChatService:
     def _create_memory_stores(self, client: Any) -> dict[str, str]:
         canon, canon_created = self._ensure_memory_store(
             client,
-            name="HyperClaude Trading Canon",
+            name="Nova Wealth Guard Canon",
             description=(
-                "Read-only operating canon: guardrails, allowed exchange boundaries, "
-                "and trading safety principles."
+                "Read-only operating canon: portfolio guardrails, allowed market boundaries, "
+                "cash policy, and safety principles."
             ),
             kind="canon",
         )
         learning, learning_created = self._ensure_memory_store(
             client,
-            name="HyperClaude Conversation Learning",
+            name="Nova Wealth Guard Conversation Learning",
             description=(
-                "Read-write user preferences, rejected ideas, post-trade lessons, "
+                "Read-write user preferences, rejected allocations, source-gap lessons, "
                 "and proposed process improvements. Never store secrets."
             ),
             kind="learning",
@@ -1247,7 +1247,7 @@ class ManagedTradingChatService:
                 "/learning/README.md",
                 (
                     "# Conversation Learning\n\n"
-                    "Store user preferences, repeated mistakes, rejected setups, and post-trade "
+                    "Store user preferences, repeated mistakes, rejected allocations, source-gap "
                     "lessons here. Do not store API keys, private keys, cookies, or credentials.\n"
                 ),
             )
@@ -1264,7 +1264,7 @@ class ManagedTradingChatService:
         store = _find_latest_named_resource(
             client.beta.memory_stores,
             name,
-            metadata={"app": "hyperclaude", "kind": kind},
+            metadata={"app": CHAT_APP_METADATA, "kind": kind},
         )
         if store:
             return store, False
@@ -1272,7 +1272,7 @@ class ManagedTradingChatService:
             client.beta.memory_stores.create(
                 name=name,
                 description=description,
-                metadata={"app": "hyperclaude", "kind": kind},
+                metadata={"app": CHAT_APP_METADATA, "kind": kind},
             ),
             True,
         )
@@ -1328,7 +1328,7 @@ class ManagedTradingChatService:
                             "token": token,
                             "mcp_server_url": server_url,
                         },
-                        metadata={"app": "hyperclaude", "tool": status.name},
+                        metadata={"app": CHAT_APP_METADATA, "tool": status.name},
                     )
                     status.kind = "vault"
                     status.status = "connected"
@@ -1367,28 +1367,21 @@ class ManagedTradingChatService:
             return existing
         remote = _find_latest_named_resource(
             client.beta.vaults,
-            "HyperClaude API-Key Tools",
-            metadata={"app": "hyperclaude", "component": CHAT_AGENT_RUN_LABEL},
+            "Nova Wealth Guard API-Key Tools",
+            metadata={"app": CHAT_APP_METADATA, "component": CHAT_AGENT_RUN_LABEL},
         )
         if remote:
             return _object_id(remote)
         vault = client.beta.vaults.create(
-            display_name="HyperClaude API-Key Tools",
-            metadata={"app": "hyperclaude", "component": CHAT_AGENT_RUN_LABEL},
+            display_name="Nova Wealth Guard API-Key Tools",
+            metadata={"app": CHAT_APP_METADATA, "component": CHAT_AGENT_RUN_LABEL},
         )
         return _object_id(vault)
 
     def _existing_managed_vault_id(self) -> str:
-        resources = self.store.get("managed_chat_resources", CHAT_RESOURCE_ID)
-        if not resources:
-            return ""
-        external_vault_ids = set(self.settings.managed_chat_vault_ids)
-        for credential in resources.credentials:
-            if credential.name in API_KEY_TOOL_NAMES and credential.vault_id:
-                return credential.vault_id
-        for vault_id in resources.vault_ids:
-            if vault_id not in external_vault_ids:
-                return vault_id
+        # Vault IDs are workspace-scoped and may be write-only or inaccessible when the
+        # workshop API key points at a different Claude workspace. Always re-discover by
+        # stable Nova Vault name before reusing a locally persisted ID.
         return ""
 
     def _credential_statuses(self) -> list[ManagedChatCredentialStatus]:
@@ -1485,7 +1478,7 @@ class ManagedTradingChatService:
                     "type": "memory_store",
                     "memory_store_id": canon,
                     "access": "read_only",
-                    "instructions": "Use as immutable trading safety canon.",
+                    "instructions": "Use as immutable Nova Wealth Guard safety canon.",
                 }
             )
         learning = resources.memory_store_ids.get("learning")
@@ -1496,7 +1489,7 @@ class ManagedTradingChatService:
                     "memory_store_id": learning,
                     "access": "read_write",
                     "instructions": (
-                        "Store non-secret user preferences, rejected setups, post-trade lessons, "
+                        "Store non-secret user preferences, rejected allocations, source gaps, "
                         "and process improvements."
                     ),
                 }
@@ -1506,7 +1499,7 @@ class ManagedTradingChatService:
     def _default_deployment(self) -> ManagedChatDeployment:
         return ManagedChatDeployment(
             id=CHAT_DEPLOYMENT_ID,
-            name="HyperClaude intraday watch",
+            name="Nova Wealth Guard portfolio watch",
             cron_expression="*/30 * * * *",
             timezone="Europe/Madrid",
             initial_prompt=_default_deployment_prompt(),
@@ -1649,13 +1642,13 @@ def _user_message_event(text: str) -> dict[str, Any]:
 
 def _default_deployment_prompt() -> str:
     return (
-        "Run the scheduled HyperClaude intraday watch. Gather runtime settings, wallet state, "
-        "open positions, allowed assets, mark prices, and market context. Propose or validate "
-        "short-horizon leveraged trades only when formally valid. On testnet, execute only after "
-        "trading_validate_plan returns valid=true and all host guardrails pass. On prodnet, do not "
-        "execute, close, or modify exchange orders without explicit host human approval. Record "
-        "non-secret lessons from accurate calls, failed validations, rejected orders, exchange "
-        "errors, and missed assumptions."
+        "Run the scheduled Nova Wealth Guard portfolio watch. Gather the saved risk profile, "
+        "workshop asset verification, Hyperliquid market context, Perplexity/HyperTracker "
+        "coverage, source freshness, and current allocation. Produce or refresh a 100% "
+        "educational target allocation only when the eligible market universe validates. Keep "
+        "USDC high when evidence is weak or hostile. Do not submit or modify exchange orders "
+        "without explicit host human approval. Record non-secret lessons from source gaps, "
+        "failed validations, rejected allocations, and missed assumptions."
     )
 
 

@@ -501,3 +501,98 @@ class PortfolioMetrics(BaseModel):
     exposure_by_asset: dict[str, float]
     realized_pnl_usdc: float = 0.0
     unrealized_pnl_usdc: float = 0.0
+
+
+class WorkshopRiskBand(StrEnum):
+    capital_preservation = "capital_preservation"
+    balanced_conservative = "balanced_conservative"
+    guarded_growth = "guarded_growth"
+
+
+class WorkshopRiskProfile(BaseModel):
+    id: str = "workshop_risk_profile"
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+    risk_score: int = Field(ge=0, le=100)
+    band: WorkshopRiskBand
+    summary: str
+
+
+class WorkshopAssetSnapshot(BaseModel):
+    canonical_id: str
+    display_label: str
+    category: Literal["cash", "commodity", "equity_index", "crypto"]
+    description: str
+    active: bool = False
+    delisted: bool = False
+    mark_price: float | None = None
+    funding: float | None = None
+    open_interest: float | None = None
+    max_leverage: int = 0
+    allocation_cap_pct: float = Field(default=0, ge=0, le=100)
+    quote_source: str = "unverified"
+    checked_at: datetime = Field(default_factory=utc_now)
+    issues: list[str] = Field(default_factory=list)
+
+
+class WorkshopAssetVerification(BaseModel):
+    id: str = "latest"
+    created_at: datetime = Field(default_factory=utc_now)
+    status: Literal["validated", "blocked"] = "validated"
+    assets: list[WorkshopAssetSnapshot]
+    unavailable_assets: list[str] = Field(default_factory=list)
+    source: str = "hyperliquid"
+
+
+class WorkshopResearchBrief(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("workshop_research"))
+    created_at: datetime = Field(default_factory=utc_now)
+    risk_score: int = Field(ge=0, le=100)
+    macro_summary: str
+    asset_signals: dict[str, str]
+    sources: list[dict[str, Any]] = Field(default_factory=list)
+    coverage_gaps: list[str] = Field(default_factory=list)
+    confidence: float = Field(ge=0, le=1)
+
+
+class WorkshopAllocationPosition(BaseModel):
+    canonical_id: str
+    display_label: str
+    category: Literal["cash", "commodity", "equity_index", "crypto"]
+    target_pct: float = Field(ge=0, le=100)
+    rationale: str
+    constraints: list[str] = Field(default_factory=list)
+
+
+class WorkshopAllocationProposal(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("workshop_allocation"))
+    created_at: datetime = Field(default_factory=utc_now)
+    generated_at: datetime = Field(default_factory=utc_now)
+    risk_score: int = Field(ge=0, le=100)
+    cash_pct: float = Field(ge=0, le=100)
+    positions: list[WorkshopAllocationPosition]
+    constraints: dict[str, Any]
+    research_sources: list[dict[str, Any]]
+    confidence: float = Field(ge=0, le=1)
+    validation_status: Literal[
+        "draft",
+        "validated",
+        "blocked",
+        "pending_approval",
+        "approved",
+        "rejected",
+        "submitted",
+        "failed",
+    ] = "draft"
+    explanations: list[str]
+    coverage_gaps: list[str] = Field(default_factory=list)
+    current_wallet_allocation: list[dict[str, Any]] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_allocation_math(self) -> WorkshopAllocationProposal:
+        total = self.cash_pct + sum(position.target_pct for position in self.positions)
+        if round(total, 2) != 100.0:
+            raise ValueError("Workshop allocation must sum to 100% including USDC.")
+        if any(position.target_pct < 0 for position in self.positions):
+            raise ValueError("Workshop allocation is long-only and non-negative.")
+        return self

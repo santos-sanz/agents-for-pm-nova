@@ -74,6 +74,7 @@ These checks intentionally touch the browser or optional live services:
 6. Run Agent Team and verify consensus plus four agent opinions.
 7. Run Paper Trading with confirmation.
 8. Open Monitor and update metrics/events.
-9. Only test Hyperliquid execution with testnet credentials and explicit confirmation.
+9. Rehearse Hyperliquid prodnet execution only with host-managed API/agent wallet
+   credentials, tiny order limits, and explicit confirmation.
 
 Live-network calls are rehearsal-only, not required for CI.

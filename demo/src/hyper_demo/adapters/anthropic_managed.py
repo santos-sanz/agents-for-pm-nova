@@ -17,28 +17,28 @@ from hyper_demo.storage import JsonStore
 RESEARCH_RESOURCE_ID = "managed_agent_research_resources"
 RESEARCH_ENVIRONMENT_NAME = "hyperliquid-investment-demo-env"
 RESEARCH_AGENT_NAME = "hyperliquid-investment-demo-agent"
-CHAT_ENVIRONMENT_NAME = "hyperclaude-trading-chat-env"
+CHAT_ENVIRONMENT_NAME = "nova-wealth-guard-managed-env"
 CHAT_AGENT_NAMES = [
-    "HyperClaude Research Agent",
-    "HyperClaude Risk Sentinel",
-    "HyperClaude Execution Planner",
-    "HyperClaude Outcome Auditor",
-    "HyperClaude Toolsmith",
-    "HyperClaude Chat Coordinator",
+    "Nova Wealth Guard Research Agent",
+    "Nova Wealth Guard Portfolio Agent",
+    "Nova Wealth Guard Safety Agent",
+    "Nova Wealth Guard Source Auditor",
+    "Nova Wealth Guard Toolsmith",
+    "Nova Wealth Guard Coordinator",
 ]
 CHAT_MEMORY_STORE_NAMES = [
-    "HyperClaude Trading Canon",
-    "HyperClaude Conversation Learning",
+    "Nova Wealth Guard Canon",
+    "Nova Wealth Guard Conversation Learning",
 ]
 CHAT_SKILL_TITLES = [
-    "Hyperliquid Trading Safety",
-    "Market Source Quality",
-    "HyperTracker CLI Workflow",
-    "Trade Plan Validation",
-    "Formal Autonomous Order Validation",
-    "Trading Self Improvement",
+    "Nova Wealth Guard Safety",
+    "Nova Source Quality",
+    "Nova Intelligence Workflow",
+    "Portfolio Allocation Rules",
+    "Rebalance Approval Boundary",
+    "Nova Process Improvement",
 ]
-CHAT_VAULT_NAME = "HyperClaude API-Key Tools"
+CHAT_VAULT_NAME = "Nova Wealth Guard API-Key Tools"
 
 SYSTEM_PROMPT = """You are an educational investment analysis agent for a live demo.
 

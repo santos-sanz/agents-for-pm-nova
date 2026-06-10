@@ -1,6 +1,10 @@
 # Coding Agent Prompt Runbook
 
 Use these prompts step by step in the coding agent to rebuild or extend the demo.
+For a clean Claude Managed Agents project, start with
+[`workshop/initial-goal-prompt.md`](../workshop/initial-goal-prompt.md) and
+[`workshop/design.md`](../workshop/design.md); this file is for follow-up
+extensions.
 
 ## 1. Inspect The Existing Demo
 
@@ -23,7 +27,7 @@ Expose the result through a FastAPI endpoint and a CLI command.
 
 ```text
 Create deterministic quant signals for the demo: trend score, volatility score, carry score, liquidity score, recommendation, and explanation.
-Use existing market-data clients and keep all outputs educational and testnet-only.
+Use existing market-data clients and keep all outputs educational, reviewable, and guarded for prodnet.
 Add unit tests that do not call live networks.
 ```
 
