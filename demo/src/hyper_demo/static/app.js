@@ -117,6 +117,7 @@ const realtimeRuntime = {
 };
 const chatRuntime = {
   pollTimer: null,
+  pollUntil: 0,
 };
 const INTERVAL_SECONDS = {
   "15m": 15 * 60,
@@ -193,9 +194,32 @@ async function api(path, options = {}) {
     ...options,
   });
   const text = await response.text();
-  const payload = text ? JSON.parse(text) : null;
+  const contentType = response.headers.get("content-type") || "";
+  const isJson = contentType.includes("application/json");
+  let payload = null;
+  if (text && isJson) {
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      payload = { detail: readableResponseText(text, response.statusText) };
+    }
+  } else if (text) {
+    payload = { detail: readableResponseText(text, response.statusText) };
+  }
   if (!response.ok) throw new Error(apiErrorMessage(payload, response.statusText));
   return payload;
+}
+
+function readableResponseText(text, fallback = "Request failed.") {
+  const cleaned = String(text || "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!cleaned) return fallback || "Request failed.";
+  if (cleaned.toLowerCase().includes("internal server error")) {
+    return "Server error. Check the demo terminal logs, then retry the step.";
+  }
+  return cleaned.slice(0, 240);
 }
 
 function apiErrorMessage(payload, fallback) {
@@ -1928,6 +1952,7 @@ function positionCard(position) {
         ${positionLevelRow("Liquidation", liquidation, entry, mark, "liquidation")}
       </div>
       ${protectionEditor(asset, isLong, entry, mark, takeProfit, stopLoss, activeProtection)}
+      <p class="close-path-note">Happy path close step: submit a reduce-only market order after the tiny mainnet proof.</p>
       <div class="active-trade-actions">
         <button type="button" class="danger" data-action="close-position" data-asset="${escapeHtml(asset)}">
           Close position
@@ -2245,6 +2270,13 @@ function renderTicket() {
         <div><span>Fees</span><b>Est. on submit</b></div>
       </div>
       ${
+        plan?.validation
+          ? `<div class="guardrail-checklist ticket-validation">
+              ${planGuardrailRows(plan, plan.validation)}
+            </div>`
+          : ""
+      }
+      ${
         orderErrorView
           ? `<div class="order-error" role="alert">
               <span>${escapeHtml(orderErrorView.title)}</span>
@@ -2479,10 +2511,24 @@ async function loadChatState({ renderAfter = true } = {}) {
 
 async function loadChatEvents(sessionId = state.chat.activeSessionId, { renderAfter = true } = {}) {
   if (!sessionId) return [];
-  const events = await api(`/api/chat/sessions/${encodeURIComponent(sessionId)}/events`);
+  const payload = await api(`/api/chat/sessions/${encodeURIComponent(sessionId)}`);
+  if (payload.session) mergeChatSession(payload.session);
+  const events = payload.events || [];
   state.chat.events[sessionId] = events;
   if (renderAfter) renderChat();
   return events;
+}
+
+function mergeChatSession(session) {
+  if (!session?.id) return;
+  const sessions = state.chat.sessions || [];
+  const index = sessions.findIndex((item) => item.id === session.id);
+  if (index >= 0) {
+    sessions[index] = session;
+  } else {
+    sessions.unshift(session);
+  }
+  state.chat.sessions = sessions;
 }
 
 function selectedChatSession() {
@@ -2797,6 +2843,58 @@ function toolResultSummary(result, isError) {
   return "Tool completed.";
 }
 
+function latestChatValidation() {
+  return activeChatEvents()
+    .slice()
+    .reverse()
+    .map((event) => event.payload?.result?.validation)
+    .find(Boolean);
+}
+
+function validationBadge(validation) {
+  if (!validation) return `<span class="pill warning">validate before execution</span>`;
+  return validation.valid
+    ? `<span class="pill gain">formal validation passed</span>`
+    : `<span class="pill loss">formal validation failed</span>`;
+}
+
+function planGuardrailRows(plan, validation) {
+  const rows = [
+    ["Asset", plan?.asset ? `${displayPerpLabel(plan.asset)} allowlisted` : "Plan asset required", Boolean(plan?.asset)],
+    ["Size", `${money(plan?.size_usdc || 0)} notional`, Number(plan?.size_usdc || 0) >= MIN_ORDER_USDC],
+    ["Leverage", `${number(plan?.leverage || 0, 1)}x integer`, Number.isInteger(Number(plan?.leverage || 0))],
+    [
+      "Exit",
+      plan?.take_profit ? `TP ${compactPrice(plan.take_profit)}` : "Take profit required",
+      Boolean(plan?.take_profit),
+    ],
+    [
+      "Stop policy",
+      plan?.stop_loss
+        ? `SL ${compactPrice(plan.stop_loss)}`
+        : "No SL under 10x; active invalidation",
+      Boolean(plan?.stop_loss) || Number(plan?.leverage || 0) < 10,
+    ],
+  ];
+  if (validation) {
+    rows.push([
+      "Formal validation",
+      validation.valid ? "valid=true" : `${validation.errors?.length || 1} blocker(s)`,
+      Boolean(validation.valid),
+    ]);
+  }
+  return rows
+    .map(
+      ([label, value, passed]) => `
+        <div class="${passed ? "pass" : "fail"}">
+          <span>${escapeHtml(label)}</span>
+          <b>${escapeHtml(value)}</b>
+        </div>
+      `,
+    )
+    .join("");
+}
+
 function renderVaultStatus() {
   const target = $("#chat-vault-status");
   if (!target) return;
@@ -2871,16 +2969,23 @@ function renderChatPlanActions() {
     .map((event) => event.payload?.result?.plan)
     .find(Boolean);
   const plan = state.plan || eventPlan;
+  const validation = plan?.validation || latestChatValidation();
   target.innerHTML = plan
     ? `
       <div class="chat-plan-card">
-        <span class="pill ${decisionClass(plan.execution_decision)}">${escapeHtml(plan.execution_decision || "proposed")}</span>
+        <div class="plan-status-row">
+          <span class="pill ${decisionClass(plan.execution_decision)}">${escapeHtml(plan.execution_decision || "proposed")}</span>
+          ${validationBadge(validation)}
+        </div>
         <h3>${escapeHtml(displayPerpLabel(plan.asset))} ${escapeHtml(plan.side)}</h3>
         <p>${escapeHtml(plan.rationale || plan.thesis || "Latest stored plan.")}</p>
         <div class="kv mini">
           <div><span>Size</span><b>${money(plan.size_usdc)}</b></div>
           <div><span>Entry</span><b>${compactPrice(plan.entry_price)}</b></div>
           <div><span>Lev</span><b>${number(plan.leverage, 1)}x</b></div>
+        </div>
+        <div class="guardrail-checklist">
+          ${planGuardrailRows(plan, validation)}
         </div>
         <button type="button" data-action="chat-execute-plan">Execute guarded</button>
       </div>
@@ -3042,13 +3147,14 @@ async function sendChatMessage() {
   state.chat.isSending = true;
   renderChat();
   try {
-    await api(`/api/chat/sessions/${encodeURIComponent(sessionId)}/messages`, {
+    const session = await api(`/api/chat/sessions/${encodeURIComponent(sessionId)}/messages`, {
       method: "POST",
       body: JSON.stringify({ message }),
     });
+    mergeChatSession(session);
     input.value = "";
-    await loadChatState();
-    startChatPolling();
+    await loadChatEvents(sessionId);
+    startChatPolling({ tailMs: 8000 });
   } finally {
     state.chat.isSending = false;
     renderChat();
@@ -3076,7 +3182,7 @@ async function defineChatOutcome() {
 async function confirmChatTool(actionTarget) {
   const sessionId = state.chat.activeSessionId;
   if (!sessionId) throw new Error("No active Chat session.");
-  await api(`/api/chat/sessions/${encodeURIComponent(sessionId)}/tool-confirmations`, {
+  const session = await api(`/api/chat/sessions/${encodeURIComponent(sessionId)}/tool-confirmations`, {
     method: "POST",
     body: JSON.stringify({
       tool_use_id: actionTarget.dataset.toolId,
@@ -3084,7 +3190,9 @@ async function confirmChatTool(actionTarget) {
       deny_message: actionTarget.dataset.toolAllow === "true" ? null : "Denied from HyperClaude UI.",
     }),
   });
-  await loadChatState();
+  mergeChatSession(session);
+  await loadState();
+  startChatPolling({ tailMs: 8000 });
 }
 
 async function interruptChat() {
@@ -3106,18 +3214,20 @@ async function executeChatPlan() {
   if (!state.plan?.id) throw new Error("No trade plan to execute.");
   await executeTrade({ confirmed: true });
   await loadChatState();
+  startChatPolling({ tailMs: 3000 });
 }
 
-function startChatPolling() {
+function startChatPolling({ tailMs = 0 } = {}) {
   const session = selectedChatSession();
-  if (!session || !["running", "waiting_action"].includes(session.status)) {
+  if (tailMs > 0) chatRuntime.pollUntil = Math.max(chatRuntime.pollUntil, Date.now() + tailMs);
+  if (!session || !shouldPollChatSession(session)) {
     stopChatPolling();
     return;
   }
   if (chatRuntime.pollTimer) return;
   chatRuntime.pollTimer = window.setInterval(() => {
     const active = selectedChatSession();
-    if (!active || !["running", "waiting_action"].includes(active.status)) {
+    if (!active || !shouldPollChatSession(active)) {
       stopChatPolling();
       return;
     }
@@ -3125,10 +3235,15 @@ function startChatPolling() {
   }, 1500);
 }
 
+function shouldPollChatSession(session) {
+  return Boolean(session && (["running", "waiting_action"].includes(session.status) || Date.now() < chatRuntime.pollUntil));
+}
+
 function stopChatPolling() {
   if (!chatRuntime.pollTimer) return;
   window.clearInterval(chatRuntime.pollTimer);
   chatRuntime.pollTimer = null;
+  chatRuntime.pollUntil = 0;
 }
 
 function money(value, includeCurrency = true) {
@@ -3492,7 +3607,12 @@ async function reviewAutoPlan(actionTarget) {
   state.plan = plan;
   state.order = null;
   renderTradingView();
-  toast("Trade plan loaded for review");
+  try {
+    const validation = await validateActivePlan();
+    toast(validation.valid ? "Trade plan loaded and validated" : "Trade plan loaded with validation blockers");
+  } catch (error) {
+    toast(error.message);
+  }
 }
 
 async function executeAutoPlan(actionTarget) {
@@ -3732,6 +3852,11 @@ async function createManualPlan({ silent = false } = {}) {
 async function executeTrade({ confirmed = true } = {}) {
   state.lastOrderError = "";
   if (!state.plan?.id) throw new Error("No trade plan to execute.");
+  const validation = await validateActivePlan();
+  if (!validation.valid) {
+    const errors = validation.errors?.length ? validation.errors.join("; ") : "Formal validation failed.";
+    throw new Error(`Formal validation failed: ${errors}`);
+  }
   const result = await api(`/api/trades/${state.plan.id}/execute`, {
     method: "POST",
     body: JSON.stringify({
@@ -3741,6 +3866,15 @@ async function executeTrade({ confirmed = true } = {}) {
   state.plan = result.plan;
   await loadState();
   toast("Execution submitted");
+}
+
+async function validateActivePlan() {
+  if (!state.plan?.id) throw new Error("No trade plan to validate.");
+  const validation = await api(`/api/trades/${encodeURIComponent(state.plan.id)}/validation`);
+  state.plan.validation = validation;
+  renderTradingView();
+  renderChat();
+  return validation;
 }
 
 async function submitManualOrder() {
@@ -3763,9 +3897,8 @@ async function submitManualOrder() {
     state.analysis = null;
     state.selectedCandidateIndex = 0;
     state.manualOrderDirty = false;
-    renderTradingView();
+    await loadState();
     toast("Order submitted");
-    refreshOrders({ silent: true }).catch((error) => console.warn("Order refresh failed", error));
   } finally {
     state.isSubmittingOrder = false;
     renderTicket();
