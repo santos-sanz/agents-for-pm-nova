@@ -77,6 +77,10 @@ class Settings(BaseSettings):
     privy_client_id: str | None = Field(default=None, alias="PRIVY_CLIENT_ID")
     privy_app_secret: SecretStr | None = Field(default=None, alias="PRIVY_APP_SECRET")
     privy_execution_enabled: bool = Field(default=False, alias="PRIVY_EXECUTION_ENABLED")
+    privy_external_withdrawal_address: str = Field(
+        default="0xcF1D21Cd958C13aC24BA54506464E64AC80B4214",
+        alias="PRIVY_EXTERNAL_WITHDRAWAL_ADDRESS",
+    )
 
     hyperliquid_base_url: str = Field(
         default="https://api.hyperliquid.xyz", alias="HYPERLIQUID_BASE_URL"
@@ -133,6 +137,16 @@ class Settings(BaseSettings):
         if parsed.scheme != "https" or not parsed.hostname:
             raise ValueError("Managed Agents MCP server URLs must be HTTPS URLs.")
         return parsed.geturl().rstrip("/")
+
+    @field_validator("privy_external_withdrawal_address")
+    @classmethod
+    def require_external_withdrawal_evm_address(cls, value: str) -> str:
+        clean = value.strip()
+        if len(clean) != 42 or not clean.startswith("0x"):
+            raise ValueError("PRIVY_EXTERNAL_WITHDRAWAL_ADDRESS must be a 0x EVM address.")
+        if any(char not in "0123456789abcdefABCDEF" for char in clean[2:]):
+            raise ValueError("PRIVY_EXTERNAL_WITHDRAWAL_ADDRESS must be a 0x EVM address.")
+        return clean
 
     @field_validator("hyperliquid_base_url")
     @classmethod

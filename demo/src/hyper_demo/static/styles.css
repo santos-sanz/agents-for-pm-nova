@@ -230,24 +230,24 @@ body.trading-screen .rail {
   display: none;
 }
 
-body.settings-screen-active .rail,
-body.settings-screen-active .mainstage,
-body.settings-screen-active .events-panel {
-  display: none;
-}
-
-body.chat-screen-active .rail,
-body.chat-screen-active .mainstage,
-body.chat-screen-active .events-panel {
-  display: none;
-}
-
 .rail,
 .mainstage,
 .events-panel {
   display: grid;
   align-content: start;
   gap: 16px;
+}
+
+body.settings-screen-active .rail,
+body.settings-screen-active .mainstage,
+body.settings-screen-active .events-panel,
+body.chat-screen-active .rail,
+body.chat-screen-active .mainstage,
+body.chat-screen-active .events-panel,
+body.transfer-screen-active .rail,
+body.transfer-screen-active .mainstage,
+body.transfer-screen-active .events-panel {
+  display: none;
 }
 
 .panel,
@@ -352,6 +352,104 @@ body.chat-screen-active .events-panel {
 
 .chat-screen[hidden] {
   display: none;
+}
+
+.transfer-screen {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 18px;
+}
+
+.transfer-screen[hidden] {
+  display: none;
+}
+
+.transfer-panel {
+  display: grid;
+  gap: 18px;
+  max-width: 860px;
+  margin: 0 auto;
+}
+
+.transfer-summary,
+.transfer-form,
+.transfer-route,
+.transfer-contract,
+.transfer-result {
+  display: grid;
+  gap: 12px;
+}
+
+.transfer-route {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.transfer-route > div,
+.transfer-contract,
+.transfer-result {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(250, 249, 245, 0.05);
+  padding: 14px;
+}
+
+.transfer-route > div {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.transfer-route span,
+.transfer-contract span,
+.transfer-result span {
+  color: var(--dim);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.transfer-route code,
+.transfer-contract code {
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.transfer-route b,
+.transfer-contract b {
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.transfer-contract {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+}
+
+.transfer-result {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+}
+
+.transfer-result a {
+  color: var(--green);
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.transfer-warning {
+  border: 1px solid rgba(202, 138, 4, 0.45);
+  border-radius: 8px;
+  background: rgba(202, 138, 4, 0.12);
+  color: var(--ink);
+  padding: 12px 14px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.transfer-form .button-row {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
 }
 
 .chat-grid {
@@ -1728,7 +1826,8 @@ pre {
   .hero,
   .auth-panel,
   .analysis-grid,
-  .chat-grid {
+  .chat-grid,
+  .transfer-route {
     grid-template-columns: 1fr;
   }
 
@@ -4798,4 +4897,10 @@ body.trading-screen .ticket-panel.auto-mode .button-row {
   .protection-editor {
     grid-template-columns: 1fr;
   }
+}
+
+body.transfer-screen-active .rail,
+body.transfer-screen-active .mainstage,
+body.transfer-screen-active .events-panel {
+  display: none !important;
 }

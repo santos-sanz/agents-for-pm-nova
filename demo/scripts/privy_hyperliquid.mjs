@@ -511,6 +511,89 @@ async function depositMaster(input) {
   };
 }
 
+async function transferUserUsdcToMaster(input) {
+  return transferUserUsdc(input, {
+    destinationAddress: input.masterWalletAddress,
+    destinationLabel: "masterWalletAddress",
+    protocol: "Privy sponsored Arbitrum USDC wallet transfer",
+    outputAddressKey: "masterWalletAddress",
+  });
+}
+
+async function transferUserUsdcToExternal(input) {
+  return transferUserUsdc(input, {
+    destinationAddress: input.externalWalletAddress,
+    destinationLabel: "externalWalletAddress",
+    protocol: "Privy sponsored Arbitrum USDC external withdrawal",
+    outputAddressKey: "externalWalletAddress",
+  });
+}
+
+async function transferUserUsdc(input, destination) {
+  if ((input.network || "testnet") !== "prodnet") {
+    throw new Error("Integrated user wallet transfers are only configured for prodnet.");
+  }
+  const amount = Number(input.amountUsdc || 0);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new Error("USDC transfer amount must be greater than zero.");
+  }
+  if (!input.sourceWalletId || !input.sourceWalletAddress || !destination.destinationAddress) {
+    throw new Error(
+      `sourceWalletId, sourceWalletAddress, and ${destination.destinationLabel} are required`,
+    );
+  }
+  if (!input.userJwt) {
+    throw new Error("Privy user authorization is required for this sponsored transfer.");
+  }
+
+  const privy = privyClient();
+  const transferParams = {
+    authorization_context: { user_jwts: [input.userJwt] },
+    destination: {
+      address: destination.destinationAddress,
+      asset: "usdc",
+      chain: "arbitrum",
+    },
+    source: {
+      amount: String(amount),
+      asset: "usdc",
+      chain: "arbitrum",
+    },
+    amount_type: "exact_input",
+    slippage_bps: 0,
+  };
+  const transfer = await privy.wallets().transfer(input.sourceWalletId, transferParams);
+  const output = {
+    network: "prodnet",
+    protocol: destination.protocol,
+    sourceWalletId: input.sourceWalletId,
+    sourceWalletAddress: input.sourceWalletAddress,
+    usdcAddress: ARBITRUM_USDC,
+    amountUsdc: amount,
+    actionId: transfer.id,
+    hash: transfer.transaction_hash || null,
+    status: transfer.status,
+    raw: transfer,
+  };
+  output[destination.outputAddressKey] = destination.destinationAddress;
+  return output;
+}
+
+async function verifyUserJwt(input) {
+  if (!input.userJwt) {
+    throw new Error("Privy user authorization is required for this sponsored transfer.");
+  }
+  const privy = privyClient();
+  const user = await privy.users().get({ id_token: input.userJwt });
+  return {
+    valid: true,
+    userId: user.id || null,
+    appId: null,
+    issuedAt: null,
+    expiresAt: null,
+  };
+}
+
 try {
   const input = await readStdin();
   let output;
@@ -521,6 +604,9 @@ try {
   else if (command === "close-position") output = await closePosition(input);
   else if (command === "wallet-state") output = await walletState(input);
   else if (command === "deposit-master") output = await depositMaster(input);
+  else if (command === "transfer-user-usdc-to-master") output = await transferUserUsdcToMaster(input);
+  else if (command === "transfer-user-usdc-to-external") output = await transferUserUsdcToExternal(input);
+  else if (command === "verify-user-jwt") output = await verifyUserJwt(input);
   else throw new Error(`Unknown command: ${command}`);
   process.stdout.write(JSON.stringify(output));
 } catch (error) {
