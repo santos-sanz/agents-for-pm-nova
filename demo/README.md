@@ -6,8 +6,8 @@ The app supports:
 
 - Reactive analysis: ask for a trade idea on any Hyperliquid asset.
 - Proactive scan: scan the configured watchlist and propose the strongest demo candidate.
-- Testnet auto-execution: guarded auto-submit when credentials and guardrails pass.
 - Prodnet guarded execution: never automatic; requires UI confirmation and explicit enablement.
+- Reviewable execution controls: max order size, allowlisted assets, validation, and human approval.
 
 ## Setup
 
@@ -17,6 +17,18 @@ uv sync
 npm install
 cp .env.example .env
 ```
+
+For the workshop path, use the preset instead:
+
+```bash
+cp ../workshop/.env.example .env
+```
+
+Then change only the Claude Managed Agents values, starting with
+`ANTHROPIC_API_KEY`. The workshop path always uses guarded prodnet, and
+non-Claude execution credentials are host-managed. The full workshop guide and
+integration map live in
+`../workshop/README.md`.
 
 Fill `.env` with Claude and Hyperliquid credentials. Use a Hyperliquid API/agent wallet
 private key only. Never put the private key for the main wallet in this project.
@@ -31,6 +43,7 @@ PRIVY_APP_ID=...
 PRIVY_CLIENT_ID=...
 PRIVY_APP_SECRET=...
 PRIVY_EXECUTION_ENABLED=true
+PRIVY_EXTERNAL_WITHDRAWAL_ADDRESS=0xcF1D21Cd958C13aC24BA54506464E64AC80B4214
 ```
 
 With `PRIVY_EXECUTION_ENABLED=true`, connect/create a Privy wallet in the browser, then use
@@ -38,6 +51,8 @@ With `PRIVY_EXECUTION_ENABLED=true`, connect/create a Privy wallet in the browse
 is used as the master wallet; otherwise the backend creates a Privy master wallet. The app
 then creates a Privy agent wallet, registers the agent on Hyperliquid, and routes trading
 orders through that registered agent.
+For sponsored user-wallet transfers and external withdrawals, enable Privy identity tokens
+in the dashboard under User management > Authentication > Advanced.
 
 ```bash
 uv run demo setup-check
@@ -52,18 +67,19 @@ Open <http://127.0.0.1:8000>.
 
 The browser UI stores local runtime settings in `.demo_state/runtime.json`:
 
-- `network`: `testnet` or `prodnet`
-- `execution_policy`: `auto_testnet_confirm_prodnet`
+- `network`: `prodnet` for the workshop path
 - `ui_mode`: `human` or `robot`
 - `watchlist`, `allowed_assets`, and `max_order_usdc`
 
-The UI never accepts arbitrary exchange URLs. Testnet/prodnet URLs are derived internally.
+The UI never accepts arbitrary exchange URLs. The workshop preset uses the known
+Hyperliquid prodnet URLs and keeps execution behind explicit confirmation.
 
 ## Prodnet Guardrails
 
-Default mode is testnet. To allow guarded prodnet execution:
+The workshop path uses guarded prodnet:
 
 ```bash
+DEMO_TRADING_MODE=mainnet_guarded
 HYPERLIQUID_MAINNET_ENABLED=true
 HYPERLIQUID_ACCOUNT_ADDRESS=0x_your_main_wallet
 HYPERLIQUID_API_WALLET_PRIVATE_KEY=0x_your_api_wallet_private_key

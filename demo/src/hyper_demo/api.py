@@ -333,6 +333,51 @@ def _bearer_token(authorization: str | None) -> str | None:
     return token.strip()
 
 
+def _identity_token(token: str | None) -> str | None:
+    if not token or not token.strip():
+        return None
+    return token.strip()
+
+
+def _verify_privy_transfer_session(
+    *,
+    adapter: PrivyHyperliquidAdapter,
+    connected_wallet: ConnectedWallet,
+    user_access_token: str,
+    user_identity_token: str,
+) -> dict[str, Any]:
+    access_verification = adapter.verify_user_access_token(user_access_token)
+    identity_verification = adapter.verify_user_jwt(user_identity_token)
+    access_user_id = access_verification.get("userId")
+    identity_user_id = identity_verification.get("userId")
+    if access_user_id and identity_user_id and access_user_id != identity_user_id:
+        raise ExecutionBlocked("Privy access token does not match the identity token user.")
+    expected_user_id = connected_wallet.user_id
+    if expected_user_id and access_user_id and expected_user_id != access_user_id:
+        raise ExecutionBlocked("Privy session user does not match the connected wallet user.")
+    if expected_user_id and identity_user_id and expected_user_id != identity_user_id:
+        raise ExecutionBlocked("Privy session user does not match the connected wallet user.")
+    authorization_token = user_access_token
+    try:
+        authorization_verification = adapter.verify_user_authorization_key(user_access_token)
+        authorization_token_source = "access"
+    except ExecutionBlocked as access_error:
+        authorization_token = user_identity_token
+        try:
+            authorization_verification = adapter.verify_user_authorization_key(user_identity_token)
+            authorization_token_source = "identity"
+        except ExecutionBlocked:
+            raise access_error from None
+    return {
+        "access": access_verification,
+        "identity": identity_verification,
+        "authorization": authorization_verification,
+        "authorization_token": authorization_token,
+        "authorization_token_source": authorization_token_source,
+        "user_id": identity_user_id or access_user_id,
+    }
+
+
 def privy_agent_wallet_id(network: RuntimeNetwork) -> str:
     return f"privy_agent_wallet_{network.value}"
 
@@ -660,6 +705,21 @@ def save_connected_wallet(request: ConnectedWalletRequest) -> ConnectedWallet:
     return wallet
 
 
+@app.delete("/api/wallet/connected")
+def forget_connected_wallet() -> dict[str, bool]:
+    store = get_store()
+    removed = store.delete("connected_wallet", "connected_wallet")
+    if removed:
+        store.append_event(
+            RunEvent(
+                run_id=AGENT_RUN_ID,
+                message="Privy wallet disconnected.",
+                payload={"source": "privy"},
+            )
+        )
+    return {"ok": True, "removed": removed}
+
+
 @app.post("/api/privy/agent-wallet")
 def setup_privy_agent_wallet():
     store = get_store()
@@ -729,6 +789,7 @@ def deposit_privy_master(request: MasterDepositRequest) -> dict[str, Any]:
 def transfer_user_usdc_to_master(
     request: UserWalletTransferRequest,
     authorization: str | None = Header(default=None),
+    x_privy_identity_token: str | None = Header(default=None, alias="X-Privy-Identity-Token"),
 ) -> dict[str, Any]:
     store = get_store()
     runtime = get_runtime(store)
@@ -741,33 +802,40 @@ def transfer_user_usdc_to_master(
             status_code=400,
             detail="Connect a Privy wallet with a wallet_id first.",
         )
-    user_jwt = _bearer_token(authorization)
-    if not user_jwt:
+    user_access_token = _bearer_token(authorization)
+    user_identity_token = _identity_token(x_privy_identity_token)
+    if not user_access_token:
         raise HTTPException(
             status_code=400,
             detail=(
-                "Privy user authorization is required for a sponsored user wallet "
+                "Privy access token is required for a sponsored user wallet "
                 "transfer. Log in with Privy again, then retry."
+            ),
+        )
+    if not user_identity_token:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Privy identity token is required to verify the connected wallet. "
+                "Log in with Privy again, then retry."
             ),
         )
     try:
         settings = settings_for_runtime(runtime)
         adapter = PrivyHyperliquidAdapter(settings)
-        verification = adapter.verify_user_jwt(user_jwt)
-        verified_user_id = verification.get("userId")
-        if (
-            connected_wallet.user_id
-            and verified_user_id
-            and connected_wallet.user_id != verified_user_id
-        ):
-            raise ExecutionBlocked("Privy session user does not match the connected wallet user.")
+        verification = _verify_privy_transfer_session(
+            adapter=adapter,
+            connected_wallet=connected_wallet,
+            user_access_token=user_access_token,
+            user_identity_token=user_identity_token,
+        )
         result = adapter.transfer_user_usdc_to_master(
             source_wallet_id=connected_wallet.wallet_id,
             source_wallet_address=connected_wallet.address,
             agent=agent,
             amount_usdc=request.amount_usdc,
             confirmed=request.confirmed,
-            user_jwt=user_jwt,
+            user_access_token=verification["authorization_token"],
         )
     except (ExecutionBlocked, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -788,6 +856,7 @@ def transfer_user_usdc_to_master(
 def preflight_user_wallet_transfer(
     request: UserWalletTransferRequest,
     authorization: str | None = Header(default=None),
+    x_privy_identity_token: str | None = Header(default=None, alias="X-Privy-Identity-Token"),
 ) -> dict[str, Any]:
     store = get_store()
     runtime = get_runtime(store)
@@ -805,35 +874,43 @@ def preflight_user_wallet_transfer(
             status_code=400,
             detail="USDC transfer amount must be greater than zero.",
         )
-    user_jwt = _bearer_token(authorization)
-    if not user_jwt:
+    user_access_token = _bearer_token(authorization)
+    user_identity_token = _identity_token(x_privy_identity_token)
+    if not user_access_token:
         raise HTTPException(
             status_code=400,
             detail=(
-                "Privy user authorization is required for a sponsored user wallet "
+                "Privy access token is required for a sponsored user wallet "
                 "transfer. Log in with Privy again, then retry."
+            ),
+        )
+    if not user_identity_token:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Privy identity token is required to verify the connected wallet. "
+                "Log in with Privy again, then retry."
             ),
         )
     try:
         settings = settings_for_runtime(runtime)
-        verification = PrivyHyperliquidAdapter(settings).verify_user_jwt(user_jwt)
+        verification = _verify_privy_transfer_session(
+            adapter=PrivyHyperliquidAdapter(settings),
+            connected_wallet=connected_wallet,
+            user_access_token=user_access_token,
+            user_identity_token=user_identity_token,
+        )
     except (ExecutionBlocked, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    expected_user_id = connected_wallet.user_id
-    verified_user_id = verification.get("userId")
-    if expected_user_id and verified_user_id and expected_user_id != verified_user_id:
-        raise HTTPException(
-            status_code=400,
-            detail="Privy session user does not match the connected wallet user.",
-        )
     return {
         "ok": True,
         "source_wallet_id": connected_wallet.wallet_id,
         "source_wallet_address": connected_wallet.address,
         "master_wallet_address": agent.master_wallet_address,
         "amount_usdc": request.amount_usdc,
-        "verified_user_id": verified_user_id,
-        "token_expires_at": verification.get("expiresAt"),
+        "verified_user_id": verification.get("user_id"),
+        "token_expires_at": verification.get("access", {}).get("expiresAt"),
+        "authorization_token_source": verification.get("authorization_token_source"),
     }
 
 
@@ -841,6 +918,7 @@ def preflight_user_wallet_transfer(
 def transfer_user_usdc_to_external(
     request: UserWalletTransferRequest,
     authorization: str | None = Header(default=None),
+    x_privy_identity_token: str | None = Header(default=None, alias="X-Privy-Identity-Token"),
 ) -> dict[str, Any]:
     store = get_store()
     runtime = get_runtime(store)
@@ -850,27 +928,34 @@ def transfer_user_usdc_to_external(
             status_code=400,
             detail="Connect a Privy wallet with a wallet_id first.",
         )
-    user_jwt = _bearer_token(authorization)
-    if not user_jwt:
+    user_access_token = _bearer_token(authorization)
+    user_identity_token = _identity_token(x_privy_identity_token)
+    if not user_access_token:
         raise HTTPException(
             status_code=400,
             detail=(
-                "Privy user authorization is required for a sponsored external "
+                "Privy access token is required for a sponsored external "
                 "wallet transfer. Log in with Privy again, then retry."
+            ),
+        )
+    if not user_identity_token:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Privy identity token is required to verify the connected wallet. "
+                "Log in with Privy again, then retry."
             ),
         )
     try:
         settings = settings_for_runtime(runtime)
         external_address = _validate_evm_address(settings.privy_external_withdrawal_address)
         adapter = PrivyHyperliquidAdapter(settings)
-        verification = adapter.verify_user_jwt(user_jwt)
-        verified_user_id = verification.get("userId")
-        if (
-            connected_wallet.user_id
-            and verified_user_id
-            and connected_wallet.user_id != verified_user_id
-        ):
-            raise ExecutionBlocked("Privy session user does not match the connected wallet user.")
+        verification = _verify_privy_transfer_session(
+            adapter=adapter,
+            connected_wallet=connected_wallet,
+            user_access_token=user_access_token,
+            user_identity_token=user_identity_token,
+        )
         result = adapter.transfer_user_usdc_to_external(
             source_wallet_id=connected_wallet.wallet_id,
             source_wallet_address=connected_wallet.address,
@@ -878,7 +963,7 @@ def transfer_user_usdc_to_external(
             agent_network=runtime.network,
             amount_usdc=request.amount_usdc,
             confirmed=request.confirmed,
-            user_jwt=user_jwt,
+            user_access_token=verification["authorization_token"],
         )
     except (ExecutionBlocked, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -899,6 +984,7 @@ def transfer_user_usdc_to_external(
 def preflight_external_wallet_transfer(
     request: UserWalletTransferRequest,
     authorization: str | None = Header(default=None),
+    x_privy_identity_token: str | None = Header(default=None, alias="X-Privy-Identity-Token"),
 ) -> dict[str, Any]:
     store = get_store()
     runtime = get_runtime(store)
@@ -913,36 +999,44 @@ def preflight_external_wallet_transfer(
             status_code=400,
             detail="USDC transfer amount must be greater than zero.",
         )
-    user_jwt = _bearer_token(authorization)
-    if not user_jwt:
+    user_access_token = _bearer_token(authorization)
+    user_identity_token = _identity_token(x_privy_identity_token)
+    if not user_access_token:
         raise HTTPException(
             status_code=400,
             detail=(
-                "Privy user authorization is required for a sponsored external "
+                "Privy access token is required for a sponsored external "
                 "wallet transfer. Log in with Privy again, then retry."
+            ),
+        )
+    if not user_identity_token:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Privy identity token is required to verify the connected wallet. "
+                "Log in with Privy again, then retry."
             ),
         )
     try:
         settings = settings_for_runtime(runtime)
         external_address = _validate_evm_address(settings.privy_external_withdrawal_address)
-        verification = PrivyHyperliquidAdapter(settings).verify_user_jwt(user_jwt)
+        verification = _verify_privy_transfer_session(
+            adapter=PrivyHyperliquidAdapter(settings),
+            connected_wallet=connected_wallet,
+            user_access_token=user_access_token,
+            user_identity_token=user_identity_token,
+        )
     except (ExecutionBlocked, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    expected_user_id = connected_wallet.user_id
-    verified_user_id = verification.get("userId")
-    if expected_user_id and verified_user_id and expected_user_id != verified_user_id:
-        raise HTTPException(
-            status_code=400,
-            detail="Privy session user does not match the connected wallet user.",
-        )
     return {
         "ok": True,
         "source_wallet_id": connected_wallet.wallet_id,
         "source_wallet_address": connected_wallet.address,
         "external_wallet_address": external_address,
         "amount_usdc": request.amount_usdc,
-        "verified_user_id": verified_user_id,
-        "token_expires_at": verification.get("expiresAt"),
+        "verified_user_id": verification.get("user_id"),
+        "token_expires_at": verification.get("access", {}).get("expiresAt"),
+        "authorization_token_source": verification.get("authorization_token_source"),
     }
 
 

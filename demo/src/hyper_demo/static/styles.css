@@ -1735,6 +1735,13 @@ ul {
   margin-top: 14px;
 }
 
+.wallet-action-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  margin-top: 14px;
+}
+
 pre {
   min-height: 280px;
   max-height: 520px;

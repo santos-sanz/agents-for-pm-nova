@@ -2,6 +2,7 @@ import json
 
 from fastapi.testclient import TestClient
 
+from hyper_demo.adapters.hyperliquid import ExecutionBlocked
 from hyper_demo.api import app, run_chat_custom_tool
 from hyper_demo.models import (
     ManagedChatDeployment,
@@ -1937,6 +1938,169 @@ def test_connected_privy_wallet_is_saved_in_state(tmp_path, monkeypatch) -> None
     state = client.get("/api/state").json()
     assert state["connected_wallet"]["address"] == "0x0000000000000000000000000000000000000000"
     assert state["connected_wallet"]["source"] == "privy"
+
+
+def test_connected_privy_wallet_can_be_forgotten(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    client = TestClient(app)
+
+    client.post(
+        "/api/wallet/connected",
+        json={
+            "address": "0x0000000000000000000000000000000000000000",
+            "user_id": "privy-user",
+            "email": "pm@example.com",
+        },
+    )
+
+    response = client.delete("/api/wallet/connected")
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "removed": True}
+    state = client.get("/api/state").json()
+    assert state["connected_wallet"] is None
+
+
+def test_external_transfer_uses_access_token_for_authorization(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("PRIVY_EXECUTION_ENABLED", "true")
+    monkeypatch.setenv("PRIVY_APP_ID", "app")
+    monkeypatch.setenv("PRIVY_APP_SECRET", "secret")
+    monkeypatch.setenv("HYPERLIQUID_MAINNET_ENABLED", "true")
+    store = JsonStore()
+    store.save("runtime", RuntimeSettings(network="prodnet"))
+    client = TestClient(app)
+    client.post(
+        "/api/wallet/connected",
+        json={
+            "address": "0x0000000000000000000000000000000000000000",
+            "user_id": "privy-user",
+            "email": "pm@example.com",
+            "wallet_id": "wallet-id",
+        },
+    )
+    captured = {}
+
+    def fake_verify_access_token(self, token):
+        captured["access_token"] = token
+        return {"userId": "privy-user", "expiresAt": 123}
+
+    def fake_verify_identity_token(self, token):
+        captured["identity_token"] = token
+        return {"userId": "privy-user", "expiresAt": 456}
+
+    def fake_verify_authorization_key(self, token):
+        captured["authorization_token"] = token
+        return {"authorizationKeyAvailable": True}
+
+    def fake_transfer_external(self, **kwargs):
+        captured["transfer"] = kwargs
+        return {"status": "pending", "actionId": "action-id", "hash": None}
+
+    monkeypatch.setattr(
+        "hyper_demo.api.PrivyHyperliquidAdapter.verify_user_access_token",
+        fake_verify_access_token,
+    )
+    monkeypatch.setattr(
+        "hyper_demo.api.PrivyHyperliquidAdapter.verify_user_jwt",
+        fake_verify_identity_token,
+    )
+    monkeypatch.setattr(
+        "hyper_demo.api.PrivyHyperliquidAdapter.verify_user_authorization_key",
+        fake_verify_authorization_key,
+    )
+    monkeypatch.setattr(
+        "hyper_demo.api.PrivyHyperliquidAdapter.transfer_user_usdc_to_external",
+        fake_transfer_external,
+    )
+
+    response = client.post(
+        "/api/privy/transfer-user-usdc-to-external",
+        headers={
+            "Authorization": "Bearer access-token",
+            "X-Privy-Identity-Token": "identity-token",
+        },
+        json={"amount_usdc": 1, "confirmed": True},
+    )
+
+    assert response.status_code == 200
+    assert captured["access_token"] == "access-token"
+    assert captured["identity_token"] == "identity-token"
+    assert captured["authorization_token"] == "access-token"
+    assert captured["transfer"]["user_access_token"] == "access-token"
+
+
+def test_external_transfer_falls_back_to_identity_token_for_authorization(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("PRIVY_EXECUTION_ENABLED", "true")
+    monkeypatch.setenv("PRIVY_APP_ID", "app")
+    monkeypatch.setenv("PRIVY_APP_SECRET", "secret")
+    monkeypatch.setenv("HYPERLIQUID_MAINNET_ENABLED", "true")
+    store = JsonStore()
+    store.save("runtime", RuntimeSettings(network="prodnet"))
+    client = TestClient(app)
+    client.post(
+        "/api/wallet/connected",
+        json={
+            "address": "0x0000000000000000000000000000000000000000",
+            "user_id": "privy-user",
+            "email": "pm@example.com",
+            "wallet_id": "wallet-id",
+        },
+    )
+    captured = {"authorization_tokens": []}
+
+    def fake_verify_access_token(self, token):
+        return {"userId": "privy-user", "expiresAt": 123}
+
+    def fake_verify_identity_token(self, token):
+        return {"userId": "privy-user", "expiresAt": 456}
+
+    def fake_verify_authorization_key(self, token):
+        captured["authorization_tokens"].append(token)
+        if token == "access-token":
+            raise ExecutionBlocked("Privy rejected access token authorization.")
+        return {"authorizationKeyAvailable": True}
+
+    def fake_transfer_external(self, **kwargs):
+        captured["transfer"] = kwargs
+        return {"status": "pending", "actionId": "action-id", "hash": None}
+
+    monkeypatch.setattr(
+        "hyper_demo.api.PrivyHyperliquidAdapter.verify_user_access_token",
+        fake_verify_access_token,
+    )
+    monkeypatch.setattr(
+        "hyper_demo.api.PrivyHyperliquidAdapter.verify_user_jwt",
+        fake_verify_identity_token,
+    )
+    monkeypatch.setattr(
+        "hyper_demo.api.PrivyHyperliquidAdapter.verify_user_authorization_key",
+        fake_verify_authorization_key,
+    )
+    monkeypatch.setattr(
+        "hyper_demo.api.PrivyHyperliquidAdapter.transfer_user_usdc_to_external",
+        fake_transfer_external,
+    )
+
+    response = client.post(
+        "/api/privy/transfer-user-usdc-to-external",
+        headers={
+            "Authorization": "Bearer access-token",
+            "X-Privy-Identity-Token": "identity-token",
+        },
+        json={"amount_usdc": 1, "confirmed": True},
+    )
+
+    assert response.status_code == 200
+    assert captured["authorization_tokens"] == ["access-token", "identity-token"]
+    assert captured["transfer"]["user_access_token"] == "identity-token"
 
 
 def test_setup_privy_agent_wallet_saves_agent(tmp_path, monkeypatch) -> None:

@@ -53,8 +53,10 @@ def _friendly_helper_error(detail: str) -> str:
         or "invalid jwt token" in normalized
     ):
         return (
-            "Privy could not authorize this user wallet transfer. Log in with "
-            "Privy again, then retry the sponsored transfer."
+            "Privy rejected the wallet-action authorization exchange. The access "
+            "token is valid for login, but Privy is not returning a user signing "
+            "key for this wallet action. Check Privy JWT authentication settings "
+            "for user-owned server wallet actions, then retry."
         )
     if "minimum value of $10" in normalized or "minimum value of 10" in normalized:
         return (
@@ -312,7 +314,7 @@ class PrivyHyperliquidAdapter:
         agent: PrivyAgentWallet,
         amount_usdc: float,
         confirmed: bool,
-        user_jwt: str,
+        user_access_token: str,
     ) -> dict[str, Any]:
         self._validate_privy_config()
         if not confirmed:
@@ -327,7 +329,7 @@ class PrivyHyperliquidAdapter:
             )
         if amount_usdc <= 0:
             raise ExecutionBlocked("USDC transfer amount must be greater than zero.")
-        if not user_jwt.strip():
+        if not user_access_token.strip():
             raise ExecutionBlocked(
                 "Privy user authorization is required for this sponsored transfer."
             )
@@ -339,7 +341,7 @@ class PrivyHyperliquidAdapter:
                 "sourceWalletAddress": source_wallet_address,
                 "masterWalletAddress": agent.master_wallet_address,
                 "amountUsdc": amount_usdc,
-                "userJwt": user_jwt,
+                "userAccessToken": user_access_token,
             },
         )
 
@@ -352,7 +354,7 @@ class PrivyHyperliquidAdapter:
         agent_network: RuntimeNetwork,
         amount_usdc: float,
         confirmed: bool,
-        user_jwt: str,
+        user_access_token: str,
     ) -> dict[str, Any]:
         self._validate_privy_config()
         if not confirmed:
@@ -367,7 +369,7 @@ class PrivyHyperliquidAdapter:
             )
         if amount_usdc <= 0:
             raise ExecutionBlocked("USDC transfer amount must be greater than zero.")
-        if not user_jwt.strip():
+        if not user_access_token.strip():
             raise ExecutionBlocked(
                 "Privy user authorization is required for this sponsored transfer."
             )
@@ -379,7 +381,33 @@ class PrivyHyperliquidAdapter:
                 "sourceWalletAddress": source_wallet_address,
                 "externalWalletAddress": external_wallet_address,
                 "amountUsdc": amount_usdc,
-                "userJwt": user_jwt,
+                "userAccessToken": user_access_token,
+            },
+        )
+
+    def verify_user_access_token(self, user_access_token: str) -> dict[str, Any]:
+        self._validate_privy_config()
+        if not user_access_token.strip():
+            raise ExecutionBlocked(
+                "Privy user authorization is required for this sponsored transfer."
+            )
+        return self._run_helper(
+            "verify-user-access-token",
+            {
+                "userAccessToken": user_access_token,
+            },
+        )
+
+    def verify_user_authorization_key(self, user_access_token: str) -> dict[str, Any]:
+        self._validate_privy_config()
+        if not user_access_token.strip():
+            raise ExecutionBlocked(
+                "Privy user authorization is required for this sponsored transfer."
+            )
+        return self._run_helper(
+            "verify-user-authorization-key",
+            {
+                "userAccessToken": user_access_token,
             },
         )
 

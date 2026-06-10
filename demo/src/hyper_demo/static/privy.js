@@ -1,5 +1,6 @@
 const PRIVY_SDK_URL = "https://esm.sh/@privy-io/js-sdk-core@latest";
 const ARBITRUM_CHAIN_ID = "0xa4b1";
+const ARBITRUM_CAIP2 = "eip155:42161";
 const ARBITRUM_USDC_ADDRESS = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831";
 
 let privyClient = null;
@@ -59,7 +60,9 @@ function encodeUsdcTransfer(to, amount) {
 function normalizeTransferError(error) {
   const message = errorMessage(error);
   if (message.toLowerCase().includes("insufficient funds")) {
-    return new Error("Source wallet has 0 ETH on Arbitrum. Add a small amount of ETH for gas before sending USDC.");
+    return new Error(
+      "Privy could not sponsor gas for this transaction. Check that gas sponsorship is enabled for client transactions on Arbitrum, then retry.",
+    );
   }
   return error;
 }
@@ -73,42 +76,14 @@ async function currentUser() {
   return privyUser;
 }
 
-async function embeddedProviderForUser() {
-  const privy = await ensurePrivy();
+async function embeddedEthereumWalletForUser() {
   const user = await currentUser();
-  const wallet = privyHelpers.getUserEmbeddedEthereumWallet(user);
+  const wallet = privyHelpers.getUserEmbeddedEthereumWallet(user) || walletFromUser(user);
   if (!wallet?.address) throw new Error("Privy embedded EVM wallet is not linked.");
-  const entropy = privyHelpers.getEntropyDetailsFromUser(user);
-  const provider = await privy.embeddedWallet.getEthereumProvider({
-    wallet,
-    entropyId: entropy.entropyId,
-    entropyIdVerifier: entropy.entropyIdVerifier,
-  });
-  return { provider, wallet };
-}
-
-async function ensureArbitrum(provider) {
-  const chainId = await provider.request({ method: "eth_chainId", params: [] });
-  if (String(chainId).toLowerCase() === ARBITRUM_CHAIN_ID) return;
-  try {
-    await provider.request({
-      method: "wallet_switchEthereumChain",
-      params: [{ chainId: ARBITRUM_CHAIN_ID }],
-    });
-  } catch (error) {
-    await provider.request({
-      method: "wallet_addEthereumChain",
-      params: [
-        {
-          chainId: ARBITRUM_CHAIN_ID,
-          chainName: "Arbitrum One",
-          nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
-          rpcUrls: ["https://arb1.arbitrum.io/rpc"],
-          blockExplorerUrls: ["https://arbiscan.io"],
-        },
-      ],
-    });
+  if (!wallet.id && !wallet.walletId) {
+    throw new Error("Privy embedded EVM wallet is missing a wallet id.");
   }
+  return wallet;
 }
 
 async function saveWallet(address, user, email) {
@@ -213,33 +188,91 @@ async function createOrLinkWallet() {
   window.hyperDemo.toast("Privy wallet linked");
 }
 
+async function logoutPrivy() {
+  const savedEmail = $("#privy-email")?.value.trim() || "";
+  const privy = await ensurePrivy();
+  const userId = privyUser?.id || privyUser?.userId || "*";
+  await privy.auth.logout({ userId }).catch(async () => {
+    await privy.auth.logout({ userId: "*" });
+  });
+  privyUser = null;
+  await window.hyperDemo.api("/api/wallet/connected", { method: "DELETE" });
+  window.hyperDemo.state.connected_wallet = null;
+  window.hyperDemo.state.transferBalances = { source: null, destination: null };
+  window.hyperDemo.state.externalTransferBalances = { source: null, destination: null };
+  window.hyperDemo.state.transferResult = null;
+  window.hyperDemo.state.externalTransferResult = null;
+  if ($("#privy-code")) $("#privy-code").value = "";
+  if (savedEmail && $("#privy-email")) $("#privy-email").value = savedEmail;
+  setStatus("signed out");
+  await window.hyperDemo.loadState();
+  setStatus("signed out");
+  window.hyperDemo.toast("Privy signed out");
+}
+
 async function transferNativeUsdc({ from, to, amount, token = ARBITRUM_USDC_ADDRESS }) {
   assertEvmAddress(from, "Source wallet");
   assertEvmAddress(to, "Destination wallet");
   assertEvmAddress(token, "USDC contract");
   const amountUnits = parseUsdcUnits(amount);
-  const { provider, wallet } = await embeddedProviderForUser();
+  const privy = await ensurePrivy();
+  const wallet = await embeddedEthereumWalletForUser();
   if (wallet.address.toLowerCase() !== from.toLowerCase()) {
     throw new Error("Privy session wallet does not match the selected source wallet.");
   }
-  await ensureArbitrum(provider);
-  let hash;
+  const walletId = wallet.id || wallet.walletId;
+  let response;
   try {
-    hash = await provider.request({
+    response = await privyHelpers.rpc(privy, (input) => privy.embeddedWallet.signWithUserSigner(input), {
+      wallet_id: walletId,
       method: "eth_sendTransaction",
-      params: [
-        {
+      chain_type: "ethereum",
+      caip2: ARBITRUM_CAIP2,
+      sponsor: true,
+      params: {
+        transaction: {
           from,
           to: token,
           value: "0x0",
           data: encodeUsdcTransfer(to, amountUnits),
         },
-      ],
+      },
     });
   } catch (error) {
     throw normalizeTransferError(error);
   }
-  return { hash, from, to, amount: String(amount), token, chainId: ARBITRUM_CHAIN_ID };
+  const data = response?.data || response?.response?.data || response;
+  const hash = data?.hash || data?.transaction_hash || data?.transactionHash || null;
+  return {
+    hash,
+    actionId: data?.transaction_id || data?.reference_id || null,
+    from,
+    to,
+    amount: String(amount),
+    token,
+    chainId: ARBITRUM_CHAIN_ID,
+    caip2: ARBITRUM_CAIP2,
+    sponsor: true,
+    raw: response,
+  };
+}
+
+async function validateNativeUsdcTransfer({ from, to, amount, token = ARBITRUM_USDC_ADDRESS }) {
+  assertEvmAddress(from, "Source wallet");
+  assertEvmAddress(to, "Destination wallet");
+  assertEvmAddress(token, "USDC contract");
+  parseUsdcUnits(amount);
+  const wallet = await embeddedEthereumWalletForUser();
+  if (wallet.address.toLowerCase() !== from.toLowerCase()) {
+    throw new Error("Privy session wallet does not match the selected source wallet.");
+  }
+  if (typeof privyHelpers.rpc !== "function") {
+    throw new Error("Privy Wallet API RPC helper is not available.");
+  }
+  if (typeof privyClient?.embeddedWallet?.signWithUserSigner !== "function") {
+    throw new Error("Privy user signer is not available for sponsored transfers.");
+  }
+  return { from, to, amount: String(amount), token, chainId: ARBITRUM_CHAIN_ID, caip2: ARBITRUM_CAIP2 };
 }
 
 async function getAccessToken() {
@@ -275,6 +308,8 @@ async function getIdentityToken() {
 window.hyperDemoPrivy = {
   getAccessToken,
   getIdentityToken,
+  logout: logoutPrivy,
+  validateNativeUsdcTransfer,
   transferNativeUsdc,
 };
 
@@ -285,6 +320,7 @@ document.addEventListener("click", async (event) => {
     if (action === "privy-send-code") await sendCode();
     if (action === "privy-connect") await connect();
     if (action === "privy-create-wallet") await createOrLinkWallet();
+    if (action === "privy-logout") await logoutPrivy();
   } catch (error) {
     setStatus("error");
     window.hyperDemo.toast(errorMessage(error));
