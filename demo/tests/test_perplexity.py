@@ -82,6 +82,39 @@ def test_perplexity_finance_context_parses_finance_results(monkeypatch) -> None:
     assert "https://www.perplexity.ai/finance/NVDA" in context.sources
 
 
+def test_perplexity_finance_context_parses_response_results(monkeypatch) -> None:
+    @contextmanager
+    def fake_urlopen(request, timeout):
+        yield FakeResponse(
+            {
+                "id": "resp_live_shape",
+                "output": [
+                    {
+                        "categories": ["quote"],
+                        "results": [
+                            {
+                                "category": "quote",
+                                "content": "## BTC-USD Quote\nprice 62,594 USD",
+                                "sources": ["https://www.perplexity.ai/finance/BTC-USD"],
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+    context = PerplexityFinanceClient(
+        Settings(PERPLEXITY_API_KEY="token"),
+    ).context_for_asset("BTC")
+
+    assert context.available is True
+    assert context.raw_response_id == "resp_live_shape"
+    assert any("BTC-USD Quote" in item for item in context.evidence)
+    assert "https://www.perplexity.ai/finance/BTC-USD" in context.sources
+
+
 def test_perplexity_finance_context_falls_back_without_key() -> None:
     context = PerplexityFinanceClient(Settings(PERPLEXITY_API_KEY="")).context_for_asset("BTC")
 

@@ -1,0 +1,540 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Workshop readiness</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --blue: #0066cc;
+        --blue-dark: #004f9f;
+        --ink: #1d1d1f;
+        --muted: #6e6e73;
+        --hairline: #e0e0e0;
+        --canvas: #ffffff;
+        --parchment: #f5f5f7;
+        --dark: #272729;
+        --ok: #0f7b45;
+        --warn: #9a5b00;
+        --bad: #b3261e;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--parchment);
+        color: var(--ink);
+        font-family: Inter, system-ui, sans-serif;
+        font-size: 17px;
+        line-height: 1.47;
+      }
+
+      header {
+        min-height: 44px;
+        background: #000000;
+        color: #ffffff;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0 24px;
+      }
+
+      nav {
+        width: min(1120px, 100%);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        font-size: 12px;
+      }
+
+      main {
+        min-height: calc(100vh - 44px);
+      }
+
+      .band {
+        width: 100%;
+      }
+
+      .band.light {
+        background: var(--canvas);
+      }
+
+      .band.dark {
+        background: var(--dark);
+        color: #ffffff;
+      }
+
+      .wrap {
+        width: min(1120px, calc(100% - 40px));
+        margin: 0 auto;
+      }
+
+      .hero {
+        padding: 72px 0 56px;
+      }
+
+      .hero-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1.25fr) minmax(280px, 0.75fr);
+        gap: 32px;
+        align-items: end;
+      }
+
+      h1,
+      h2,
+      h3,
+      p {
+        margin: 0;
+      }
+
+      h1 {
+        max-width: 760px;
+        font-size: clamp(38px, 5vw, 56px);
+        line-height: 1.07;
+        font-weight: 600;
+        letter-spacing: 0;
+      }
+
+      h2 {
+        font-size: 28px;
+        line-height: 1.18;
+        font-weight: 600;
+      }
+
+      h3 {
+        font-size: 17px;
+        line-height: 1.3;
+        font-weight: 600;
+      }
+
+      .lead {
+        max-width: 720px;
+        margin-top: 18px;
+        color: var(--muted);
+        font-size: 21px;
+        line-height: 1.35;
+      }
+
+      .dark .lead,
+      .dark .muted {
+        color: #cccccc;
+      }
+
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-top: 28px;
+      }
+
+      button,
+      a.button {
+        border: 0;
+        border-radius: 9999px;
+        background: var(--blue);
+        color: #ffffff;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 44px;
+        padding: 11px 22px;
+        font: inherit;
+        text-decoration: none;
+      }
+
+      button:hover,
+      a.button:hover {
+        background: var(--blue-dark);
+      }
+
+      button:active,
+      a.button:active {
+        transform: scale(0.97);
+      }
+
+      button.secondary {
+        background: transparent;
+        color: var(--blue);
+        border: 1px solid var(--blue);
+      }
+
+      .status-panel {
+        border: 1px solid var(--hairline);
+        border-radius: 18px;
+        padding: 24px;
+        background: var(--canvas);
+      }
+
+      .status-kicker {
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      .status-value {
+        margin-top: 4px;
+        font-size: 40px;
+        line-height: 1.1;
+        font-weight: 600;
+      }
+
+      .status-value.ready {
+        color: var(--ok);
+      }
+
+      .status-value.warning {
+        color: var(--warn);
+      }
+
+      .status-value.blocked {
+        color: var(--bad);
+      }
+
+      .section {
+        padding: 48px 0;
+      }
+
+      .section-head {
+        display: flex;
+        align-items: end;
+        justify-content: space-between;
+        gap: 20px;
+        margin-bottom: 20px;
+      }
+
+      .muted {
+        color: var(--muted);
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 16px;
+      }
+
+      .check {
+        min-height: 188px;
+        border: 1px solid var(--hairline);
+        border-radius: 18px;
+        background: var(--canvas);
+        padding: 22px;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
+
+      .check-top {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .pill {
+        border-radius: 9999px;
+        padding: 4px 10px;
+        font-size: 12px;
+        line-height: 1.3;
+        border: 1px solid var(--hairline);
+        color: var(--muted);
+        white-space: nowrap;
+      }
+
+      .pill.ready {
+        color: var(--ok);
+        border-color: rgba(15, 123, 69, 0.32);
+      }
+
+      .pill.warning {
+        color: var(--warn);
+        border-color: rgba(154, 91, 0, 0.32);
+      }
+
+      .pill.blocked {
+        color: var(--bad);
+        border-color: rgba(179, 38, 30, 0.32);
+      }
+
+      .details {
+        margin-top: auto;
+        display: grid;
+        gap: 8px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      .workspace {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 16px;
+      }
+
+      .workspace pre {
+        margin: 0;
+        padding: 20px;
+        overflow: auto;
+        border-radius: 18px;
+        background: #1f1f21;
+        color: #ffffff;
+        font-size: 13px;
+        line-height: 1.5;
+      }
+
+      .notice {
+        margin-top: 20px;
+        border-left: 3px solid var(--blue);
+        padding: 12px 0 12px 16px;
+        color: var(--muted);
+      }
+
+      .empty,
+      .error {
+        border: 1px solid var(--hairline);
+        border-radius: 18px;
+        padding: 24px;
+        background: var(--canvas);
+      }
+
+      .error {
+        color: var(--bad);
+      }
+
+      @media (max-width: 860px) {
+        .hero-grid,
+        .workspace,
+        .grid {
+          grid-template-columns: 1fr;
+        }
+
+        .hero {
+          padding: 48px 0 40px;
+        }
+
+        .section-head {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <nav>
+        <span>Nova Wealth Guard</span>
+        <span id="generated-at">Waiting for readiness check</span>
+      </nav>
+    </header>
+
+    <main>
+      <section class="band light hero">
+        <div class="wrap hero-grid">
+          <div>
+            <h1>Workshop readiness check</h1>
+            <p class="lead">
+              This page verifies the local workshop files, backend configuration,
+              market connectivity, optional intelligence services, and the
+              Anthropic Managed Agents workspace used by this project.
+            </p>
+            <div class="actions">
+              <button id="refresh" type="button">Refresh checks</button>
+              <a class="button secondary" href="/" target="_blank" rel="noreferrer">Open app</a>
+            </div>
+          </div>
+          <aside class="status-panel" aria-live="polite">
+            <p class="status-kicker">Overall status</p>
+            <p id="overall-status" class="status-value warning">Checking</p>
+            <p id="overall-detail" class="muted">Loading integration state...</p>
+          </aside>
+        </div>
+      </section>
+
+      <section class="band section">
+        <div class="wrap">
+          <div class="section-head">
+            <div>
+              <h2>Integration checks</h2>
+              <p class="muted">Required services must be ready before the live build starts.</p>
+            </div>
+          </div>
+          <div id="checks" class="grid">
+            <div class="empty">Loading checks...</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="band dark section">
+        <div class="wrap">
+          <div class="section-head">
+            <div>
+              <h2>Anthropic workspace</h2>
+              <p class="lead">
+                The local workshop folder and Managed Agents environment are shown here
+                so the instructor can confirm the project is using the expected workspace.
+              </p>
+            </div>
+          </div>
+          <div class="workspace">
+            <pre id="workspace-json">{}</pre>
+            <pre id="anthropic-json">{}</pre>
+          </div>
+          <p class="notice">
+            Secrets are intentionally omitted. This page shows IDs, paths, status,
+            configured MCP servers, and custom tools only.
+          </p>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      const endpoint =
+        window.location.protocol === "file:"
+          ? "http://127.0.0.1:8123/api/workshop/readiness"
+          : "/api/workshop/readiness";
+
+      const statusLabel = document.querySelector("#overall-status");
+      const statusDetail = document.querySelector("#overall-detail");
+      const generatedAt = document.querySelector("#generated-at");
+      const checksRoot = document.querySelector("#checks");
+      const workspaceJson = document.querySelector("#workspace-json");
+      const anthropicJson = document.querySelector("#anthropic-json");
+      const refresh = document.querySelector("#refresh");
+
+      function pretty(value) {
+        return JSON.stringify(value, null, 2);
+      }
+
+      function setOverall(status, detail) {
+        statusLabel.className = `status-value ${status}`;
+        statusLabel.textContent = status;
+        statusDetail.textContent = detail;
+      }
+
+      function metadataLines(check) {
+        const metadata = check.metadata || {};
+        const lines = [];
+        if (metadata.environment) lines.push(`environment: ${metadata.environment}`);
+        if (metadata.expected_workspace_id) {
+          lines.push(`workshop workspace: ${metadata.expected_workspace_id}`);
+        }
+        if (metadata.demo_workspace_id) {
+          lines.push(`demo workspace: ${metadata.demo_workspace_id}`);
+        }
+        if (metadata.distinct_from_demo_workspace !== undefined) {
+          const distinct =
+            metadata.distinct_from_demo_workspace === null
+              ? "unverified"
+              : metadata.distinct_from_demo_workspace
+                ? "yes"
+                : "no";
+          lines.push(`distinct from demo: ${distinct}`);
+        }
+        if (metadata.distinct_from_demo_assets !== undefined) {
+          lines.push(`assets distinct from demo: ${metadata.distinct_from_demo_assets ? "yes" : "no"}`);
+        }
+        if (metadata.demo_configured_assets) {
+          lines.push(`demo assets: ${metadata.demo_configured_assets.join(", ")}`);
+        }
+        if (metadata.model) lines.push(`model: ${metadata.model}`);
+        if (metadata.api_key_source) lines.push(`api key source: ${metadata.api_key_source}`);
+        if (metadata.source) lines.push(`source: ${metadata.source}`);
+        if (metadata.test_call) lines.push(`test call: ${metadata.test_call}`);
+        if (metadata.test_asset) lines.push(`test asset: ${metadata.test_asset}`);
+        if (metadata.available !== undefined) {
+          lines.push(`api data available: ${metadata.available ? "yes" : "no"}`);
+        }
+        if (metadata.evidence_count !== undefined) {
+          lines.push(`evidence: ${metadata.evidence_count}`);
+        }
+        if (metadata.source_count !== undefined) {
+          lines.push(`sources: ${metadata.source_count}`);
+        }
+        if (metadata.account_address) lines.push(`wallet: ${metadata.account_address}`);
+        if (metadata.withdrawable_usdc !== undefined) {
+          lines.push(`withdrawable: ${metadata.withdrawable_usdc.toFixed(2)} USDC`);
+        }
+        if (metadata.collateral_usdc !== undefined) {
+          lines.push(`collateral: ${metadata.collateral_usdc.toFixed(2)} USDC`);
+        }
+        if (metadata.open_positions_count !== undefined) {
+          lines.push(`open positions: ${metadata.open_positions_count}`);
+        }
+        if (metadata.probe_asset) lines.push(`probe asset: ${metadata.probe_asset}`);
+        if (metadata.probe_mark_price !== undefined) {
+          lines.push(`mark: ${metadata.probe_mark_price}`);
+        }
+        if (metadata.configured_assets) {
+          lines.push(`assets: ${metadata.configured_assets.join(", ")}`);
+        }
+        if (metadata.missing_or_inactive_assets && metadata.missing_or_inactive_assets.length) {
+          lines.push(`missing: ${metadata.missing_or_inactive_assets.join(", ")}`);
+        }
+        return lines;
+      }
+
+      function renderChecks(checks) {
+        checksRoot.innerHTML = "";
+        for (const check of checks) {
+          const article = document.createElement("article");
+          article.className = "check";
+          const lines = metadataLines(check);
+          article.innerHTML = `
+            <div class="check-top">
+              <div>
+                <h3>${check.name}</h3>
+                <p class="muted">${check.required ? "required" : "optional"}</p>
+              </div>
+              <span class="pill ${check.status}">${check.status}</span>
+            </div>
+            <p>${check.detail}</p>
+            <div class="details">
+              <span>configured: ${check.configured ? "yes" : "no"}</span>
+              ${lines.map((line) => `<span>${line}</span>`).join("")}
+            </div>
+          `;
+          checksRoot.appendChild(article);
+        }
+      }
+
+      async function loadReadiness() {
+        setOverall("warning", "Loading integration state...");
+        checksRoot.innerHTML = '<div class="empty">Loading checks...</div>';
+        try {
+          const response = await fetch(endpoint, { headers: { accept: "application/json" } });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          const payload = await response.json();
+          generatedAt.textContent = payload.generated_at || "readiness check complete";
+          const blocked = (payload.checks || []).filter(
+            (check) => check.required && check.status === "blocked",
+          ).length;
+          const warnings = (payload.checks || []).filter((check) => check.status === "warning").length;
+          const detail =
+            payload.status === "ready"
+              ? "All required workshop integrations are ready."
+              : `${blocked} required blocker(s), ${warnings} warning(s).`;
+          setOverall(payload.status, detail);
+          renderChecks(payload.checks || []);
+          workspaceJson.textContent = pretty(payload.workspace || {});
+          anthropicJson.textContent = pretty(payload.anthropic_workspace || {});
+        } catch (error) {
+          setOverall("blocked", "Could not load readiness endpoint.");
+          checksRoot.innerHTML = `
+            <div class="error">
+              Start the workshop app with <code>make workshop</code>
+              and open <code>http://127.0.0.1:8123/workshop</code>.
+            </div>
+          `;
+          workspaceJson.textContent = "{}";
+          anthropicJson.textContent = pretty({ error: String(error) });
+        }
+      }
+
+      refresh.addEventListener("click", loadReadiness);
+      loadReadiness();
+    </script>
+  </body>
+</html>

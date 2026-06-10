@@ -1,7 +1,12 @@
 import pytest
 from pydantic import ValidationError
 
-from hyper_demo.config import Settings, runtime_from_settings, settings_for_runtime
+from hyper_demo.config import (
+    DEFAULT_WORKSHOP_HYPERLIQUID_ALLOWED_ASSETS,
+    Settings,
+    runtime_from_settings,
+    settings_for_runtime,
+)
 from hyper_demo.models import RuntimeSettings
 
 
@@ -71,6 +76,41 @@ def test_perplexity_credentials_ignore_empty_and_placeholders() -> None:
     assert not Settings(PERPLEXITY_API_KEY="").has_perplexity_credentials
     assert not Settings(PERPLEXITY_API_KEY="replace-me").has_perplexity_credentials
     assert Settings(PERPLEXITY_API_KEY="token").has_perplexity_credentials
+
+
+def test_settings_normalize_claude_workspace_url() -> None:
+    settings = Settings(
+        WORKSHOP_ANTHROPIC_WORKSPACE_ID=(
+            "https://platform.claude.com/workspaces/"
+            "wrkspc_01Ja4EK3nFQXQqKUgf8dcLu7/sessions"
+        ),
+    )
+
+    assert settings.workshop_anthropic_workspace_id == "wrkspc_01Ja4EK3nFQXQqKUgf8dcLu7"
+    assert settings.workshop_anthropic_workspace_url == (
+        "https://platform.claude.com/workspaces/"
+        "wrkspc_01Ja4EK3nFQXQqKUgf8dcLu7/sessions"
+    )
+
+
+def test_settings_report_workshop_anthropic_key_source() -> None:
+    settings = Settings(
+        ANTHROPIC_API_KEY="sk-demo",
+        WORKSHOP_ANTHROPIC_API_KEY="sk-workshop",
+    )
+
+    assert settings.has_anthropic_credentials is True
+    assert settings.has_workshop_anthropic_credentials is True
+    assert settings.workshop_anthropic_api_key_source == "WORKSHOP_ANTHROPIC_API_KEY"
+
+
+def test_settings_keep_workshop_assets_distinct_from_demo_assets() -> None:
+    settings = Settings(HYPERLIQUID_ALLOWED_ASSETS="BTC,ETH,SOL")
+
+    assert settings.workshop_allowed_assets_list == (
+        DEFAULT_WORKSHOP_HYPERLIQUID_ALLOWED_ASSETS.split(",")
+    )
+    assert settings.workshop_allowed_assets_set != settings.allowed_assets_set
 
 
 def test_managed_chat_mcp_servers_include_tool_url_shortcuts() -> None:
