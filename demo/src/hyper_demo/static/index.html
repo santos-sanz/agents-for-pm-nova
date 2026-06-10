@@ -245,7 +245,10 @@
             </div>
             <div id="privy-wallet-summary" class="kv"></div>
             <div id="wallet-funding-flow" class="wallet-funding-flow" hidden></div>
-            <button class="primary" data-action="privy-setup-agent">Initialize agent</button>
+            <div class="wallet-action-row">
+              <button class="primary" data-action="privy-setup-agent">Initialize agent</button>
+              <button type="button" data-action="privy-logout">Log out Privy</button>
+            </div>
           </section>
 
           <section class="agents-settings-section">
@@ -445,7 +448,7 @@
 
     <div id="toast" role="status" aria-live="polite"></div>
     <script src="/vendor/lightweight-charts/lightweight-charts.standalone.production.js"></script>
-    <script src="/static/app.js?v=hyperclaude-external-withdrawal-20260610-1"></script>
-    <script type="module" src="/static/privy.js?v=hyperclaude-external-withdrawal-20260610-1"></script>
+    <script src="/static/app.js?v=hyperclaude-privy-client-transfer-20260610-2"></script>
+    <script type="module" src="/static/privy.js?v=hyperclaude-privy-client-transfer-20260610-2"></script>
   </body>
 </html>

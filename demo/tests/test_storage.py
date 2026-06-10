@@ -21,6 +21,16 @@ def test_store_atomic_save_after_corrupt_json(tmp_path) -> None:
     assert store.get("profiles", profile.id) == profile
 
 
+def test_store_deletes_record(tmp_path) -> None:
+    store = JsonStore(Settings(DEMO_STATE_DIR=tmp_path))
+    profile = build_investor_profile(RiskProfileInput())
+    store.save("profiles", profile)
+
+    assert store.delete("profiles", profile.id) is True
+    assert store.get("profiles", profile.id) is None
+    assert store.delete("profiles", profile.id) is False
+
+
 def test_store_skips_records_that_no_longer_match_schema(tmp_path) -> None:
     store = JsonStore(Settings(DEMO_STATE_DIR=tmp_path))
     legacy_exchange = "".join(["pa", "per", "-", "coin", "base"])

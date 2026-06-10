@@ -542,13 +542,14 @@ async function transferUserUsdc(input, destination) {
       `sourceWalletId, sourceWalletAddress, and ${destination.destinationLabel} are required`,
     );
   }
-  if (!input.userJwt) {
+  const authorizationJwt = input.userAccessToken || input.userJwt;
+  if (!authorizationJwt) {
     throw new Error("Privy user authorization is required for this sponsored transfer.");
   }
 
   const privy = privyClient();
   const transferParams = {
-    authorization_context: { user_jwts: [input.userJwt] },
+    authorization_context: { user_jwts: [authorizationJwt] },
     destination: {
       address: destination.destinationAddress,
       asset: "usdc",
@@ -594,6 +595,36 @@ async function verifyUserJwt(input) {
   };
 }
 
+async function verifyUserAccessToken(input) {
+  const accessToken = input.userAccessToken || input.userJwt;
+  if (!accessToken) {
+    throw new Error("Privy user authorization is required for this sponsored transfer.");
+  }
+  const privy = privyClient();
+  const payload = await privy.utils().auth().verifyAccessToken(accessToken);
+  return {
+    valid: true,
+    userId: payload.user_id || null,
+    appId: payload.app_id || null,
+    issuedAt: payload.issued_at || null,
+    expiresAt: payload.expiration || null,
+    sessionId: payload.session_id || null,
+  };
+}
+
+async function verifyUserAuthorizationKey(input) {
+  const accessToken = input.userAccessToken || input.userJwt;
+  if (!accessToken) {
+    throw new Error("Privy user authorization is required for this sponsored transfer.");
+  }
+  const privy = privyClient();
+  await privy._jwtExchange().exchangeJwtForAuthorizationKey(accessToken);
+  return {
+    valid: true,
+    authorizationKeyAvailable: true,
+  };
+}
+
 try {
   const input = await readStdin();
   let output;
@@ -607,6 +638,8 @@ try {
   else if (command === "transfer-user-usdc-to-master") output = await transferUserUsdcToMaster(input);
   else if (command === "transfer-user-usdc-to-external") output = await transferUserUsdcToExternal(input);
   else if (command === "verify-user-jwt") output = await verifyUserJwt(input);
+  else if (command === "verify-user-access-token") output = await verifyUserAccessToken(input);
+  else if (command === "verify-user-authorization-key") output = await verifyUserAuthorizationKey(input);
   else throw new Error(`Unknown command: ${command}`);
   process.stdout.write(JSON.stringify(output));
 } catch (error) {

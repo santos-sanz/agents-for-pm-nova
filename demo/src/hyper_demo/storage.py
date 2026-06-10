@@ -112,6 +112,15 @@ class JsonStore:
             self._write_raw(collection, records)
         return item
 
+    def delete(self, collection: str, item_id: str) -> bool:
+        with _STORE_LOCK:
+            records = self._read_raw(collection)
+            remaining = [record for record in records if record.get("id") != item_id]
+            if len(remaining) == len(records):
+                return False
+            self._write_raw(collection, remaining)
+        return True
+
     def append_event(self, event: RunEvent) -> RunEvent:
         return self.save("events", event)
 

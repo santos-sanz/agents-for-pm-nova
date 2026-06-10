@@ -63,6 +63,16 @@ def test_privy_helper_maps_fractional_leverage_error() -> None:
     assert "node_modules" not in message
 
 
+def test_privy_helper_maps_authorization_key_error_without_login_loop() -> None:
+    message = _friendly_helper_error(
+        'ERROR Error: 401 {"error":"No valid authorization keys or user signing keys available"}'
+    )
+
+    assert "Privy rejected the wallet-action authorization exchange" in message
+    assert "Log in with Privy again" not in message
+    assert "Privy could not authorize this user wallet transfer" not in message
+
+
 def test_execute_plan_blocks_size_above_guardrail() -> None:
     settings = Settings(
         HYPERLIQUID_ACCOUNT_ADDRESS="0x0000000000000000000000000000000000000000",

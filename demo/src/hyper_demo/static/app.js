@@ -273,7 +273,7 @@ function friendlyOrderError(message = "") {
     normalized.includes("privy user authorization") ||
     normalized.includes("invalid jwt token")
   ) {
-    return "Privy could not authorize this user wallet transfer. Log in with Privy again, then retry the sponsored transfer.";
+    return "Privy rejected the wallet-action authorization exchange. Check Privy JWT authentication settings for user-owned server wallet actions, then retry.";
   }
   if (normalized.includes("privy hyperliquid helper failed")) {
     return "Hyperliquid rejected this order before execution. Check Size, Leverage, available margin, and TP/SL prices, then try again.";
@@ -3474,7 +3474,7 @@ function renderTransferScreen() {
       <span>Token</span><b>Native USDC</b>
       <span>Contract</span><code>${escapeHtml(ARBITRUM_USDC_ADDRESS)}</code>
     </div>
-    <div class="transfer-warning">This path uses Privy Transfer API. With gas sponsorship enabled in Privy, the source wallet does not need ETH for gas.</div>
+    <div class="transfer-warning">This path sends from the connected Privy embedded wallet. Gas is sponsored by Privy client-side sponsorship on Arbitrum.</div>
   `;
   const transferButton = $('[data-action="transfer-usdc-to-master"]');
   if (transferButton) transferButton.disabled = !canTransfer || state.isSubmittingTransfer;
@@ -3539,7 +3539,7 @@ function renderExternalTransferScreen() {
       <span>Token</span><b>Native USDC</b>
       <span>Contract</span><code>${escapeHtml(ARBITRUM_USDC_ADDRESS)}</code>
     </div>
-    <div class="transfer-warning">External withdrawals use the configured PRIVY_EXTERNAL_WITHDRAWAL_ADDRESS and still require the connected Privy session identity token.</div>
+    <div class="transfer-warning">External withdrawals use the configured PRIVY_EXTERNAL_WITHDRAWAL_ADDRESS and the connected Privy embedded wallet session.</div>
   `;
   const transferButton = $('[data-action="transfer-usdc-to-external"]');
   if (transferButton) {
@@ -3611,31 +3611,40 @@ function externalTransferAmountInput() {
 }
 
 async function preflightTransferSession(amount) {
-  if (!window.hyperDemoPrivy?.getIdentityToken) throw new Error("Privy session helper is not ready.");
-  const identityToken = await window.hyperDemoPrivy.getIdentityToken();
-  await api("/api/privy/transfer-user-usdc-to-master/preflight", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${identityToken}` },
-    body: JSON.stringify({
-      amount_usdc: amount,
-      confirmed: false,
-    }),
+  const source = state.connected_wallet?.address;
+  const agent = activePrivyAgent();
+  const destination = agent?.master_wallet_address;
+  if (!source) throw new Error("Connect the Privy user wallet first.");
+  if (!destination) throw new Error("Initialize the prodnet master wallet first.");
+  if (agent?.network !== "prodnet") {
+    throw new Error("Integrated user wallet transfers are only configured for prodnet.");
+  }
+  if (!window.hyperDemoPrivy?.validateNativeUsdcTransfer) {
+    throw new Error("Privy session helper is not ready.");
+  }
+  return window.hyperDemoPrivy.validateNativeUsdcTransfer({
+    from: source,
+    to: destination,
+    amount,
   });
-  return identityToken;
 }
 
 async function preflightExternalTransferSession(amount) {
-  if (!window.hyperDemoPrivy?.getIdentityToken) throw new Error("Privy session helper is not ready.");
-  const identityToken = await window.hyperDemoPrivy.getIdentityToken();
-  await api("/api/privy/transfer-user-usdc-to-external/preflight", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${identityToken}` },
-    body: JSON.stringify({
-      amount_usdc: amount,
-      confirmed: false,
-    }),
+  const source = state.connected_wallet?.address;
+  const destination = state.external_withdrawal_address;
+  if (!source) throw new Error("Connect the Privy user wallet first.");
+  if (!destination) throw new Error("Set PRIVY_EXTERNAL_WITHDRAWAL_ADDRESS first.");
+  if ((state.runtime?.network || DEFAULT_NETWORK) !== "prodnet") {
+    throw new Error("External wallet withdrawals are only configured for prodnet.");
+  }
+  if (!window.hyperDemoPrivy?.validateNativeUsdcTransfer) {
+    throw new Error("Privy session helper is not ready.");
+  }
+  return window.hyperDemoPrivy.validateNativeUsdcTransfer({
+    from: source,
+    to: destination,
+    amount,
   });
-  return identityToken;
 }
 
 async function validateTransferSession() {
@@ -3657,19 +3666,28 @@ async function transferUsdcToMaster() {
   if (!destination) throw new Error("Initialize the prodnet master wallet first.");
   if (!$("#transfer-confirm")?.checked) throw new Error("Confirm the Arbitrum USDC transfer first.");
   const amount = transferAmountInput();
-  const identityToken = await preflightTransferSession(amount);
+  await preflightTransferSession(amount);
   state.isSubmittingTransfer = true;
   state.transferResult = null;
   renderTransferScreen();
   try {
-    const result = await api("/api/privy/transfer-user-usdc-to-master", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${identityToken}` },
-      body: JSON.stringify({
-        amount_usdc: amount,
-        confirmed: true,
-      }),
+    const transfer = await window.hyperDemoPrivy.transferNativeUsdc({
+      from: source,
+      to: destination,
+      amount,
     });
+    const result = {
+      network: "prodnet",
+      protocol: "Privy client-sponsored Arbitrum USDC wallet transfer",
+      sourceWalletAddress: source,
+      masterWalletAddress: destination,
+      usdcAddress: ARBITRUM_USDC_ADDRESS,
+      amountUsdc: amount,
+      actionId: transfer.actionId || null,
+      hash: transfer.hash,
+      status: "submitted",
+      raw: transfer,
+    };
     state.transferResult = result;
     await refreshTransferBalances();
     toast(`Transfer submitted: ${maskHash(result.hash)}`);
@@ -3688,19 +3706,28 @@ async function transferUsdcToExternal() {
     throw new Error("Confirm the external USDC transfer first.");
   }
   const amount = externalTransferAmountInput();
-  const identityToken = await preflightExternalTransferSession(amount);
+  await preflightExternalTransferSession(amount);
   state.isSubmittingExternalTransfer = true;
   state.externalTransferResult = null;
   renderExternalTransferScreen();
   try {
-    const result = await api("/api/privy/transfer-user-usdc-to-external", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${identityToken}` },
-      body: JSON.stringify({
-        amount_usdc: amount,
-        confirmed: true,
-      }),
+    const transfer = await window.hyperDemoPrivy.transferNativeUsdc({
+      from: source,
+      to: destination,
+      amount,
     });
+    const result = {
+      network: "prodnet",
+      protocol: "Privy client-sponsored Arbitrum USDC external withdrawal",
+      sourceWalletAddress: source,
+      externalWalletAddress: destination,
+      usdcAddress: ARBITRUM_USDC_ADDRESS,
+      amountUsdc: amount,
+      actionId: transfer.actionId || null,
+      hash: transfer.hash,
+      status: "submitted",
+      raw: transfer,
+    };
     state.externalTransferResult = result;
     await refreshExternalTransferBalances();
     toast(`External transfer submitted: ${maskHash(result.hash)}`);
