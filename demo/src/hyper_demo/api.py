@@ -161,6 +161,11 @@ class MasterDepositRequest(BaseModel):
     confirmed: bool = False
 
 
+class UserWalletTransferRequest(BaseModel):
+    amount_usdc: float
+    confirmed: bool = False
+
+
 class SetupCheck(BaseModel):
     trading_mode: str
     require_confirmation: bool
@@ -317,6 +322,15 @@ def get_runtime(store: JsonStore | None = None) -> RuntimeSettings:
 
 def get_chat_service(store: JsonStore | None = None) -> ManagedTradingChatService:
     return ManagedTradingChatService(get_settings(), store or get_store())
+
+
+def _bearer_token(authorization: str | None) -> str | None:
+    if not authorization:
+        return None
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
+        return None
+    return token.strip()
 
 
 def privy_agent_wallet_id(network: RuntimeNetwork) -> str:
@@ -546,6 +560,7 @@ def api_state() -> dict[str, Any]:
         "setup": setup,
         "connected_wallet": store.get("connected_wallet", "connected_wallet"),
         "privy_agent_wallet": get_privy_agent_wallet(store, runtime),
+        "external_withdrawal_address": get_settings().privy_external_withdrawal_address,
     }
 
 
@@ -708,6 +723,227 @@ def deposit_privy_master(request: MasterDepositRequest) -> dict[str, Any]:
         )
     )
     return result
+
+
+@app.post("/api/privy/transfer-user-usdc-to-master")
+def transfer_user_usdc_to_master(
+    request: UserWalletTransferRequest,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    store = get_store()
+    runtime = get_runtime(store)
+    agent = get_privy_agent_wallet(store, runtime)
+    if not agent:
+        raise HTTPException(status_code=400, detail="Initialize a Privy agent wallet first.")
+    connected_wallet = store.get("connected_wallet", "connected_wallet")
+    if not connected_wallet or not connected_wallet.wallet_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Connect a Privy wallet with a wallet_id first.",
+        )
+    user_jwt = _bearer_token(authorization)
+    if not user_jwt:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Privy user authorization is required for a sponsored user wallet "
+                "transfer. Log in with Privy again, then retry."
+            ),
+        )
+    try:
+        settings = settings_for_runtime(runtime)
+        adapter = PrivyHyperliquidAdapter(settings)
+        verification = adapter.verify_user_jwt(user_jwt)
+        verified_user_id = verification.get("userId")
+        if (
+            connected_wallet.user_id
+            and verified_user_id
+            and connected_wallet.user_id != verified_user_id
+        ):
+            raise ExecutionBlocked("Privy session user does not match the connected wallet user.")
+        result = adapter.transfer_user_usdc_to_master(
+            source_wallet_id=connected_wallet.wallet_id,
+            source_wallet_address=connected_wallet.address,
+            agent=agent,
+            amount_usdc=request.amount_usdc,
+            confirmed=request.confirmed,
+            user_jwt=user_jwt,
+        )
+    except (ExecutionBlocked, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    store.append_event(
+        RunEvent(
+            run_id=AGENT_RUN_ID,
+            message=(
+                "Submitted Privy user wallet USDC transfer to master wallet "
+                f"({request.amount_usdc:.6f} USDC)."
+            ),
+            payload=result,
+        )
+    )
+    return result
+
+
+@app.post("/api/privy/transfer-user-usdc-to-master/preflight")
+def preflight_user_wallet_transfer(
+    request: UserWalletTransferRequest,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    store = get_store()
+    runtime = get_runtime(store)
+    agent = get_privy_agent_wallet(store, runtime)
+    if not agent:
+        raise HTTPException(status_code=400, detail="Initialize a Privy agent wallet first.")
+    connected_wallet = store.get("connected_wallet", "connected_wallet")
+    if not connected_wallet or not connected_wallet.wallet_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Connect a Privy wallet with a wallet_id first.",
+        )
+    if request.amount_usdc <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="USDC transfer amount must be greater than zero.",
+        )
+    user_jwt = _bearer_token(authorization)
+    if not user_jwt:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Privy user authorization is required for a sponsored user wallet "
+                "transfer. Log in with Privy again, then retry."
+            ),
+        )
+    try:
+        settings = settings_for_runtime(runtime)
+        verification = PrivyHyperliquidAdapter(settings).verify_user_jwt(user_jwt)
+    except (ExecutionBlocked, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    expected_user_id = connected_wallet.user_id
+    verified_user_id = verification.get("userId")
+    if expected_user_id and verified_user_id and expected_user_id != verified_user_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Privy session user does not match the connected wallet user.",
+        )
+    return {
+        "ok": True,
+        "source_wallet_id": connected_wallet.wallet_id,
+        "source_wallet_address": connected_wallet.address,
+        "master_wallet_address": agent.master_wallet_address,
+        "amount_usdc": request.amount_usdc,
+        "verified_user_id": verified_user_id,
+        "token_expires_at": verification.get("expiresAt"),
+    }
+
+
+@app.post("/api/privy/transfer-user-usdc-to-external")
+def transfer_user_usdc_to_external(
+    request: UserWalletTransferRequest,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    store = get_store()
+    runtime = get_runtime(store)
+    connected_wallet = store.get("connected_wallet", "connected_wallet")
+    if not connected_wallet or not connected_wallet.wallet_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Connect a Privy wallet with a wallet_id first.",
+        )
+    user_jwt = _bearer_token(authorization)
+    if not user_jwt:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Privy user authorization is required for a sponsored external "
+                "wallet transfer. Log in with Privy again, then retry."
+            ),
+        )
+    try:
+        settings = settings_for_runtime(runtime)
+        external_address = _validate_evm_address(settings.privy_external_withdrawal_address)
+        adapter = PrivyHyperliquidAdapter(settings)
+        verification = adapter.verify_user_jwt(user_jwt)
+        verified_user_id = verification.get("userId")
+        if (
+            connected_wallet.user_id
+            and verified_user_id
+            and connected_wallet.user_id != verified_user_id
+        ):
+            raise ExecutionBlocked("Privy session user does not match the connected wallet user.")
+        result = adapter.transfer_user_usdc_to_external(
+            source_wallet_id=connected_wallet.wallet_id,
+            source_wallet_address=connected_wallet.address,
+            external_wallet_address=external_address,
+            agent_network=runtime.network,
+            amount_usdc=request.amount_usdc,
+            confirmed=request.confirmed,
+            user_jwt=user_jwt,
+        )
+    except (ExecutionBlocked, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    store.append_event(
+        RunEvent(
+            run_id=AGENT_RUN_ID,
+            message=(
+                "Submitted Privy user wallet USDC transfer to external wallet "
+                f"({request.amount_usdc:.6f} USDC)."
+            ),
+            payload=result,
+        )
+    )
+    return result
+
+
+@app.post("/api/privy/transfer-user-usdc-to-external/preflight")
+def preflight_external_wallet_transfer(
+    request: UserWalletTransferRequest,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    store = get_store()
+    runtime = get_runtime(store)
+    connected_wallet = store.get("connected_wallet", "connected_wallet")
+    if not connected_wallet or not connected_wallet.wallet_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Connect a Privy wallet with a wallet_id first.",
+        )
+    if request.amount_usdc <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="USDC transfer amount must be greater than zero.",
+        )
+    user_jwt = _bearer_token(authorization)
+    if not user_jwt:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Privy user authorization is required for a sponsored external "
+                "wallet transfer. Log in with Privy again, then retry."
+            ),
+        )
+    try:
+        settings = settings_for_runtime(runtime)
+        external_address = _validate_evm_address(settings.privy_external_withdrawal_address)
+        verification = PrivyHyperliquidAdapter(settings).verify_user_jwt(user_jwt)
+    except (ExecutionBlocked, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    expected_user_id = connected_wallet.user_id
+    verified_user_id = verification.get("userId")
+    if expected_user_id and verified_user_id and expected_user_id != verified_user_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Privy session user does not match the connected wallet user.",
+        )
+    return {
+        "ok": True,
+        "source_wallet_id": connected_wallet.wallet_id,
+        "source_wallet_address": connected_wallet.address,
+        "external_wallet_address": external_address,
+        "amount_usdc": request.amount_usdc,
+        "verified_user_id": verified_user_id,
+        "token_expires_at": verification.get("expiresAt"),
+    }
 
 
 @app.post("/api/settings/runtime", response_model=RuntimeSettings)
@@ -2277,6 +2513,7 @@ async def sample_market_websocket(asset: str):
 
 
 @app.get("/", response_class=HTMLResponse)
+@app.get("/transfer", response_class=HTMLResponse)
 def spa() -> HTMLResponse:
     return HTMLResponse((STATIC_ROOT / "index.html").read_text(encoding="utf-8"))
 

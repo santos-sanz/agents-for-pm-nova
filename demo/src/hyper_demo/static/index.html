@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>HyperClaude</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%236fa874'/%3E%3Ctext x='32' y='40' text-anchor='middle' font-family='Arial' font-size='24' font-weight='700' fill='%2310110f'%3EHC%3C/text%3E%3C/svg%3E" />
-    <link rel="stylesheet" href="/static/styles.css?v=hyperclaude-happy-path-20260610-1" />
+    <link rel="stylesheet" href="/static/styles.css?v=hyperclaude-external-withdrawal-20260610-1" />
   </head>
   <body class="trading-screen" data-screen="trading">
     <header class="topbar">
@@ -355,6 +355,61 @@
         </div>
       </section>
 
+      <section id="transfer-screen" class="transfer-screen" hidden>
+        <section class="panel transfer-panel">
+          <div class="panel-head">
+            <div>
+              <span class="eyebrow">Wallet repair</span>
+              <h1>USDC transfer</h1>
+            </div>
+            <span id="transfer-status" class="pill warning">pending</span>
+          </div>
+          <div id="transfer-summary" class="transfer-summary"></div>
+          <div class="transfer-form">
+            <label class="field">
+              Amount USDC
+              <input id="transfer-usdc-amount" type="number" min="0.000001" step="0.000001" value="17.845659" />
+            </label>
+            <label class="check-row compact-check">
+              <input id="transfer-confirm" type="checkbox" />
+              Confirm Arbitrum USDC transfer
+            </label>
+            <div class="button-row">
+              <button type="button" class="primary" data-action="transfer-usdc-to-master">Send USDC to master wallet</button>
+              <button type="button" data-action="validate-transfer-session">Validate session</button>
+              <button type="button" data-action="refresh-transfer-balances">Refresh balances</button>
+            </div>
+          </div>
+          <div id="transfer-result" class="transfer-result" hidden></div>
+        </section>
+        <section class="panel transfer-panel external-transfer-panel">
+          <div class="panel-head">
+            <div>
+              <span class="eyebrow">Withdrawal</span>
+              <h1>External wallet transfer</h1>
+            </div>
+            <span id="external-transfer-status" class="pill warning">pending</span>
+          </div>
+          <div id="external-transfer-summary" class="transfer-summary"></div>
+          <div class="transfer-form">
+            <label class="field">
+              Amount USDC
+              <input id="external-transfer-usdc-amount" type="number" min="0.000001" step="0.000001" value="17.845659" />
+            </label>
+            <label class="check-row compact-check">
+              <input id="external-transfer-confirm" type="checkbox" />
+              Confirm external USDC transfer
+            </label>
+            <div class="button-row">
+              <button type="button" class="primary" data-action="transfer-usdc-to-external">Send USDC to external wallet</button>
+              <button type="button" data-action="validate-external-transfer-session">Validate session</button>
+              <button type="button" data-action="refresh-external-transfer-balances">Refresh balances</button>
+            </div>
+          </div>
+          <div id="external-transfer-result" class="transfer-result" hidden></div>
+        </section>
+      </section>
+
       <section id="chat-screen" class="chat-screen" hidden>
         <div class="chat-grid">
           <section class="panel chat-transcript-panel">
@@ -390,7 +445,7 @@
 
     <div id="toast" role="status" aria-live="polite"></div>
     <script src="/vendor/lightweight-charts/lightweight-charts.standalone.production.js"></script>
-    <script src="/static/app.js?v=hyperclaude-happy-path-20260610-2"></script>
-    <script type="module" src="/static/privy.js?v=hyperclaude-integrated-funding-20260609-4"></script>
+    <script src="/static/app.js?v=hyperclaude-external-withdrawal-20260610-1"></script>
+    <script type="module" src="/static/privy.js?v=hyperclaude-external-withdrawal-20260610-1"></script>
   </body>
 </html>

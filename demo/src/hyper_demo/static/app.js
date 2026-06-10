@@ -74,6 +74,19 @@ const state = {
   isSubmittingOrder: false,
   showSensitiveWalletData: false,
   masterFundingBalances: null,
+  transferBalances: {
+    source: null,
+    destination: null,
+  },
+  externalTransferBalances: {
+    source: null,
+    destination: null,
+  },
+  transferResult: null,
+  externalTransferResult: null,
+  isSubmittingTransfer: false,
+  isSubmittingExternalTransfer: false,
+  external_withdrawal_address: "",
   chat: {
     resources: null,
     deployment: null,
@@ -130,6 +143,19 @@ const failedAssetIconUrls = new Set();
 
 function $(selector) {
   return document.querySelector(selector);
+}
+
+function screenFromPath() {
+  return window.location.pathname === "/transfer" ? "transfer" : "trading";
+}
+
+state.screen = screenFromPath();
+
+function syncUrlForScreen() {
+  const nextPath = state.screen === "transfer" ? "/transfer" : "/";
+  if (window.location.pathname !== nextPath) {
+    window.history.pushState({}, "", nextPath);
+  }
 }
 
 function assetList(value) {
@@ -190,8 +216,8 @@ function escapeHtml(value) {
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
-    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
     ...options,
+    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
   });
   const text = await response.text();
   const contentType = response.headers.get("content-type") || "";
@@ -240,6 +266,14 @@ function friendlyOrderError(message = "") {
   const normalized = String(message).toLowerCase();
   if (normalized.includes("minimum value of $10") || normalized.includes("minimum order value of 10")) {
     return "Order too small. Hyperliquid requires a minimum order value of 10 USDC. Increase Size to at least 10 USDC and try again.";
+  }
+  if (
+    normalized.includes("no valid authorization keys") ||
+    normalized.includes("user signing keys") ||
+    normalized.includes("privy user authorization") ||
+    normalized.includes("invalid jwt token")
+  ) {
+    return "Privy could not authorize this user wallet transfer. Log in with Privy again, then retry the sponsored transfer.";
   }
   if (normalized.includes("privy hyperliquid helper failed")) {
     return "Hyperliquid rejected this order before execution. Check Size, Leverage, available margin, and TP/SL prices, then try again.";
@@ -316,6 +350,7 @@ function setOrderError(message = "") {
 async function loadState() {
   const payload = await api("/api/state");
   Object.assign(state, payload);
+  state.screen = screenFromPath();
   state.marketCandles = state.marketCandles || {};
   syncManualOrderFromStoredPlan();
   syncAssetInputFromStoredTrade();
@@ -364,9 +399,12 @@ function render() {
   renderRuntime();
   renderSetup();
   renderConnectedWallet();
+  renderTransferScreen();
+  renderExternalTransferScreen();
   renderTradingView();
   renderEvents();
   renderChat();
+  renderScreen();
 }
 
 function renderRuntime() {
@@ -817,11 +855,13 @@ function renderScreen() {
   document.body.classList.toggle("trading-screen", state.screen === "trading");
   document.body.classList.toggle("settings-screen-active", state.screen === "settings");
   document.body.classList.toggle("chat-screen-active", state.screen === "chat");
+  document.body.classList.toggle("transfer-screen-active", state.screen === "transfer");
   for (const button of document.querySelectorAll(".app-nav [data-screen]")) {
     button.classList.toggle("active", button.dataset.screen === state.screen);
   }
   $("#settings-screen").hidden = state.screen !== "settings";
   $("#chat-screen").hidden = state.screen !== "chat";
+  $("#transfer-screen").hidden = state.screen !== "transfer";
   if (state.screen === "chat") {
     startChatPolling();
   } else {
@@ -829,6 +869,10 @@ function renderScreen() {
   }
   if (state.screen === "settings") {
     loadChatState().catch((error) => console.warn("Managed chat unavailable", error));
+  }
+  if (state.screen === "transfer") {
+    refreshTransferBalances().catch((error) => toast(error.message));
+    refreshExternalTransferBalances().catch((error) => toast(error.message));
   }
 }
 
@@ -3383,10 +3427,296 @@ function updateMasterFundingBalanceDom(balances) {
   }
 }
 
+function activePrivyAgent() {
+  const runtimeNetwork = state.runtime?.network || DEFAULT_NETWORK;
+  const agent = state.privy_agent_wallet;
+  return agent?.network === runtimeNetwork ? agent : null;
+}
+
+function transferExplorerUrl(hash) {
+  return `https://arbiscan.io/tx/${encodeURIComponent(hash)}`;
+}
+
+function renderTransferScreen() {
+  const summary = $("#transfer-summary");
+  if (!summary) return;
+  const source = state.connected_wallet?.address || "";
+  const agent = activePrivyAgent();
+  const destination = agent?.master_wallet_address || "";
+  const sourceBalance = state.transferBalances.source;
+  const destinationBalance = state.transferBalances.destination;
+  const canTransfer = Boolean(source && destination && agent?.network === "prodnet");
+  const amountInput = $("#transfer-usdc-amount");
+  if (amountInput && sourceBalance?.usdc != null && !amountInput.dataset.touched) {
+    amountInput.value = formatFundingInputValue(sourceBalance.usdc);
+    amountInput.max = String(sourceBalance.usdc);
+  }
+  const status = $("#transfer-status");
+  if (status) {
+    status.textContent = state.isSubmittingTransfer ? "submitting" : canTransfer ? "sponsored" : "blocked";
+    status.className = `pill ${canTransfer ? "gain" : "warning"}`;
+  }
+  summary.innerHTML = `
+    <div class="transfer-route">
+      <div>
+        <span>From</span>
+        <code>${escapeHtml(source || "Connect Privy wallet")}</code>
+        <b>${sourceBalance ? `${formatTokenAmount(sourceBalance.usdc, 6)} USDC / ${formatTokenAmount(sourceBalance.eth, 5)} ETH` : "Balance not loaded"}</b>
+      </div>
+      <div>
+        <span>To</span>
+        <code>${escapeHtml(destination || "Initialize prodnet master wallet")}</code>
+        <b>${destinationBalance ? `${formatTokenAmount(destinationBalance.usdc, 6)} USDC / ${formatTokenAmount(destinationBalance.eth, 5)} ETH` : "Balance not loaded"}</b>
+      </div>
+    </div>
+    <div class="transfer-contract">
+      <span>Network</span><b>Arbitrum One</b>
+      <span>Token</span><b>Native USDC</b>
+      <span>Contract</span><code>${escapeHtml(ARBITRUM_USDC_ADDRESS)}</code>
+    </div>
+    <div class="transfer-warning">This path uses Privy Transfer API. With gas sponsorship enabled in Privy, the source wallet does not need ETH for gas.</div>
+  `;
+  const transferButton = $('[data-action="transfer-usdc-to-master"]');
+  if (transferButton) transferButton.disabled = !canTransfer || state.isSubmittingTransfer;
+  renderTransferResult();
+}
+
+function renderTransferResult() {
+  const target = $("#transfer-result");
+  if (!target) return;
+  const result = state.transferResult;
+  target.hidden = !result;
+  if (!result) {
+    target.innerHTML = "";
+    return;
+  }
+  const hash = result.hash || "";
+  const reference = hash || result.actionId || result.status || "pending";
+  const href = hash ? transferExplorerUrl(hash) : "https://dashboard.privy.io";
+  target.innerHTML = `
+    <span>Submitted</span>
+    <a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(maskHash(reference))}</a>
+  `;
+}
+
+function renderExternalTransferScreen() {
+  const summary = $("#external-transfer-summary");
+  if (!summary) return;
+  const source = state.connected_wallet?.address || "";
+  const destination = state.external_withdrawal_address || "";
+  const sourceBalance = state.externalTransferBalances.source;
+  const destinationBalance = state.externalTransferBalances.destination;
+  const canTransfer = Boolean(source && destination && (state.runtime?.network || DEFAULT_NETWORK) === "prodnet");
+  const amountInput = $("#external-transfer-usdc-amount");
+  if (amountInput && sourceBalance?.usdc != null && !amountInput.dataset.touched) {
+    amountInput.value = formatFundingInputValue(sourceBalance.usdc);
+    amountInput.max = String(sourceBalance.usdc);
+  }
+  const status = $("#external-transfer-status");
+  if (status) {
+    status.textContent = state.isSubmittingExternalTransfer
+      ? "submitting"
+      : canTransfer
+      ? "sponsored"
+      : "blocked";
+    status.className = `pill ${canTransfer ? "gain" : "warning"}`;
+  }
+  summary.innerHTML = `
+    <div class="transfer-route">
+      <div>
+        <span>From</span>
+        <code>${escapeHtml(source || "Connect Privy wallet")}</code>
+        <b>${sourceBalance ? `${formatTokenAmount(sourceBalance.usdc, 6)} USDC / ${formatTokenAmount(sourceBalance.eth, 5)} ETH` : "Balance not loaded"}</b>
+      </div>
+      <div>
+        <span>To</span>
+        <code>${escapeHtml(destination || "Set PRIVY_EXTERNAL_WITHDRAWAL_ADDRESS")}</code>
+        <b>${destinationBalance ? `${formatTokenAmount(destinationBalance.usdc, 6)} USDC / ${formatTokenAmount(destinationBalance.eth, 5)} ETH` : "Balance not loaded"}</b>
+      </div>
+    </div>
+    <div class="transfer-contract">
+      <span>Network</span><b>Arbitrum One</b>
+      <span>Token</span><b>Native USDC</b>
+      <span>Contract</span><code>${escapeHtml(ARBITRUM_USDC_ADDRESS)}</code>
+    </div>
+    <div class="transfer-warning">External withdrawals use the configured PRIVY_EXTERNAL_WITHDRAWAL_ADDRESS and still require the connected Privy session identity token.</div>
+  `;
+  const transferButton = $('[data-action="transfer-usdc-to-external"]');
+  if (transferButton) {
+    transferButton.disabled = !canTransfer || state.isSubmittingExternalTransfer;
+  }
+  renderExternalTransferResult();
+}
+
+function renderExternalTransferResult() {
+  const target = $("#external-transfer-result");
+  if (!target) return;
+  const result = state.externalTransferResult;
+  target.hidden = !result;
+  if (!result) {
+    target.innerHTML = "";
+    return;
+  }
+  const hash = result.hash || "";
+  const reference = hash || result.actionId || result.status || "pending";
+  const href = hash ? transferExplorerUrl(hash) : "https://dashboard.privy.io";
+  target.innerHTML = `
+    <span>Submitted</span>
+    <a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(maskHash(reference))}</a>
+  `;
+}
+
+async function refreshTransferBalances() {
+  const source = state.connected_wallet?.address;
+  const destination = activePrivyAgent()?.master_wallet_address;
+  const [sourceBalance, destinationBalance] = await Promise.all([
+    source ? api(`/api/wallet/arbitrum-balance/${encodeURIComponent(source)}`) : Promise.resolve(null),
+    destination ? api(`/api/wallet/arbitrum-balance/${encodeURIComponent(destination)}`) : Promise.resolve(null),
+  ]);
+  state.transferBalances = {
+    source: sourceBalance,
+    destination: destinationBalance,
+  };
+  renderTransferScreen();
+}
+
+async function refreshExternalTransferBalances() {
+  const source = state.connected_wallet?.address;
+  const destination = state.external_withdrawal_address;
+  const [sourceBalance, destinationBalance] = await Promise.all([
+    source ? api(`/api/wallet/arbitrum-balance/${encodeURIComponent(source)}`) : Promise.resolve(null),
+    destination ? api(`/api/wallet/arbitrum-balance/${encodeURIComponent(destination)}`) : Promise.resolve(null),
+  ]);
+  state.externalTransferBalances = {
+    source: sourceBalance,
+    destination: destinationBalance,
+  };
+  renderExternalTransferScreen();
+}
+
+function transferAmountInput() {
+  const amount = Number($("#transfer-usdc-amount")?.value || 0);
+  if (!Number.isFinite(amount) || amount <= 0) throw new Error("Enter a valid USDC amount.");
+  const balance = Number(state.transferBalances.source?.usdc);
+  if (Number.isFinite(balance) && amount > balance) throw new Error("Amount exceeds source wallet USDC balance.");
+  return amount;
+}
+
+function externalTransferAmountInput() {
+  const amount = Number($("#external-transfer-usdc-amount")?.value || 0);
+  if (!Number.isFinite(amount) || amount <= 0) throw new Error("Enter a valid USDC amount.");
+  const balance = Number(state.externalTransferBalances.source?.usdc);
+  if (Number.isFinite(balance) && amount > balance) throw new Error("Amount exceeds source wallet USDC balance.");
+  return amount;
+}
+
+async function preflightTransferSession(amount) {
+  if (!window.hyperDemoPrivy?.getIdentityToken) throw new Error("Privy session helper is not ready.");
+  const identityToken = await window.hyperDemoPrivy.getIdentityToken();
+  await api("/api/privy/transfer-user-usdc-to-master/preflight", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${identityToken}` },
+    body: JSON.stringify({
+      amount_usdc: amount,
+      confirmed: false,
+    }),
+  });
+  return identityToken;
+}
+
+async function preflightExternalTransferSession(amount) {
+  if (!window.hyperDemoPrivy?.getIdentityToken) throw new Error("Privy session helper is not ready.");
+  const identityToken = await window.hyperDemoPrivy.getIdentityToken();
+  await api("/api/privy/transfer-user-usdc-to-external/preflight", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${identityToken}` },
+    body: JSON.stringify({
+      amount_usdc: amount,
+      confirmed: false,
+    }),
+  });
+  return identityToken;
+}
+
+async function validateTransferSession() {
+  const amount = transferAmountInput();
+  await preflightTransferSession(amount);
+  toast("Privy session is valid for sponsored transfer.");
+}
+
+async function validateExternalTransferSession() {
+  const amount = externalTransferAmountInput();
+  await preflightExternalTransferSession(amount);
+  toast("Privy session is valid for external withdrawal.");
+}
+
+async function transferUsdcToMaster() {
+  const source = state.connected_wallet?.address;
+  const destination = activePrivyAgent()?.master_wallet_address;
+  if (!source) throw new Error("Connect the Privy user wallet first.");
+  if (!destination) throw new Error("Initialize the prodnet master wallet first.");
+  if (!$("#transfer-confirm")?.checked) throw new Error("Confirm the Arbitrum USDC transfer first.");
+  const amount = transferAmountInput();
+  const identityToken = await preflightTransferSession(amount);
+  state.isSubmittingTransfer = true;
+  state.transferResult = null;
+  renderTransferScreen();
+  try {
+    const result = await api("/api/privy/transfer-user-usdc-to-master", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${identityToken}` },
+      body: JSON.stringify({
+        amount_usdc: amount,
+        confirmed: true,
+      }),
+    });
+    state.transferResult = result;
+    await refreshTransferBalances();
+    toast(`Transfer submitted: ${maskHash(result.hash)}`);
+  } finally {
+    state.isSubmittingTransfer = false;
+    renderTransferScreen();
+  }
+}
+
+async function transferUsdcToExternal() {
+  const source = state.connected_wallet?.address;
+  const destination = state.external_withdrawal_address;
+  if (!source) throw new Error("Connect the Privy user wallet first.");
+  if (!destination) throw new Error("Set PRIVY_EXTERNAL_WITHDRAWAL_ADDRESS first.");
+  if (!$("#external-transfer-confirm")?.checked) {
+    throw new Error("Confirm the external USDC transfer first.");
+  }
+  const amount = externalTransferAmountInput();
+  const identityToken = await preflightExternalTransferSession(amount);
+  state.isSubmittingExternalTransfer = true;
+  state.externalTransferResult = null;
+  renderExternalTransferScreen();
+  try {
+    const result = await api("/api/privy/transfer-user-usdc-to-external", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${identityToken}` },
+      body: JSON.stringify({
+        amount_usdc: amount,
+        confirmed: true,
+      }),
+    });
+    state.externalTransferResult = result;
+    await refreshExternalTransferBalances();
+    toast(`External transfer submitted: ${maskHash(result.hash)}`);
+  } finally {
+    state.isSubmittingExternalTransfer = false;
+    renderExternalTransferScreen();
+  }
+}
+
 function walletAddressForTarget(target) {
   if (target === "user") return state.connected_wallet?.address;
   if (target === "master") return state.privy_agent_wallet?.master_wallet_address;
   if (target === "agent") return state.privy_agent_wallet?.agent_wallet_address;
+  if (target === "transfer-source") return state.connected_wallet?.address;
+  if (target === "transfer-master") return activePrivyAgent()?.master_wallet_address;
+  if (target === "transfer-external") return state.external_withdrawal_address;
   return null;
 }
 
@@ -4007,6 +4337,12 @@ async function runAction(action, actionTarget) {
   if (action === "copy-wallet-address") await copyWalletAddress(actionTarget.dataset.walletTarget);
   if (action === "open-hyperliquid-deposit") openHyperliquidDeposit();
   if (action === "deposit-master-hyperliquid") await depositMasterToHyperliquid();
+  if (action === "refresh-transfer-balances") await refreshTransferBalances();
+  if (action === "validate-transfer-session") await validateTransferSession();
+  if (action === "transfer-usdc-to-master") await transferUsdcToMaster();
+  if (action === "refresh-external-transfer-balances") await refreshExternalTransferBalances();
+  if (action === "validate-external-transfer-session") await validateExternalTransferSession();
+  if (action === "transfer-usdc-to-external") await transferUsdcToExternal();
   if (action === "events" || action === "refresh") await loadState();
   if (action === "refresh-orders") await refreshOrders();
   if (action === "close-position") await closePosition(actionTarget.dataset.asset);
@@ -4163,6 +4499,7 @@ document.addEventListener("click", async (event) => {
   const screenButton = event.target.closest(".app-nav [data-screen]");
   if (screenButton) {
     state.screen = screenButton.dataset.screen || "trading";
+    syncUrlForScreen();
     renderScreen();
     return;
   }
@@ -4190,6 +4527,13 @@ document.querySelectorAll(".ticket-panel [data-action]").forEach((button) => {
 });
 
 document.addEventListener("input", (event) => {
+  if (
+    event.target?.id === "transfer-usdc-amount" ||
+    event.target?.id === "external-transfer-usdc-amount"
+  ) {
+    event.target.dataset.touched = "true";
+    return;
+  }
   const protectionField = event.target.closest("[data-protection-field]");
   if (protectionField) {
     const asset = normalizeAssetSymbol(protectionField.dataset.protectionAsset);
@@ -4336,9 +4680,15 @@ $("#sensitive-toggle")?.addEventListener("click", (event) => {
 for (const button of document.querySelectorAll(".app-nav [data-screen]")) {
   button.addEventListener("click", () => {
     state.screen = button.dataset.screen || "trading";
+    syncUrlForScreen();
     renderScreen();
   });
 }
+
+window.addEventListener("popstate", () => {
+  state.screen = screenFromPath();
+  renderScreen();
+});
 
 $("#sync-asset-lists")?.addEventListener("change", async () => {
   try {

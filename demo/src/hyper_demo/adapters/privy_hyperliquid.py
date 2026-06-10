@@ -46,6 +46,16 @@ def _sanitized_exchange_reason(detail: str) -> str | None:
 
 def _friendly_helper_error(detail: str) -> str:
     normalized = detail.lower()
+    if (
+        "no valid authorization keys" in normalized
+        or "user signing keys" in normalized
+        or "authorization_context" in normalized
+        or "invalid jwt token" in normalized
+    ):
+        return (
+            "Privy could not authorize this user wallet transfer. Log in with "
+            "Privy again, then retry the sponsored transfer."
+        )
     if "minimum value of $10" in normalized or "minimum value of 10" in normalized:
         return (
             "Order too small. Hyperliquid requires a minimum order value of 10 USDC. "
@@ -291,6 +301,98 @@ class PrivyHyperliquidAdapter:
                 "masterWalletId": agent.master_wallet_id,
                 "masterWalletAddress": agent.master_wallet_address,
                 "amountUsdc": amount_usdc,
+            },
+        )
+
+    def transfer_user_usdc_to_master(
+        self,
+        *,
+        source_wallet_id: str,
+        source_wallet_address: str,
+        agent: PrivyAgentWallet,
+        amount_usdc: float,
+        confirmed: bool,
+        user_jwt: str,
+    ) -> dict[str, Any]:
+        self._validate_privy_config()
+        if not confirmed:
+            raise ExecutionBlocked("Confirm the user wallet transfer before submitting.")
+        if agent.network != RuntimeNetwork.prodnet:
+            raise ExecutionBlocked(
+                "Integrated user wallet transfers are only configured for prodnet."
+            )
+        if not self.settings.hyperliquid_mainnet_enabled:
+            raise ExecutionBlocked(
+                "Mainnet is disabled. Set HYPERLIQUID_MAINNET_ENABLED=true to proceed."
+            )
+        if amount_usdc <= 0:
+            raise ExecutionBlocked("USDC transfer amount must be greater than zero.")
+        if not user_jwt.strip():
+            raise ExecutionBlocked(
+                "Privy user authorization is required for this sponsored transfer."
+            )
+        return self._run_helper(
+            "transfer-user-usdc-to-master",
+            {
+                "network": agent.network.value,
+                "sourceWalletId": source_wallet_id,
+                "sourceWalletAddress": source_wallet_address,
+                "masterWalletAddress": agent.master_wallet_address,
+                "amountUsdc": amount_usdc,
+                "userJwt": user_jwt,
+            },
+        )
+
+    def transfer_user_usdc_to_external(
+        self,
+        *,
+        source_wallet_id: str,
+        source_wallet_address: str,
+        external_wallet_address: str,
+        agent_network: RuntimeNetwork,
+        amount_usdc: float,
+        confirmed: bool,
+        user_jwt: str,
+    ) -> dict[str, Any]:
+        self._validate_privy_config()
+        if not confirmed:
+            raise ExecutionBlocked("Confirm the external wallet transfer before submitting.")
+        if agent_network != RuntimeNetwork.prodnet:
+            raise ExecutionBlocked(
+                "External wallet withdrawals are only configured for prodnet."
+            )
+        if not self.settings.hyperliquid_mainnet_enabled:
+            raise ExecutionBlocked(
+                "Mainnet is disabled. Set HYPERLIQUID_MAINNET_ENABLED=true to proceed."
+            )
+        if amount_usdc <= 0:
+            raise ExecutionBlocked("USDC transfer amount must be greater than zero.")
+        if not user_jwt.strip():
+            raise ExecutionBlocked(
+                "Privy user authorization is required for this sponsored transfer."
+            )
+        return self._run_helper(
+            "transfer-user-usdc-to-external",
+            {
+                "network": agent_network.value,
+                "sourceWalletId": source_wallet_id,
+                "sourceWalletAddress": source_wallet_address,
+                "externalWalletAddress": external_wallet_address,
+                "amountUsdc": amount_usdc,
+                "userJwt": user_jwt,
+            },
+        )
+
+    def verify_user_jwt(self, user_jwt: str) -> dict[str, Any]:
+        self._validate_privy_config()
+        if not user_jwt.strip():
+            raise ExecutionBlocked(
+                "Privy user authorization is required for this sponsored transfer."
+            )
+        return self._run_helper(
+            "verify-user-jwt",
+            {
+                "userJwt": user_jwt,
             },
         )
 
