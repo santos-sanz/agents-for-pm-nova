@@ -3,477 +3,209 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>HyperClaude</title>
-    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%236fa874'/%3E%3Ctext x='32' y='40' text-anchor='middle' font-family='Arial' font-size='24' font-weight='700' fill='%2310110f'%3EHC%3C/text%3E%3C/svg%3E" />
-    <link rel="stylesheet" href="/static/styles.css?v=hyperclaude-external-withdrawal-20260610-1" />
+    <title>Nova Wealth Guard</title>
+    <link rel="stylesheet" href="/static/styles.css?v=nova-wealth-guard-20260610-4" />
+    <script defer src="/vendor/lightweight-charts/lightweight-charts.standalone.production.js"></script>
+    <script defer src="/static/app.js?v=nova-wealth-guard-20260610-4"></script>
   </head>
-  <body class="trading-screen" data-screen="trading">
-    <header class="topbar">
-      <a class="brand" href="/">
-        <span class="brand-mark">HC</span>
-        <span>
-          <strong>HyperClaude</strong>
-          <small>Hyperliquid agent</small>
-        </span>
-      </a>
-      <nav class="app-nav" aria-label="Primary">
-        <button class="active" data-screen="trading">Trading</button>
-        <button data-screen="chat">Chat</button>
-        <button data-screen="settings">Settings</button>
+  <body>
+    <header class="global-nav">
+      <a href="/" class="brand" aria-label="Nova Wealth Guard home">Nova Wealth Guard</a>
+      <nav aria-label="Primary">
+        <a href="/workshop">Readiness</a>
+        <button type="button" data-action="refresh">Refresh</button>
       </nav>
     </header>
 
-    <main class="cockpit">
-      <aside class="rail"></aside>
-
-      <section class="mainstage">
-        <section class="trade-workbench">
-          <div id="market-rail" class="market-rail" aria-label="Markets"></div>
-
-          <section class="dreamcash-board">
-            <article class="market-pane">
-              <div class="market-header">
-                <div class="pair-title">
-                  <span class="favorite-dot">★</span>
-                  <h1 id="active-asset-label">BTC-PERP</h1>
-                </div>
-                <div class="market-stats" id="market-stats">
-                  <div><span>Mark</span><b>--</b></div>
-                  <div><span>Signal</span><b>--</b></div>
-                  <div><span>Confidence</span><b id="confidence">0%</b></div>
-                  <div><span>Network</span><b>mainnet guarded</b></div>
-                </div>
-              </div>
-
-              <div class="chart-toolbar">
-                <div class="trading-search">
-                  <input id="asset-input" aria-label="Asset" placeholder="BTC" value="BTC" autocomplete="off" />
-                </div>
-                <div class="timeframe-tabs" aria-label="Chart timeframe">
-                  <button type="button" class="active" data-timeframe="15m">15m</button>
-                  <button type="button" data-timeframe="1h">1h</button>
-                  <button type="button" data-timeframe="4h">4h</button>
-                  <button type="button" data-timeframe="1d">1d</button>
-                </div>
-              </div>
-
-              <div class="chart-shell">
-                <div id="candle-chart" role="img" aria-label="Candlestick chart"></div>
-                <div id="chart-empty" class="chart-empty">Run analysis to load candles.</div>
-                <a class="chart-attribution" href="https://www.tradingview.com/" target="_blank" rel="noopener noreferrer">Charts by TradingView</a>
-              </div>
-            </article>
-
-            <aside class="trade-side">
-              <section class="side-card ticket-panel">
-                <div class="ticket-top">
-                  <div>
-                    <span id="decision-pill" class="pill neutral">manual draft</span>
-                    <h2 id="ticket-title">Order ticket</h2>
-                  </div>
-                </div>
-                <div id="best-bet" class="best-bet empty"></div>
-                <div id="ticket" class="ticket"></div>
-                <div class="button-row">
-                  <button type="button" data-action="create-manual-plan">Preview</button>
-                  <button class="danger" data-action="submit-manual-order">Place order</button>
-                  <button data-action="reject">Clear</button>
-                </div>
-              </section>
-            </aside>
-          </section>
-
-          <section class="bottom-table">
-            <div class="orders-head">
-              <div>
-                <span class="eyebrow">Execution</span>
-                <h2>Orders & positions</h2>
-                <small id="orders-scope" class="orders-scope">All markets</small>
-              </div>
-              <button type="button" data-action="refresh-orders">Refresh</button>
-            </div>
-            <div id="orders-panel" class="orders-panel"></div>
-          </section>
-        </section>
-
-      </section>
-
-      <aside class="events-panel">
-        <div class="panel-head">
+    <main>
+      <section class="band intro">
+        <div class="wrap intro-grid">
           <div>
-            <span class="eyebrow">Agent events</span>
-            <h2>Loop feed</h2>
+            <p class="eyebrow">Conservative agentic portfolio manager</p>
+            <h1>USDC-first allocation across verified Hyperliquid markets.</h1>
+            <p class="lead">
+              Research agents summarize market context, portfolio agents size targets, and safety
+              checks keep proposals educational, long-only, and gated before execution.
+            </p>
           </div>
-          <button data-action="events">Refresh</button>
+          <div class="photo-panel" aria-hidden="true">
+            <div class="photo-overlay">
+              <span>Capital reserve</span>
+              <strong id="hero-cash">--%</strong>
+            </div>
+          </div>
         </div>
-        <div id="events-list" class="events-list"></div>
-      </aside>
+      </section>
 
-      <section id="settings-screen" class="settings-screen" hidden>
-        <div class="settings-hero">
+      <section id="profile-section" class="band profile-band" hidden>
+        <div class="wrap profile-grid">
           <div>
-            <span class="eyebrow">Configuration</span>
-            <h1>Runtime settings</h1>
-            <p>Choose the exchange environment, presentation mode, order limits, and scan universe before running the agent.</p>
+            <p class="eyebrow">Initial profile</p>
+            <h2>Choose one risk setting.</h2>
+            <p class="muted">
+              The strategy remains conservative because these markets are perpetual futures.
+            </p>
           </div>
-          <button class="primary" data-action="save-settings">Save settings</button>
-        </div>
-
-        <div class="settings-grid">
-          <section class="panel settings-card">
-            <div class="panel-head">
-              <div>
-                <span class="eyebrow">Environment</span>
-                <h2>Network</h2>
-              </div>
-              <span id="settings-network-pill" class="pill">mainnet guarded</span>
+          <form id="profile-form" class="profile-control">
+            <div class="slider-labels">
+              <span>Capital preservation</span>
+              <strong id="risk-score-label">25</strong>
+              <span>Growth</span>
             </div>
-            <div class="network-cards" role="group" aria-label="Network">
-              <button id="testnet-button" class="network-card" data-network="testnet">
-                <span>Testnet</span>
-                <b>Auto execution enabled with demo guardrails.</b>
-              </button>
-              <button id="prodnet-button" class="network-card" data-network="prodnet">
-                <span>Mainnet</span>
-                <b>Requires explicit enablement and manual confirmation.</b>
-              </button>
-            </div>
-          </section>
-
-          <section class="panel settings-card">
-            <div class="panel-head">
-              <div>
-                <span class="eyebrow">Risk controls</span>
-                <h2>Order limits</h2>
-              </div>
-            </div>
-            <label class="field">
-              Max order USDC
-              <input id="max-order" type="number" min="1" value="100" />
-            </label>
-            <label class="switch-row asset-sync-row">
-              <input id="sync-asset-lists" type="checkbox" checked />
-              <span>
-                <b>Use one asset universe</b>
-                <small>Allowed assets and watchlist stay identical.</small>
-              </span>
-            </label>
-            <label class="switch-row">
-              <input id="agent-auto-approve" type="checkbox" />
-              <span>
-                <b>Agent auto-approval</b>
-                <small>Robot mode lets validated agent plans execute without the UI button.</small>
-              </span>
-            </label>
-            <div class="asset-picker" data-asset-picker="allowed">
-              <div class="picker-title">
-                <span>Allowed assets</span>
-                <button type="button" data-asset-clear="allowed">Clear</button>
-              </div>
-              <input id="allowed-assets" type="hidden" value="BTC,ETH,SOL,HYPE" />
-              <div id="allowed-assets-chips" class="asset-chips"></div>
-              <input id="allowed-asset-search" class="asset-search" placeholder="Search Hyperliquid markets" autocomplete="off" />
-              <div id="allowed-asset-options" class="asset-options" aria-label="Allowed asset options"></div>
-            </div>
-          </section>
-
-          <section class="panel settings-card wide sync-watchlist-card">
-            <div class="panel-head">
-              <div>
-                <span class="eyebrow">Scan universe</span>
-                <h2>Watchlist</h2>
-              </div>
-              <button data-action="scan">Scan now</button>
-            </div>
-            <div class="asset-picker" data-asset-picker="watchlist">
-              <div class="picker-title">
-                <span>Scan assets</span>
-                <button type="button" data-asset-clear="watchlist">Clear</button>
-              </div>
-              <input id="watchlist" type="hidden" value="BTC,ETH,SOL,HYPE" />
-              <div id="watchlist-chips" class="asset-chips"></div>
-              <input id="watchlist-asset-search" class="asset-search" placeholder="Search Hyperliquid markets" autocomplete="off" />
-              <div id="watchlist-asset-options" class="asset-options" aria-label="Watchlist asset options"></div>
-            </div>
-            <small class="muted">Proactive scan selects from this list and only proposes trades on mainnet.</small>
-          </section>
-
-          <section id="privy-auth-panel" class="auth-panel settings-wallet-auth" aria-labelledby="privy-auth-title">
-            <div class="auth-copy">
-              <span class="eyebrow">Wallet access</span>
-              <h1 id="privy-auth-title">Connect with Privy</h1>
-              <p>Use your email to create or recover the embedded wallet that signs HyperClaude's Hyperliquid agent flow.</p>
-              <span id="privy-auth-status" class="pill neutral">checking</span>
-            </div>
-            <form id="privy-auth-form" class="auth-form">
-              <label class="field">
-                Email
-                <span class="input-action">
-                  <input id="privy-email" type="email" placeholder="you@example.com" autocomplete="email" />
-                  <button type="button" data-action="privy-send-code">Send code</button>
-                </span>
-              </label>
-              <label class="field">
-                Verification code
-                <input id="privy-code" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code" />
-              </label>
-              <div class="auth-actions">
-                <button class="primary" type="button" data-action="privy-create-wallet">Continue</button>
-                <button type="button" data-action="privy-connect">Verify only</button>
-              </div>
-              <p class="auth-note">No wallet connected. This access panel disappears after a wallet is linked.</p>
-            </form>
-          </section>
-
-          <section id="connected-wallet-panel" class="panel compact-panel connected-wallet-panel settings-card" hidden>
-            <div class="panel-head">
-              <div>
-                <span class="eyebrow">Wallets</span>
-                <h2>Privy wallet</h2>
-              </div>
-              <div class="wallet-panel-actions">
-                <button
-                  id="sensitive-toggle"
-                  class="icon-button"
-                  type="button"
-                  data-action="toggle-sensitive"
-                  aria-label="Show sensitive wallet data"
-                  aria-pressed="false"
-                ></button>
-                <span id="privy-status" class="pill">checking</span>
-              </div>
-            </div>
-            <div id="privy-wallet-summary" class="kv"></div>
-            <div id="wallet-funding-flow" class="wallet-funding-flow" hidden></div>
-            <div class="wallet-action-row">
-              <button class="primary" data-action="privy-setup-agent">Initialize agent</button>
-              <button type="button" data-action="privy-logout">Log out Privy</button>
-            </div>
-          </section>
-
-          <section class="agents-settings-section">
-            <div class="settings-section-head">
-              <span class="eyebrow">Agents</span>
-              <h2>Managed agent operations</h2>
-            </div>
-
-            <section class="panel settings-card chat-status-panel">
-              <div class="panel-head">
-                <div>
-                  <span class="eyebrow">Managed Agents</span>
-                  <h2>Chat resources</h2>
-                </div>
-                <span id="chat-bootstrap-status" class="pill neutral">checking</span>
-              </div>
-              <div id="chat-resource-grid" class="chat-resource-grid"></div>
-              <div class="button-row">
-                <button type="button" data-action="chat-bootstrap">Bootstrap</button>
-                <button type="button" data-action="chat-refresh">Refresh</button>
-              </div>
-            </section>
-
-            <section class="panel settings-card chat-deployment-panel">
-              <div class="panel-head">
-                <div>
-                  <span class="eyebrow">Claude Platform</span>
-                  <h2>Deployment</h2>
-                </div>
-                <span id="chat-deployment-status" class="pill neutral">not created</span>
-              </div>
-              <div id="chat-deployment-summary" class="chat-resource-grid"></div>
-              <label class="field">
-                Name
-                <input id="chat-deployment-name" type="text" value="HyperClaude intraday watch" />
-              </label>
-              <label class="field">
-                Cron
-                <input id="chat-deployment-cron" type="text" value="*/30 * * * *" />
-              </label>
-              <label class="field">
-                Timezone
-                <input id="chat-deployment-timezone" type="text" value="Europe/Madrid" />
-              </label>
-              <label class="field">
-                Initial prompt
-                <textarea id="chat-deployment-prompt" rows="5"></textarea>
-              </label>
-              <div class="button-row">
-                <button type="button" data-action="chat-create-deployment">Deploy</button>
-                <button type="button" data-action="chat-run-deployment">Run now</button>
-              </div>
-            </section>
-
-            <section class="panel settings-card chat-sessions-panel">
-              <div class="panel-head">
-                <div>
-                  <span class="eyebrow">Conversations</span>
-                  <h2>Sessions</h2>
-                </div>
-                <button type="button" data-action="chat-new-session">New</button>
-              </div>
-              <div id="chat-session-list" class="chat-session-list"></div>
-            </section>
-
-            <section class="panel settings-card">
-              <div class="panel-head">
-                <div>
-                  <span class="eyebrow">Vaults</span>
-                  <h2>Credentials</h2>
-                </div>
-              </div>
-              <div id="chat-vault-status" class="vault-status"></div>
-            </section>
-
-            <section class="panel settings-card">
-              <div class="panel-head">
-                <div>
-                  <span class="eyebrow">Actions</span>
-                  <h2>Pending</h2>
-                </div>
-              </div>
-              <div id="chat-pending-actions" class="chat-pending-actions"></div>
-            </section>
-
-            <section class="panel settings-card">
-              <div class="panel-head">
-                <div>
-                  <span class="eyebrow">Trading</span>
-                  <h2>Latest plans</h2>
-                </div>
-              </div>
-              <div id="chat-plan-actions" class="chat-plan-actions"></div>
-            </section>
-
-            <section class="panel settings-card">
-              <div class="panel-head">
-                <div>
-                  <span class="eyebrow">Capabilities</span>
-                  <h2>Tools & memory</h2>
-                </div>
-              </div>
-              <div id="chat-capabilities" class="chat-capabilities"></div>
-            </section>
-          </section>
-
+            <input id="risk-score" type="range" min="0" max="100" value="25" />
+            <button type="submit">Save profile</button>
+          </form>
         </div>
       </section>
 
-      <section id="transfer-screen" class="transfer-screen" hidden>
-        <section class="panel transfer-panel">
-          <div class="panel-head">
-            <div>
-              <span class="eyebrow">Wallet repair</span>
-              <h1>USDC transfer</h1>
-            </div>
-            <span id="transfer-status" class="pill warning">pending</span>
-          </div>
-          <div id="transfer-summary" class="transfer-summary"></div>
-          <div class="transfer-form">
-            <label class="field">
-              Amount USDC
-              <input id="transfer-usdc-amount" type="number" min="0.000001" step="0.000001" value="17.845659" />
-            </label>
-            <label class="check-row compact-check">
-              <input id="transfer-confirm" type="checkbox" />
-              Confirm Arbitrum USDC transfer
-            </label>
-            <div class="button-row">
-              <button type="button" class="primary" data-action="transfer-usdc-to-master">Send USDC to master wallet</button>
-              <button type="button" data-action="validate-transfer-session">Validate session</button>
-              <button type="button" data-action="refresh-transfer-balances">Refresh balances</button>
-            </div>
-          </div>
-          <div id="transfer-result" class="transfer-result" hidden></div>
-        </section>
-        <section class="panel transfer-panel external-transfer-panel">
-          <div class="panel-head">
-            <div>
-              <span class="eyebrow">Withdrawal</span>
-              <h1>External wallet transfer</h1>
-            </div>
-            <span id="external-transfer-status" class="pill warning">pending</span>
-          </div>
-          <div id="external-transfer-summary" class="transfer-summary"></div>
-          <div class="transfer-form">
-            <label class="field">
-              Amount USDC
-              <input id="external-transfer-usdc-amount" type="number" min="0.000001" step="0.000001" value="17.845659" />
-            </label>
-            <label class="check-row compact-check">
-              <input id="external-transfer-confirm" type="checkbox" />
-              Confirm external USDC transfer
-            </label>
-            <div class="button-row">
-              <button type="button" class="primary" data-action="transfer-usdc-to-external">Send USDC to external wallet</button>
-              <button type="button" data-action="validate-external-transfer-session">Validate session</button>
-              <button type="button" data-action="refresh-external-transfer-balances">Refresh balances</button>
-            </div>
-          </div>
-          <div id="external-transfer-result" class="transfer-result" hidden></div>
-        </section>
-        <section class="panel transfer-panel trading-deposit-panel">
-          <div class="panel-head">
-            <div>
-              <span class="eyebrow">Trading collateral</span>
-              <h1>Make funds tradable</h1>
-            </div>
-            <span id="trading-deposit-status" class="pill warning">pending</span>
-          </div>
-          <div id="trading-deposit-summary" class="transfer-summary"></div>
-          <div class="transfer-form">
-            <label class="field">
-              Amount USDC
-              <input id="trading-deposit-usdc-amount" type="number" min="5" step="0.000001" value="5" />
-            </label>
-            <label class="check-row compact-check">
-              <input id="trading-deposit-confirm" type="checkbox" />
-              Confirm Hyperliquid Bridge2 deposit
-            </label>
-            <div class="button-row">
-              <button type="button" class="primary" data-action="deposit-master-trading">Deposit master to Hyperliquid</button>
-              <button type="button" data-action="refresh-trading-deposit-balances">Refresh balances</button>
-            </div>
-          </div>
-          <div id="trading-deposit-result" class="transfer-result" hidden></div>
-        </section>
+      <section class="band status-band">
+        <div class="wrap summary-grid">
+          <article>
+            <span>Risk profile</span>
+            <strong id="risk-profile">not set</strong>
+          </article>
+          <article>
+            <span>USDC target</span>
+            <strong id="cash-target">--%</strong>
+          </article>
+          <article>
+            <span>Confidence</span>
+            <strong id="confidence">--</strong>
+          </article>
+          <article>
+            <span>Status</span>
+            <strong id="validation-status">draft</strong>
+          </article>
+        </div>
       </section>
 
-      <section id="chat-screen" class="chat-screen" hidden>
-        <div class="chat-grid">
-          <section class="panel chat-transcript-panel">
-            <div class="panel-head">
+      <section class="band dashboard-band">
+        <div class="wrap dashboard-grid">
+          <section class="allocation-panel">
+            <div class="section-head">
               <div>
-                <span class="eyebrow">Autonomous agent</span>
-                <h1 id="chat-session-title">Chat</h1>
+                <p class="eyebrow">Target allocation</p>
+                <h2>Current proposal</h2>
               </div>
-              <div class="chat-head-actions">
-                <span id="chat-session-status" class="pill neutral">idle</span>
-                <button type="button" data-action="chat-new-session">New session</button>
-                <button type="button" data-action="chat-interrupt">Interrupt</button>
-                <button type="button" data-action="chat-archive">Archive</button>
+              <div class="actions">
+                <button type="button" data-action="verify">Verify assets</button>
+                <button type="button" data-action="allocate">Run agents</button>
+                <button type="button" data-action="rebalance">Prepare rebalance</button>
               </div>
             </div>
-            <div id="chat-events-list" class="chat-events-list"></div>
-            <div class="chat-suggestions" aria-label="Quick chat prompts">
-              <button type="button" data-chat-prompt="Summarize my wallet, open positions, protection orders, and main risks.">Portfolio brief</button>
-              <button type="button" data-chat-prompt="Analyze the allowed assets, use the available context, and propose several intraday trades without executing any of them.">Propose trades</button>
-              <button type="button" data-chat-prompt="Formally validate the latest stored plan and tell me whether it can be executed under the current guardrails.">Validate plan</button>
+            <div id="allocation-chart" class="chart" aria-label="Allocation chart"></div>
+            <div id="allocation-list" class="allocation-list"></div>
+          </section>
+
+          <aside class="agent-panel">
+            <p class="eyebrow">Agent workflow</p>
+            <h2>Research, portfolio, safety</h2>
+            <div id="workflow" class="workflow"></div>
+          </aside>
+        </div>
+      </section>
+
+      <section id="trade-approval-section" class="band approval-band" hidden>
+        <div class="wrap approval-grid">
+          <div class="approval-copy">
+            <p class="eyebrow">Trade approval</p>
+            <h2>Review rebalance tickets</h2>
+            <p id="approval-message" class="muted">
+              Prepare a rebalance to review the proposed tickets.
+            </p>
+            <dl class="approval-meta">
+              <div>
+                <dt>Proposal</dt>
+                <dd id="approval-proposal">--</dd>
+              </div>
+              <div>
+                <dt>Status</dt>
+                <dd id="approval-status">--</dd>
+              </div>
+              <div>
+                <dt>Tickets</dt>
+                <dd id="approval-ticket-count">0</dd>
+              </div>
+            </dl>
+          </div>
+
+          <div class="approval-controls">
+            <div class="table-wrap approval-table">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Action</th>
+                    <th>Market</th>
+                    <th>Current</th>
+                    <th>Target</th>
+                    <th>Delta</th>
+                    <th>Reason</th>
+                  </tr>
+                </thead>
+                <tbody id="approval-trades"></tbody>
+              </table>
             </div>
-            <div class="chat-composer">
-              <label class="field">
-                Message
-                <textarea id="chat-message-input" rows="3" placeholder="Ask the trading agent to research, validate, improve, or propose an action."></textarea>
-              </label>
-              <button class="primary" type="button" data-action="chat-send-message">Send</button>
+            <label class="approval-check">
+              <input id="approval-check" type="checkbox" />
+              <span>I reviewed the rebalance tickets and approve this proposal.</span>
+            </label>
+            <div class="approval-actions">
+              <button id="approve-trades" type="button" data-action="approve-trades">
+                Approve trades
+              </button>
+              <button id="reject-trades" class="secondary danger" type="button" data-action="reject-trades">
+                Reject
+              </button>
             </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="band asset-band">
+        <div class="wrap">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">Verified universe</p>
+              <h2>Eligible markets and caps</h2>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Market</th>
+                  <th>Canonical ID</th>
+                  <th>Category</th>
+                  <th>Status</th>
+                  <th>Mark</th>
+                  <th>Funding</th>
+                  <th>Open interest</th>
+                  <th>Max lev</th>
+                  <th>Cap</th>
+                  <th>Target</th>
+                </tr>
+              </thead>
+              <tbody id="asset-table"></tbody>
+            </table>
+          </div>
+          <div id="runtime-failures" class="runtime-failures" hidden></div>
+        </div>
+      </section>
+
+      <section class="band research-band">
+        <div class="wrap research-grid">
+          <section>
+            <p class="eyebrow">Sources</p>
+            <h2>Freshness and gaps</h2>
+            <div id="sources" class="source-list"></div>
+          </section>
+          <section>
+            <p class="eyebrow">Events</p>
+            <h2>Audit log</h2>
+            <div id="events" class="events"></div>
           </section>
         </div>
       </section>
     </main>
-
-    <div id="toast" role="status" aria-live="polite"></div>
-    <script src="/vendor/lightweight-charts/lightweight-charts.standalone.production.js"></script>
-    <script src="/static/app.js?v=hyperclaude-privy-client-transfer-20260610-3"></script>
-    <script type="module" src="/static/privy.js?v=hyperclaude-privy-client-transfer-20260610-3"></script>
   </body>
 </html>

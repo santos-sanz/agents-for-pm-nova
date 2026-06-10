@@ -45,10 +45,24 @@ def test_cli_hypertracker_reports_unavailable_without_key(tmp_path, monkeypatch)
     assert "HYPERTRACKER_API_KEY" not in result.output
 
 
-def test_cli_removed_legacy_commands(tmp_path, monkeypatch) -> None:
+def test_cli_workshop_portfolio_commands(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
     runner = CliRunner()
 
-    for command in ["profile", "research", "propose", "skills", "debate", "replay"]:
+    profile = runner.invoke(app, ["profile", "--risk-score", "34"])
+    assert profile.exit_code == 0
+    assert "Workshop Risk Profile" in profile.output
+    assert '"risk_score": 34' in profile.output
+
+    research = runner.invoke(app, ["research", "--risk-score", "34"])
+    assert research.exit_code == 0
+    assert "Workshop Research Brief" in research.output
+
+    allocation = runner.invoke(app, ["allocate", "--risk-score", "34"])
+    assert allocation.exit_code == 0
+    assert "Nova Wealth Guard Allocation" in allocation.output
+    assert '"cash_pct"' in allocation.output
+
+    for command in ["propose", "skills", "debate", "replay"]:
         result = runner.invoke(app, [command])
         assert result.exit_code != 0

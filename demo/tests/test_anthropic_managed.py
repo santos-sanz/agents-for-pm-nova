@@ -164,21 +164,21 @@ def test_chat_memory_stores_reuse_existing_latest_stores(tmp_path) -> None:
         [
             SimpleNamespace(
                 id="canon_old",
-                name="HyperClaude Trading Canon",
+                name="Nova Wealth Guard Canon",
                 created_at="2026-06-01T00:00:00Z",
-                metadata={"app": "hyperclaude", "kind": "canon"},
+                metadata={"app": "nova-wealth-guard", "kind": "canon"},
             ),
             SimpleNamespace(
                 id="canon_new",
-                name="HyperClaude Trading Canon",
+                name="Nova Wealth Guard Canon",
                 created_at="2026-06-02T00:00:00Z",
-                metadata={"app": "hyperclaude", "kind": "canon"},
+                metadata={"app": "nova-wealth-guard", "kind": "canon"},
             ),
             SimpleNamespace(
                 id="learning_new",
-                name="HyperClaude Conversation Learning",
+                name="Nova Wealth Guard Conversation Learning",
                 created_at="2026-06-02T00:00:00Z",
-                metadata={"app": "hyperclaude", "kind": "learning"},
+                metadata={"app": "nova-wealth-guard", "kind": "learning"},
             ),
         ]
     )
@@ -294,15 +294,15 @@ def test_managed_vault_id_reuses_remote_vault_when_local_state_missing(tmp_path)
         [
             SimpleNamespace(
                 id="vault_old",
-                display_name="HyperClaude API-Key Tools",
+                display_name="Nova Wealth Guard API-Key Tools",
                 created_at="2026-06-01T00:00:00Z",
-                metadata={"app": "hyperclaude", "component": "managed-chat"},
+                metadata={"app": "nova-wealth-guard", "component": "nova-wealth-guard"},
             ),
             SimpleNamespace(
                 id="vault_new",
-                display_name="HyperClaude API-Key Tools",
+                display_name="Nova Wealth Guard API-Key Tools",
                 created_at="2026-06-02T00:00:00Z",
-                metadata={"app": "hyperclaude", "component": "managed-chat"},
+                metadata={"app": "nova-wealth-guard", "component": "nova-wealth-guard"},
             ),
         ]
     )

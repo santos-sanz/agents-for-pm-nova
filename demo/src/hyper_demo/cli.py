@@ -16,6 +16,14 @@ from hyper_demo.api import setup_check
 from hyper_demo.config import get_settings, settings_for_runtime
 from hyper_demo.services.hypertracker import HyperTrackerClient
 from hyper_demo.services.metrics import compute_portfolio_metrics
+from hyper_demo.services.portfolio_manager import (
+    allocate_workshop_portfolio,
+    guarded_rebalance_preview,
+    latest_or_default_profile,
+    research_workshop_portfolio,
+    save_workshop_risk_profile,
+    verify_workshop_assets,
+)
 from hyper_demo.services.trading_agent import (
     analyze_trade,
     manual_execute_trade,
@@ -47,6 +55,88 @@ def setup_check_command() -> None:
     console.print(table)
     for warning in check.warnings:
         console.print(f"[yellow]warning:[/] {warning}")
+
+
+@app.command("verify-assets")
+def verify_assets_command() -> None:
+    store = JsonStore(get_settings())
+    verification = verify_workshop_assets(store=store)
+    table = Table(title="Workshop Asset Verification")
+    table.add_column("Market")
+    table.add_column("Label")
+    table.add_column("Status")
+    table.add_column("Mark")
+    table.add_column("Max Lev")
+    for asset in verification.assets:
+        table.add_row(
+            asset.canonical_id,
+            asset.display_label,
+            "active" if asset.active else "blocked",
+            str(asset.mark_price or "missing"),
+            str(asset.max_leverage),
+        )
+    console.print(table)
+    console.print_json(verification.model_dump_json(indent=2))
+
+
+@app.command("profile")
+def workshop_profile_command(
+    risk_score: Annotated[int | None, typer.Option("--risk-score", min=0, max=100)] = None,
+) -> None:
+    store = JsonStore(get_settings())
+    profile = (
+        save_workshop_risk_profile(risk_score, store)
+        if risk_score is not None
+        else latest_or_default_profile(store)
+    )
+    console.print(Panel(profile.summary, title="Workshop Risk Profile"))
+    console.print_json(profile.model_dump_json(indent=2))
+
+
+@app.command("research")
+def workshop_research_command(
+    risk_score: Annotated[int | None, typer.Option("--risk-score", min=0, max=100)] = None,
+) -> None:
+    store = JsonStore(get_settings())
+    score = risk_score if risk_score is not None else latest_or_default_profile(store).risk_score
+    brief = research_workshop_portfolio(score, store=store)
+    console.print(Panel(brief.macro_summary, title="Workshop Research Brief"))
+    console.print_json(brief.model_dump_json(indent=2))
+
+
+@app.command("allocate")
+def workshop_allocate_command(
+    risk_score: Annotated[int | None, typer.Option("--risk-score", min=0, max=100)] = None,
+) -> None:
+    store = JsonStore(get_settings())
+    score = risk_score if risk_score is not None else latest_or_default_profile(store).risk_score
+    allocation = allocate_workshop_portfolio(score, store=store)
+    table = Table(title=f"Nova Wealth Guard Allocation ({allocation.validation_status})")
+    table.add_column("Market")
+    table.add_column("Target")
+    table.add_column("Rationale")
+    table.add_row("USDC", f"{allocation.cash_pct:.2f}%", "Capital reserve")
+    for position in allocation.positions:
+        table.add_row(position.display_label, f"{position.target_pct:.2f}%", position.rationale)
+    console.print(table)
+    console.print_json(allocation.model_dump_json(indent=2))
+
+
+@app.command("rebalance")
+def workshop_rebalance_command(
+    allocation: Annotated[str, typer.Option("--allocation")],
+    confirm: Annotated[bool, typer.Option("--confirm")] = False,
+) -> None:
+    try:
+        result = guarded_rebalance_preview(
+            allocation,
+            confirmed=confirm,
+            store=JsonStore(get_settings()),
+        )
+    except ExecutionBlocked as exc:
+        console.print(f"[red]blocked:[/] {exc}")
+        raise typer.Exit(code=1) from exc
+    console.print_json(json.dumps(result))
 
 
 @app.command("cleanup-managed-agents")

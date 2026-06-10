@@ -84,14 +84,66 @@ cd demo
 uv sync
 npm install
 uv run demo setup-check
+uv run demo verify-assets
+uv run demo profile --risk-score 25
+uv run demo research --risk-score 25
+uv run demo allocate --risk-score 25
 cd ..
 make workshop
 ```
 
 Open <http://127.0.0.1:8123/workshop>.
 
-During the workshop, keep the UI on `prodnet`, keep confirmation enabled, and
-show the approval boundary before any exchange-changing action.
+The instructor readiness page at `/workshop` checks only integrations and
+workspace identity. The working portfolio product is served by the main FastAPI
+app at `/`:
+
+```bash
+cd demo
+uv run uvicorn hyper_demo.api:app --reload
+```
+
+Open <http://127.0.0.1:8000>. If no profile exists, Nova Wealth Guard asks one
+question: a slider from capital preservation to growth. The app persists that
+score, verifies the workshop asset universe, generates a research brief, and
+produces a 100% allocation across USDC plus eligible active markets.
+
+During the workshop, keep confirmation enabled and show the approval boundary
+before any exchange-changing action. `uv run demo rebalance --allocation <id>`
+prepares a pending-approval preview unless `--confirm` is supplied, and live
+execution remains blocked when credentials or guardrails are missing.
+
+## Asset Verification
+
+`uv run demo verify-assets` re-checks the canonical workshop markets against
+Hyperliquid metadata. The only eligible investment universe is:
+
+- `xyz:CL` (`CL-USDC`)
+- `xyz:BRENTOIL` (`BRENT-USDC`)
+- `xyz:GOLD` (`XAU-USDC`)
+- `xyz:SILVER` (`XAG-USDC`)
+- `xyz:SP500` (`US500-USDC`)
+- `flx:USA100` (`US100-USDC`)
+- `xyz:COPPER` (`COPPER-USDC`)
+- `vntl:WHEAT` (`WHEAT-USDC`)
+- `xyz:NATGAS` (`NATGAS-USDC`)
+- `BTC` (`BTC-USDC`)
+
+If a configured market is missing, halted, delisted, or stale, the allocation
+excludes it and records the runtime failure separately.
+
+## Source Coverage And Posture
+
+Perplexity Finance and HyperTracker are optional enrichments behind environment
+variables. When they are unavailable, the allocation engine still produces an
+educational target allocation, lowers confidence, records coverage gaps, and
+raises USDC above the minimum cash rule.
+
+Nova Wealth Guard is educational, not personal financial advice. It is long-only
+by default, assumes no leverage for target allocation, requires every allocation
+to sum to 100% including USDC, and keeps secrets server-side. Robot mode, chat
+messages, and background jobs cannot submit exchange-changing actions without
+explicit host/user confirmation.
 
 ## Build Prompt Assets
 
