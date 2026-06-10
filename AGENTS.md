@@ -47,6 +47,11 @@ npm run export
 
 ## Demo App
 
+The `demo/` app is the finished reference demo used during the talk. Treat it
+as the already-built product that the audience can see working end to end. Do
+not let workshop-specific prompts, readiness checks, or asset universes change
+the demo runtime behavior unless the user explicitly asks for a demo change.
+
 ### Setup
 
 ```bash
@@ -81,6 +86,37 @@ uv run uvicorn hyper_demo.api:app --reload
 ```
 
 Open `http://127.0.0.1:8000`. The FastAPI app serves the static UI from `demo/src/hyper_demo/static/`.
+
+## Workshop App
+
+The `workshop/` folder is the build target for the live workshop. It is not the
+finished demo. It contains the prompt, design direction, environment preset, and
+initial readiness/status page for the separate product that will be created
+during the workshop.
+
+Workshop runtime checks are served by `demo/src/hyper_demo/workshop.py` so they
+can reuse local adapters, but they must remain separate from the main demo app:
+
+```bash
+make workshop
+```
+
+Open `http://127.0.0.1:8123/workshop`.
+
+Workshop-specific configuration must use `WORKSHOP_*` variables when it should
+not affect the demo. In particular:
+
+- `WORKSHOP_ANTHROPIC_WORKSPACE_ID` is the Claude workspace for workshop
+  Managed Agents resources and must be distinct from `ANTHROPIC_WORKSPACE_ID`
+  when the demo workspace is configured.
+- `WORKSHOP_HYPERLIQUID_ALLOWED_ASSETS` is the tradeable universe for the
+  workshop portfolio-manager product and must remain distinct from
+  `HYPERLIQUID_ALLOWED_ASSETS`, which belongs to the finished demo.
+
+The workshop readiness page may test external integrations and show safe
+operational facts such as masked wallet address, USDC balance, API-call status,
+workspace IDs, and configured assets. It must never expose API keys, private
+keys, raw wallet payloads, cookies, browser data, or generated local state.
 
 ### Architecture Notes
 

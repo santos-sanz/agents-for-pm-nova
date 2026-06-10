@@ -4,6 +4,10 @@ from fastapi.testclient import TestClient
 
 from hyper_demo.adapters.hyperliquid import ExecutionBlocked
 from hyper_demo.api import app, run_chat_custom_tool
+from hyper_demo.config import (
+    DEFAULT_WORKSHOP_ANTHROPIC_WORKSPACE_ID,
+    DEFAULT_WORKSHOP_HYPERLIQUID_ALLOWED_ASSETS,
+)
 from hyper_demo.models import (
     ManagedChatDeployment,
     ManagedChatEvent,
@@ -20,6 +24,7 @@ from hyper_demo.services.managed_chat import ManagedTradingChatService
 from hyper_demo.services.market import MarketAsset, MarketPrice
 from hyper_demo.services.perplexity import FinanceContext
 from hyper_demo.storage import JsonStore
+from hyper_demo.workshop import app as workshop_app
 
 
 class FakeManagedObject:
@@ -1386,6 +1391,241 @@ def test_setup_check_uses_persisted_runtime_assets_over_env(tmp_path, monkeypatc
     assert response.status_code == 200
     setup = response.json()
     assert setup["hyperliquid_allowed_assets"] == ["BTC", "ETH", "HYPE", "SOL", "xyz:SPCX"]
+
+
+def test_workshop_readiness_reports_workspace_and_integrations(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("WORKSHOP_ANTHROPIC_API_KEY", "sk-ant-workshop")
+    monkeypatch.setenv("ANTHROPIC_WORKSPACE_ID", "wrkspc_demo_workspace")
+    monkeypatch.setenv("ANTHROPIC_ENVIRONMENT_ID", "env_workshop")
+    monkeypatch.setenv("ANTHROPIC_AGENT_ID", "agent_workshop")
+    monkeypatch.setenv("HYPERLIQUID_ALLOWED_ASSETS", "BTC")
+    monkeypatch.setenv("PERPLEXITY_API_KEY", "pplx-test")
+    monkeypatch.setenv("HYPERTRACKER_API_KEY", "ht-test")
+    monkeypatch.setenv("HYPERLIQUID_ACCOUNT_ADDRESS", "0x1111111111111111111111111111111111111111")
+    workshop_assets = DEFAULT_WORKSHOP_HYPERLIQUID_ALLOWED_ASSETS.split(",")
+
+    def fake_mark_price(self, asset):
+        return MarketPrice(asset=asset, mark_price=62_000, source="hyperliquid")
+
+    def fake_assets(self):
+        return [
+            MarketAsset(
+                symbol=asset,
+                max_leverage=40,
+                sz_decimals=5,
+                mark_price=62_000,
+                delisted=False,
+                icon_url="",
+            )
+            for asset in workshop_assets
+        ]
+
+    def fake_perplexity_context(self, asset):
+        return FinanceContext(
+            asset=asset,
+            evidence=["Perplexity finance_search quote context is available."],
+            sources=["https://example.com/perplexity-source"],
+            available=True,
+            raw_response_id="pplx_response",
+        )
+
+    def fake_hypertracker_intelligence(self, asset):
+        return MarketIntelligence(
+            asset=asset,
+            evidence=["HyperTracker position metrics are available."],
+            sources=["HyperTracker /api/external/position-metrics/coin/{asset}"],
+            available=True,
+        )
+
+    def fake_wallet_state(self):
+        return {
+            "account_address": "0x1111111111111111111111111111111111111111",
+            "collateral_usdc": 1250.123,
+            "withdrawable_usdc": 875.456,
+            "total_margin_used_usdc": 120.0,
+            "exposure_usdc": 300.0,
+            "open_positions": [{"asset": "BTC"}],
+            "raw": {"not": "exposed"},
+        }
+
+    monkeypatch.setattr(
+        "hyper_demo.services.workshop_readiness.MarketDataClient.mark_price",
+        fake_mark_price,
+    )
+    monkeypatch.setattr(
+        "hyper_demo.services.workshop_readiness.MarketDataClient.available_assets",
+        fake_assets,
+    )
+    monkeypatch.setattr(
+        "hyper_demo.services.workshop_readiness.PerplexityFinanceClient.context_for_asset",
+        fake_perplexity_context,
+    )
+    monkeypatch.setattr(
+        "hyper_demo.services.workshop_readiness.HyperTrackerClient.intelligence_for_asset",
+        fake_hypertracker_intelligence,
+    )
+    monkeypatch.setattr(
+        "hyper_demo.services.workshop_readiness.HyperliquidAdapter.wallet_state",
+        fake_wallet_state,
+    )
+    client = TestClient(app)
+
+    response = client.get("/api/workshop/readiness")
+
+    assert response.status_code == 200, response.json()
+    payload = response.json()
+    assert payload["workspace"]["path"].endswith("/workshop")
+    assert (
+        payload["anthropic_workspace"]["expected_workspace_id"]
+        == DEFAULT_WORKSHOP_ANTHROPIC_WORKSPACE_ID
+    )
+    assert payload["anthropic_workspace"]["expected_workspace_url"] == (
+        "https://platform.claude.com/workspaces/"
+        f"{DEFAULT_WORKSHOP_ANTHROPIC_WORKSPACE_ID}/sessions"
+    )
+    assert payload["anthropic_workspace"]["demo_workspace_id"] == "wrkspc_demo_workspace"
+    assert payload["anthropic_workspace"]["distinct_from_demo_workspace"] is True
+    assert payload["anthropic_workspace"]["api_key_source"] == "WORKSHOP_ANTHROPIC_API_KEY"
+    assert payload["anthropic_workspace"]["environment_id"] == "env_workshop"
+    assert payload["anthropic_workspace"]["coordinator_agent_id"] == "agent_workshop"
+    assert payload["workspace"]["workshop_tradeable_assets"] == workshop_assets
+    assert payload["workspace"]["demo_tradeable_assets"] == ["BTC"]
+    assert payload["workspace"]["assets_distinct_from_demo"] is True
+    checks = {item["name"]: item for item in payload["checks"]}
+    assert checks["Workshop assets"]["status"] == "ready"
+    assert checks["Workshop tradeable assets"]["status"] == "ready"
+    assert checks["Hyperliquid market data"]["status"] == "ready"
+    assert checks["Hyperliquid market data"]["metadata"]["configured_assets"] == workshop_assets
+    assert checks["Hyperliquid market data"]["metadata"]["demo_configured_assets"] == ["BTC"]
+    assert checks["Anthropic Managed Agents"]["status"] == "warning"
+    assert checks["Perplexity Finance"]["status"] == "ready"
+    assert checks["Perplexity Finance"]["metadata"]["test_call"] == "executed"
+    assert checks["Perplexity Finance"]["metadata"]["evidence_count"] == 1
+    assert checks["HyperTracker"]["status"] == "ready"
+    assert checks["HyperTracker"]["metadata"]["test_call"] == "executed"
+    assert checks["HyperTracker"]["metadata"]["evidence_count"] == 1
+    assert checks["Hyperliquid wallet balance"]["status"] == "ready"
+    assert checks["Hyperliquid wallet balance"]["metadata"]["withdrawable_usdc"] == 875.46
+    assert checks["Hyperliquid wallet balance"]["metadata"]["collateral_usdc"] == 1250.12
+    assert checks["Hyperliquid wallet balance"]["metadata"]["account_address"] == "0x1111...1111"
+    assert "raw" not in checks["Hyperliquid wallet balance"]["metadata"]
+
+
+def test_workshop_readiness_blocks_when_workshop_workspace_matches_demo(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setenv("ANTHROPIC_WORKSPACE_ID", DEFAULT_WORKSHOP_ANTHROPIC_WORKSPACE_ID)
+    monkeypatch.setenv("HYPERLIQUID_ALLOWED_ASSETS", "BTC")
+    workshop_assets = DEFAULT_WORKSHOP_HYPERLIQUID_ALLOWED_ASSETS.split(",")
+
+    def fake_mark_price(self, asset):
+        return MarketPrice(asset=asset, mark_price=62_000, source="hyperliquid")
+
+    def fake_assets(self):
+        return [
+            MarketAsset(
+                symbol=asset,
+                max_leverage=40,
+                sz_decimals=5,
+                mark_price=62_000,
+                delisted=False,
+                icon_url="",
+            )
+            for asset in workshop_assets
+        ]
+
+    monkeypatch.setattr(
+        "hyper_demo.services.workshop_readiness.MarketDataClient.mark_price",
+        fake_mark_price,
+    )
+    monkeypatch.setattr(
+        "hyper_demo.services.workshop_readiness.MarketDataClient.available_assets",
+        fake_assets,
+    )
+    client = TestClient(app)
+
+    response = client.get("/api/workshop/readiness")
+
+    assert response.status_code == 200, response.json()
+    payload = response.json()
+    checks = {item["name"]: item for item in payload["checks"]}
+    assert checks["Anthropic Managed Agents"]["status"] == "blocked"
+    assert "same as the demo workspace" in checks["Anthropic Managed Agents"]["detail"]
+    assert payload["anthropic_workspace"]["distinct_from_demo_workspace"] is False
+    assert payload["status"] == "blocked"
+
+
+def test_workshop_readiness_blocks_when_workshop_assets_match_demo(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setenv("ANTHROPIC_WORKSPACE_ID", "wrkspc_demo_workspace")
+    monkeypatch.setenv("HYPERLIQUID_ALLOWED_ASSETS", "BTC")
+    monkeypatch.setenv("WORKSHOP_HYPERLIQUID_ALLOWED_ASSETS", "BTC")
+
+    def fake_mark_price(self, asset):
+        return MarketPrice(asset=asset, mark_price=62_000, source="hyperliquid")
+
+    def fake_assets(self):
+        return [
+            MarketAsset(
+                symbol="BTC",
+                max_leverage=40,
+                sz_decimals=5,
+                mark_price=62_000,
+                delisted=False,
+                icon_url="",
+            )
+        ]
+
+    monkeypatch.setattr(
+        "hyper_demo.services.workshop_readiness.MarketDataClient.mark_price",
+        fake_mark_price,
+    )
+    monkeypatch.setattr(
+        "hyper_demo.services.workshop_readiness.MarketDataClient.available_assets",
+        fake_assets,
+    )
+    client = TestClient(app)
+
+    response = client.get("/api/workshop/readiness")
+
+    assert response.status_code == 200, response.json()
+    payload = response.json()
+    checks = {item["name"]: item for item in payload["checks"]}
+    assert checks["Workshop tradeable assets"]["status"] == "blocked"
+    assert checks["Workshop tradeable assets"]["metadata"]["distinct_from_demo_assets"] is False
+    assert payload["workspace"]["assets_distinct_from_demo"] is False
+    assert payload["status"] == "blocked"
+
+
+def test_workshop_page_serves_readiness_shell(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    client = TestClient(app)
+
+    response = client.get("/workshop/")
+
+    assert response.status_code == 200
+    assert "Workshop readiness check" in response.text
+    assert "/api/workshop/readiness" in response.text
+
+
+def test_standalone_workshop_app_does_not_serve_main_cockpit(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    client = TestClient(workshop_app)
+
+    page = client.get("/")
+    main_state = client.get("/api/state")
+
+    assert page.status_code == 200
+    assert "Workshop readiness check" in page.text
+    assert main_state.status_code == 404
 
 
 def test_market_candles_endpoint_does_not_require_analysis(tmp_path, monkeypatch) -> None:

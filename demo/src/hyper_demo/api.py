@@ -61,6 +61,11 @@ from hyper_demo.services.trading_agent import (
     reject_trade,
     run_proactive_scan,
 )
+from hyper_demo.services.workshop_readiness import (
+    WORKSHOP_ROOT,
+    WorkshopReadiness,
+    workshop_readiness,
+)
 from hyper_demo.storage import JsonStore
 
 APP_ROOT = Path(__file__).resolve().parent
@@ -581,6 +586,11 @@ def api_setup_check() -> SetupCheck:
     store = get_store()
     runtime = get_runtime(store)
     return setup_check(settings_for_runtime(runtime))
+
+
+@app.get("/api/workshop/readiness", response_model=WorkshopReadiness)
+def api_workshop_readiness() -> WorkshopReadiness:
+    return workshop_readiness()
 
 
 @app.get("/api/state")
@@ -2604,6 +2614,15 @@ def get_portfolio_metrics():
 async def sample_market_websocket(asset: str):
     price = await HyperliquidWebsocketMonitor(get_settings()).sample_mark_price(asset)
     return price
+
+
+@app.get("/workshop", response_class=HTMLResponse)
+@app.get("/workshop/", response_class=HTMLResponse)
+def workshop_page() -> HTMLResponse:
+    page = WORKSHOP_ROOT / "index.html"
+    if not page.exists():
+        raise HTTPException(status_code=404, detail="Workshop readiness page is missing.")
+    return HTMLResponse(page.read_text(encoding="utf-8"))
 
 
 @app.get("/", response_class=HTMLResponse)

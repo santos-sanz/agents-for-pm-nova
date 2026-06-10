@@ -70,15 +70,13 @@ class PerplexityFinanceClient:
             {
                 "model": self.settings.perplexity_model,
                 "input": (
-                    f"Create a concise, source-backed finance brief for {asset}. "
-                    "Prioritize live quote context, valuation or ETF/public-equity proxies when "
-                    "available, recent market catalysts, and explicit coverage limitations. "
-                    "If this is a crypto perpetual or HIP-3 asset, say when finance_search has no "
-                    "direct coverage instead of inventing data."
+                    "Return one concise source-backed finance_search fact for "
+                    f"{asset}. Prefer live quote or current market context. "
+                    "State coverage limitations when direct coverage is unavailable."
                 ),
                 "tools": [{"type": "finance_search"}],
                 "max_steps": 1,
-                "max_output_tokens": 1024,
+                "max_output_tokens": 256,
             }
         ).encode("utf-8")
         request = urllib.request.Request(
@@ -135,8 +133,9 @@ def _extract_finance_context(payload: dict[str, Any]) -> tuple[list[str], list[s
     for item in payload.get("output", []):
         if not isinstance(item, dict):
             continue
-        if item.get("type") == "finance_results":
-            for result in item.get("results", []):
+        results = item.get("results")
+        if isinstance(results, list):
+            for result in results:
                 if not isinstance(result, dict):
                     continue
                 category = str(result.get("category") or "finance")

@@ -21,6 +21,11 @@ MAINNET_HTTP_HOSTS = {"api.hyperliquid.xyz"}
 MAINNET_WS_HOSTS = {"api.hyperliquid.xyz"}
 HYPERTRACKER_HTTP_HOSTS = {"ht-api.coinmarketman.com"}
 PERPLEXITY_HTTP_HOSTS = {"api.perplexity.ai"}
+DEFAULT_WORKSHOP_ANTHROPIC_WORKSPACE_ID = "wrkspc_01Ja4EK3nFQXQqKUgf8dcLu7"
+DEFAULT_WORKSHOP_HYPERLIQUID_ALLOWED_ASSETS = (
+    "xyz:CL,xyz:BRENTOIL,xyz:GOLD,xyz:SILVER,xyz:SP500,flx:USA100,"
+    "xyz:COPPER,vntl:WHEAT,xyz:NATGAS,BTC"
+)
 
 
 class Settings(BaseSettings):
@@ -33,6 +38,15 @@ class Settings(BaseSettings):
     )
 
     anthropic_api_key: SecretStr | None = Field(default=None, alias="ANTHROPIC_API_KEY")
+    workshop_anthropic_api_key: SecretStr | None = Field(
+        default=None,
+        alias="WORKSHOP_ANTHROPIC_API_KEY",
+    )
+    anthropic_workspace_id: str | None = Field(default=None, alias="ANTHROPIC_WORKSPACE_ID")
+    workshop_anthropic_workspace_id: str | None = Field(
+        default=DEFAULT_WORKSHOP_ANTHROPIC_WORKSPACE_ID,
+        alias="WORKSHOP_ANTHROPIC_WORKSPACE_ID",
+    )
     anthropic_model: str = Field(
         default="claude-haiku-4-5-20251001",
         alias="ANTHROPIC_MODEL",
@@ -109,6 +123,31 @@ class Settings(BaseSettings):
     hyperliquid_allowed_assets: str = Field(
         default="BTC,ETH,SOL", alias="HYPERLIQUID_ALLOWED_ASSETS"
     )
+    workshop_hyperliquid_allowed_assets: str = Field(
+        default=DEFAULT_WORKSHOP_HYPERLIQUID_ALLOWED_ASSETS,
+        alias="WORKSHOP_HYPERLIQUID_ALLOWED_ASSETS",
+    )
+
+    @field_validator("anthropic_workspace_id", "workshop_anthropic_workspace_id")
+    @classmethod
+    def normalize_anthropic_workspace_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        clean = value.strip()
+        if not clean:
+            return None
+        if clean.startswith("https://"):
+            parsed = urlparse(clean)
+            parts = [part for part in parsed.path.split("/") if part]
+            if parsed.hostname == "platform.claude.com" and len(parts) >= 2:
+                if parts[0] == "workspaces" and parts[1].startswith("wrkspc_"):
+                    return parts[1]
+        if not clean.startswith("wrkspc_"):
+            raise ValueError(
+                "Claude workspace values must be wrkspc_ IDs or platform.claude.com "
+                "workspace URLs."
+            )
+        return clean
 
     @field_validator("hypertracker_base_url")
     @classmethod
@@ -182,6 +221,30 @@ class Settings(BaseSettings):
     @property
     def has_anthropic_credentials(self) -> bool:
         return bool(self.anthropic_api_key and self.anthropic_api_key.get_secret_value())
+
+    @property
+    def has_workshop_anthropic_credentials(self) -> bool:
+        return bool(
+            self.workshop_anthropic_api_key
+            and self.workshop_anthropic_api_key.get_secret_value()
+        )
+
+    @property
+    def workshop_anthropic_api_key_source(self) -> str:
+        if self.has_workshop_anthropic_credentials:
+            return "WORKSHOP_ANTHROPIC_API_KEY"
+        if self.has_anthropic_credentials:
+            return "ANTHROPIC_API_KEY"
+        return "missing"
+
+    @property
+    def workshop_anthropic_workspace_url(self) -> str | None:
+        if not self.workshop_anthropic_workspace_id:
+            return None
+        return (
+            "https://platform.claude.com/workspaces/"
+            f"{self.workshop_anthropic_workspace_id}/sessions"
+        )
 
     @property
     def managed_chat_model(self) -> str:
@@ -276,6 +339,14 @@ class Settings(BaseSettings):
     @property
     def allowed_assets_list(self) -> list[str]:
         return normalize_asset_list(self.hyperliquid_allowed_assets.split(","))
+
+    @property
+    def workshop_allowed_assets_set(self) -> set[str]:
+        return set(self.workshop_allowed_assets_list)
+
+    @property
+    def workshop_allowed_assets_list(self) -> list[str]:
+        return normalize_asset_list(self.workshop_hyperliquid_allowed_assets.split(","))
 
 
 def runtime_from_settings(settings: Settings | None = None) -> RuntimeSettings:
