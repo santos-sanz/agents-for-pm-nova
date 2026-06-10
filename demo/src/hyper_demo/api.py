@@ -1871,9 +1871,16 @@ def api_create_manual_trade_plan(request: ManualTradePlanRequest) -> TradePlan:
 def api_execute_trade(plan_id: str, request: TradeExecutionRequest):
     store = get_store()
     runtime = get_runtime(store)
+    settings = settings_for_runtime(runtime)
     plan = store.get("plans", plan_id)
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found.")
+    validation = _formal_validation_for_plan(store, runtime, settings, plan)
+    if not validation.valid:
+        raise HTTPException(
+            status_code=400,
+            detail="Formal validation failed: " + "; ".join(validation.errors),
+        )
     try:
         result = manual_execute_trade(
             plan,
@@ -1889,6 +1896,17 @@ def api_execute_trade(plan_id: str, request: TradeExecutionRequest):
         "order_id": result.order_id,
         "run_id": result.run_id,
     }
+
+
+@app.get("/api/trades/{plan_id}/validation")
+def api_validate_trade(plan_id: str):
+    store = get_store()
+    runtime = get_runtime(store)
+    settings = settings_for_runtime(runtime)
+    plan = store.get("plans", plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plan not found.")
+    return _formal_validation_for_plan(store, runtime, settings, plan).as_dict()
 
 
 @app.post("/api/trades/manual-submit")

@@ -1844,9 +1844,9 @@ def test_prodnet_confirmation_executes_without_phrase(tmp_path, monkeypatch) -> 
         side="long",
         size_usdc=25,
         entry_price=100,
-        stop_loss=95,
         take_profit=110,
-        max_loss_usdc=5,
+        leverage=4,
+        max_loss_usdc=2,
         rationale="test",
         invalidation_criteria=[],
         network="prodnet",
@@ -1871,6 +1871,15 @@ def test_prodnet_confirmation_executes_without_phrase(tmp_path, monkeypatch) -> 
         "hyper_demo.services.trading_agent.HyperliquidAdapter.execute_plan",
         fake_execute,
     )
+
+    def fake_wallet_state(self):
+        return {"withdrawable_usdc": 10, "open_positions": []}
+
+    def fake_mark_price(self, asset):
+        return MarketPrice(asset=asset, mark_price=100, source="test")
+
+    monkeypatch.setattr("hyper_demo.api.HyperliquidAdapter.wallet_state", fake_wallet_state)
+    monkeypatch.setattr("hyper_demo.api.MarketDataClient.mark_price", fake_mark_price)
     client = TestClient(app)
 
     response = client.post(f"/api/trades/{plan.id}/execute", json={"confirmed": True})

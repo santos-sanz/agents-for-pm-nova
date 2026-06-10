@@ -671,6 +671,53 @@ body.chat-screen-active .events-panel {
   align-items: start;
 }
 
+.plan-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.guardrail-checklist {
+  display: grid;
+  gap: 6px;
+}
+
+.guardrail-checklist div {
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 0.7fr) minmax(0, 1.3fr);
+  padding: 8px 10px;
+}
+
+.guardrail-checklist span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.guardrail-checklist b {
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.guardrail-checklist .pass {
+  background: rgba(47, 125, 74, 0.08);
+  border-color: rgba(47, 125, 74, 0.28);
+}
+
+.guardrail-checklist .fail {
+  background: rgba(156, 63, 63, 0.08);
+  border-color: rgba(156, 63, 63, 0.3);
+}
+
+.ticket-validation {
+  margin-top: 12px;
+}
+
 .tool-chip-list {
   display: flex;
   flex-wrap: wrap;
@@ -3244,6 +3291,13 @@ body[data-loading-candles="true"] .chart-shell::after {
 .position-level {
   display: grid;
   gap: 8px;
+}
+
+.close-path-note {
+  color: #b7c0c3;
+  font-size: 12px;
+  font-weight: 700;
+  margin: 0;
 }
 
 .position-level > div:first-child {
