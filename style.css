@@ -377,6 +377,149 @@
   max-width: 760px;
 }
 
+.insight-grid,
+.outcome-loop,
+.teammate-grid,
+.trust-grid,
+.caveat-grid,
+.decision-table,
+.risk-grid {
+  display: grid;
+  gap: 1rem;
+  margin-top: 1.7rem;
+}
+
+.insight-grid {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.outcome-loop,
+.trust-grid,
+.caveat-grid {
+  grid-template-columns: repeat(4, 1fr);
+}
+
+.teammate-grid {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.decision-table {
+  grid-template-columns: repeat(4, 1fr);
+}
+
+.risk-grid {
+  grid-template-columns: repeat(3, 1fr);
+  gap: .85rem;
+}
+
+.insight-grid div,
+.outcome-loop div,
+.teammate-grid div,
+.trust-grid div,
+.caveat-grid div,
+.decision-table div,
+.risk-grid div {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-card);
+  padding: 1.05rem;
+}
+
+.insight-grid div,
+.trust-grid div,
+.caveat-grid div,
+.decision-table div {
+  min-height: 170px;
+}
+
+.risk-grid div {
+  min-height: 118px;
+}
+
+.outcome-loop div {
+  min-height: 150px;
+}
+
+.teammate-grid div {
+  min-height: 145px;
+}
+
+.insight-grid b,
+.outcome-loop b,
+.teammate-grid b,
+.trust-grid b,
+.caveat-grid b,
+.decision-table b,
+.risk-grid b,
+.insight-grid span,
+.teammate-grid span,
+.trust-grid span,
+.caveat-grid span,
+.decision-table span,
+.decision-table small,
+.risk-grid span,
+.outcome-loop small {
+  display: block;
+}
+
+.insight-grid b,
+.teammate-grid b,
+.trust-grid b,
+.caveat-grid b,
+.decision-table b,
+.risk-grid b {
+  color: var(--primary-active);
+  font-size: 1.1rem;
+  margin-bottom: .75rem;
+}
+
+.insight-grid span,
+.teammate-grid span,
+.trust-grid span,
+.caveat-grid span,
+.decision-table span,
+.decision-table small,
+.risk-grid span,
+.outcome-loop small {
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.decision-table small {
+  margin-top: .85rem;
+  color: var(--primary-active);
+  font-size: .76rem;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.risk-grid b {
+  margin-bottom: .45rem;
+}
+
+.risk-grid span {
+  font-size: .92rem;
+}
+
+.outcome-loop span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 999px;
+  background: var(--primary-soft);
+  color: var(--primary-active);
+  font-weight: 800;
+  margin-bottom: 1rem;
+}
+
+.outcome-loop b {
+  color: var(--ink);
+  font-size: 1.08rem;
+  margin-bottom: .45rem;
+}
+
 .loop-card {
   max-width: 760px;
   border-radius: 8px;
